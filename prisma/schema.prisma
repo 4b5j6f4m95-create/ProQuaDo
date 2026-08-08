@@ -46,21 +46,34 @@ model Organization {
   auditEvents            AuditEvent[]
   outboxEvents           OutboxEvent[]
 
-  customers               Customer[]
-  projects                Project[]
-  projectMembers          ProjectMember[]
-  products                Product[]
-  assemblies              Assembly[]
-  parts                   Part[]
-  documents               Document[]
-  documentRevisions       DocumentRevision[]
-  documentApprovals       DocumentApproval[]
-  productionPlans         ProductionPlan[]
-  productionPlanRevisions ProductionPlanRevision[]
-  planSteps               PlanStep[]
-  planStepDependencies    PlanStepDependency[]
-  stepDocumentBindings    StepDocumentBinding[]
-  checklistItems          ChecklistItem[]
+  customers                 Customer[]
+  projects                  Project[]
+  projectMembers            ProjectMember[]
+  products                  Product[]
+  assemblies                Assembly[]
+  parts                     Part[]
+  documents                 Document[]
+  documentRevisions         DocumentRevision[]
+  documentApprovals         DocumentApproval[]
+  productionPlans           ProductionPlan[]
+  productionPlanRevisions   ProductionPlanRevision[]
+  planSteps                 PlanStep[]
+  planStepDependencies      PlanStepDependency[]
+  stepDocumentBindings      StepDocumentBinding[]
+  checklistItems            ChecklistItem[]
+  inspectionCharacteristics InspectionCharacteristic[]
+  photoRequirements         PhotoRequirement[]
+
+  productionOrders      ProductionOrder[]
+  orderAssignments      OrderAssignment[]
+  workStepInstances     WorkStepInstance[]
+  workStepReleases      WorkStepRelease[]
+  completionSubmissions CompletionSubmission[]
+  stepConfirmations     StepConfirmation[]
+  checklistResponses    ChecklistResponse[]
+  measurementResults    MeasurementResult[]
+  photoEvidence         PhotoEvidence[]
+  secondApprovals       SecondApproval[]
 
   @@map("organizations")
 }
@@ -76,10 +89,11 @@ model Site {
   updatedAt      DateTime @updatedAt @map("updated_at")
   version        Int      @default(1)
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  departments  Department[]
-  employees    Employee[]
-  projects     Project[]
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  departments      Department[]
+  employees        Employee[]
+  projects         Project[]
+  productionOrders ProductionOrder[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -129,16 +143,21 @@ model WorkCenter {
 }
 
 model User {
-  id             String   @id @default(uuid())
-  organizationId String   @map("organization_id")
-  externalId     String   @map("external_id") // subject claim from OIDC provider
-  email          String
-  displayName    String?  @map("display_name")
-  isActive       Boolean  @default(true) @map("is_active")
-  mfaRequired    Boolean  @default(false) @map("mfa_required")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  version        Int      @default(1)
+  id                  String   @id @default(uuid())
+  organizationId      String   @map("organization_id")
+  externalId          String   @map("external_id") // subject claim from OIDC provider
+  email               String
+  displayName         String?  @map("display_name")
+  isActive            Boolean  @default(true) @map("is_active")
+  mfaRequired         Boolean  @default(false) @map("mfa_required")
+  // Scrypt hash of the confirmation PIN used for step-up confirmation of
+  // critical actions (ADR-005: "PIN + Audit-Trail für MVP"). Never the PIN
+  // itself, never reversible — see src/lib/auth/confirmation-pin.ts. Null
+  // means the user has not set a PIN and therefore cannot confirm steps.
+  confirmationPinHash String?  @map("confirmation_pin_hash")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  version             Int      @default(1)
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee?
@@ -151,6 +170,7 @@ model User {
 
   projectMemberships ProjectMember[]
   documentApprovals  DocumentApproval[]
+  orderAssignments   OrderAssignment[]
 
   @@unique([organizationId, externalId])
   @@index([organizationId])
@@ -449,10 +469,11 @@ model Project {
   site         Site         @relation(fields: [siteId], references: [id])
   customer     Customer     @relation(fields: [customerId], references: [id])
 
-  members         ProjectMember[]
-  products        Product[]
-  documents       Document[]
-  productionPlans ProductionPlan[]
+  members          ProjectMember[]
+  products         Product[]
+  documents        Document[]
+  productionPlans  ProductionPlan[]
+  productionOrders ProductionOrder[]
 
   @@unique([organizationId, projectNumber])
   @@index([organizationId])
@@ -490,10 +511,11 @@ model Product {
   updatedAt      DateTime @updatedAt @map("updated_at")
   version        Int      @default(1)
 
-  organization    Organization     @relation(fields: [organizationId], references: [id])
-  project         Project          @relation(fields: [projectId], references: [id])
-  assemblies      Assembly[]
-  productionPlans ProductionPlan[]
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  project          Project           @relation(fields: [projectId], references: [id])
+  assemblies       Assembly[]
+  productionPlans  ProductionPlan[]
+  productionOrders ProductionOrder[]
 
   @@unique([organizationId, productNumber])
   @@index([organizationId])
@@ -674,11 +696,12 @@ model ProductionPlanRevision {
   updatedAt        DateTime  @updatedAt @map("updated_at")
   version          Int       @default(1)
 
-  organization   Organization             @relation(fields: [organizationId], references: [id])
-  productionPlan ProductionPlan           @relation(fields: [productionPlanId], references: [id])
-  priorRevision  ProductionPlanRevision?  @relation("PlanRevisionHistory", fields: [priorRevisionId], references: [id])
-  supersededBy   ProductionPlanRevision[] @relation("PlanRevisionHistory")
-  steps          PlanStep[]
+  organization     Organization             @relation(fields: [organizationId], references: [id])
+  productionPlan   ProductionPlan           @relation(fields: [productionPlanId], references: [id])
+  priorRevision    ProductionPlanRevision?  @relation("PlanRevisionHistory", fields: [priorRevisionId], references: [id])
+  supersededBy     ProductionPlanRevision[] @relation("PlanRevisionHistory")
+  steps            PlanStep[]
+  productionOrders ProductionOrder[]
 
   @@unique([organizationId, productionPlanId, revisionNumber])
   @@index([organizationId])
@@ -717,12 +740,15 @@ model PlanStep {
   // bug shipped from that ambiguity once already, see git history).
   // predecessorLinks: edges where I am the dependent — read predecessorStepId
   // off these to find what precedes me.
-  predecessorLinks PlanStepDependency[]  @relation("DependentStep")
+  predecessorLinks          PlanStepDependency[]       @relation("DependentStep")
   // successorLinks: edges where I am the predecessor — read dependentStepId
   // off these to find what comes after me.
-  successorLinks   PlanStepDependency[]  @relation("PredecessorStep")
-  documentBindings StepDocumentBinding[]
-  checklistItems   ChecklistItem[]
+  successorLinks            PlanStepDependency[]       @relation("PredecessorStep")
+  documentBindings          StepDocumentBinding[]
+  checklistItems            ChecklistItem[]
+  inspectionCharacteristics InspectionCharacteristic[]
+  photoRequirements         PhotoRequirement[]
+  workStepInstances         WorkStepInstance[]
 
   @@unique([organizationId, productionPlanRevisionId, stepNumber])
   @@index([organizationId])
@@ -791,10 +817,384 @@ model ChecklistItem {
   updatedAt      DateTime @updatedAt @map("updated_at")
   version        Int      @default(1)
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  planStep     PlanStep     @relation(fields: [planStepId], references: [id])
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  planStep     PlanStep            @relation(fields: [planStepId], references: [id])
+  responses    ChecklistResponse[]
 
   @@unique([organizationId, planStepId, itemNumber])
   @@index([organizationId])
   @@map("checklist_items")
+}
+
+// A measurable characteristic a step must record, with its tolerance band —
+// the definition side of docs/07 wireflow A4 ("Sollwert 2.0 mm, Toleranz
+// 1.8–2.2 mm"). Deliberately part of the plan revision (via PlanStep), not
+// of the execution instance: the tolerance that applied is whatever the
+// released plan said, and stays pinned even if the plan is later revised.
+model InspectionCharacteristic {
+  id                         String   @id @default(uuid())
+  organizationId             String   @map("organization_id")
+  planStepId                 String   @map("plan_step_id")
+  characteristicNumber       Int      @map("characteristic_number")
+  name                       String
+  nominalValue               Decimal? @map("nominal_value") @db.Decimal(20, 6)
+  lowerLimit                 Decimal? @map("lower_limit") @db.Decimal(20, 6)
+  upperLimit                 Decimal? @map("upper_limit") @db.Decimal(20, 6)
+  unit                       String?
+  isRequired                 Boolean  @default(true) @map("is_required")
+  // Phase 4 (Qualität) adds `measuring_equipment` + `calibrations` and turns
+  // this into a hard gate ("abgelaufenes Prüfmittel → Freigabe abgelehnt",
+  // Negativtest #11). Until then the executing worker records the equipment
+  // identifier as free text on the measurement result.
+  requiresMeasuringEquipment Boolean  @default(false) @map("requires_measuring_equipment")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+  version                    Int      @default(1)
+
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  planStep     PlanStep            @relation(fields: [planStepId], references: [id])
+  results      MeasurementResult[]
+
+  @@unique([organizationId, planStepId, characteristicNumber])
+  @@index([organizationId])
+  @@map("inspection_characteristics")
+}
+
+// Per-category photo obligation of a step (docs/07 B3: "📷 Foto Pflicht
+// (min 2, max 5)"). PlanStep.photoRequired remains the coarse switch: true
+// with no PhotoRequirement rows means "at least one photo, any category" —
+// see evaluateStepRequirements() in src/domain/execution/step-requirements.ts,
+// which is the single place both meanings are resolved.
+model PhotoRequirement {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  planStepId     String   @map("plan_step_id")
+  category       String // 'OVERVIEW', 'DETAIL', 'TYPESIGN', custom
+  description    String?
+  minCount       Int      @default(1) @map("min_count")
+  maxCount       Int?     @map("max_count")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization    @relation(fields: [organizationId], references: [id])
+  planStep     PlanStep        @relation(fields: [planStepId], references: [id])
+  evidence     PhotoEvidence[]
+
+  @@unique([organizationId, planStepId, category])
+  @@index([organizationId])
+  @@map("photo_requirements")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Production Execution (Phase 3)
+// ─────────────────────────────────────────────────────────────
+
+// Status machine: DRAFT → PLANNED → RELEASED → IN_PROGRESS → COMPLETED,
+// with ON_HOLD/QUALITY_BLOCKED/CANCELLED/ARCHIVED — see
+// docs/03_STATE_MACHINES.md §1 and src/domain/production-orders/production-order-status.ts.
+// productionPlanRevisionId pins the order to ONE plan revision at release
+// time; a later plan revision never silently re-writes a running order
+// (Geschäftsgrundsatz 6, Abnahmeszenario C).
+model ProductionOrder {
+  id                       String    @id @default(uuid())
+  organizationId           String    @map("organization_id")
+  siteId                   String    @map("site_id")
+  projectId                String    @map("project_id")
+  productId                String    @map("product_id")
+  productionPlanRevisionId String    @map("production_plan_revision_id")
+  orderNumber              String    @map("order_number")
+  batchNumber              String?   @map("batch_number")
+  serialNumber             String?   @map("serial_number")
+  quantity                 Int       @default(1)
+  status                   String    @default("DRAFT")
+  plannedStartAt           DateTime? @map("planned_start_at")
+  plannedEndAt             DateTime? @map("planned_end_at")
+  actualStartAt            DateTime? @map("actual_start_at")
+  actualEndAt              DateTime? @map("actual_end_at")
+  createdById              String    @map("created_by_id") // see Project.createdById comment re: not a relation
+  releasedById             String?   @map("released_by_id")
+  releasedAt               DateTime? @map("released_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  version                  Int       @default(1)
+
+  organization           Organization           @relation(fields: [organizationId], references: [id])
+  site                   Site                   @relation(fields: [siteId], references: [id])
+  project                Project                @relation(fields: [projectId], references: [id])
+  product                Product                @relation(fields: [productId], references: [id])
+  productionPlanRevision ProductionPlanRevision @relation(fields: [productionPlanRevisionId], references: [id])
+
+  assignments       OrderAssignment[]
+  workStepInstances WorkStepInstance[]
+
+  @@unique([organizationId, orderNumber])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([organizationId, serialNumber])
+  @@map("production_orders")
+}
+
+// The ABAC edge that makes "Worker sieht nur zugewiesene Aufträge"
+// (docs/04 "ABAC-Kontextregeln") enforceable server-side. Referenced by
+// assertOrderVisibility()/assertAssignedToOrder() in
+// src/domain/production-orders/order-access.ts — never only by the UI.
+model OrderAssignment {
+  id                String    @id @default(uuid())
+  organizationId    String    @map("organization_id")
+  productionOrderId String    @map("production_order_id")
+  userId            String    @map("user_id")
+  role              String? // free-text label, e.g. 'EXECUTOR' — RBAC still comes from user_roles
+  assignedById      String    @map("assigned_by_id")
+  assignedAt        DateTime  @default(now()) @map("assigned_at")
+  revokedAt         DateTime? @map("revoked_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  user            User            @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, productionOrderId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("order_assignments")
+}
+
+// The concrete execution of one plan step within one order. Status is
+// SERVER-owned: no client may write COMPLETED (docs/06 "Die zentrale
+// Invariante"). See src/domain/execution/work-step-status.ts for the
+// machine and src/domain/execution/complete-work-step.ts for the only code
+// path that may set COMPLETED.
+model WorkStepInstance {
+  id                String    @id @default(uuid())
+  organizationId    String    @map("organization_id")
+  productionOrderId String    @map("production_order_id")
+  planStepId        String    @map("plan_step_id")
+  stepNumber        Int       @map("step_number") // denormalized from PlanStep for stable ordering/display
+  status            String    @default("LOCKED")
+  startedById       String?   @map("started_by_id")
+  startedAt         DateTime? @map("started_at")
+  completedAt       DateTime? @map("completed_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  version           Int       @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+  planStep        PlanStep        @relation(fields: [planStepId], references: [id])
+
+  release              WorkStepRelease?
+  completionSubmission CompletionSubmission?
+  secondApproval       SecondApproval?
+  confirmations        StepConfirmation[]
+  checklistResponses   ChecklistResponse[]
+  measurementResults   MeasurementResult[]
+  photoEvidence        PhotoEvidence[]
+
+  @@unique([organizationId, productionOrderId, planStepId])
+  @@index([organizationId])
+  @@index([productionOrderId, status])
+  @@map("work_step_instances")
+}
+
+// Server-side record of an issued release token. The token itself is only
+// ever held by the client; the server keeps its hash plus the nonce so a
+// release can be revoked and so a replayed/forged token is detectable
+// (docs/06 "Release Token – Design", Negativtest #2). One row per instance:
+// releasing step N never implies anything about step N+1.
+model WorkStepRelease {
+  id                 String    @id @default(uuid())
+  organizationId     String    @map("organization_id")
+  workStepInstanceId String    @unique @map("work_step_instance_id")
+  releasedById       String    @map("released_by_id")
+  releasedAt         DateTime  @default(now()) @map("released_at")
+  tokenHash          String    @map("token_hash") // SHA-256 of the signature handed to the client
+  tokenNonce         String    @map("token_nonce")
+  validUntil         DateTime? @map("valid_until")
+  planRevisionHash   String    @map("plan_revision_hash")
+  documentSetHash    String    @map("document_set_hash")
+  requirementsHash   String    @map("requirements_hash")
+  isValid            Boolean   @default(true) @map("is_valid")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  version            Int       @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+
+  @@unique([organizationId, tokenNonce])
+  @@index([organizationId])
+  @@map("work_step_releases")
+}
+
+// The client's request to complete a step. Created in PENDING_VALIDATION and
+// only ever moved to VALIDATED/REJECTED by the server. idempotencyKey makes
+// a repeated submission return the original outcome instead of completing
+// twice (docs/05 "Idempotency Key", Negativtest #3).
+model CompletionSubmission {
+  id                      String    @id @default(uuid())
+  organizationId          String    @map("organization_id")
+  workStepInstanceId      String    @unique @map("work_step_instance_id")
+  idempotencyKey          String    @map("idempotency_key")
+  submittedById           String    @map("submitted_by_id")
+  submittedAt             DateTime  @map("submitted_at")
+  clientCompletedAt       DateTime? @map("client_completed_at")
+  deviceId                String?   @map("device_id")
+  status                  String    @default("PENDING_VALIDATION") // PENDING_VALIDATION, VALIDATED, REJECTED
+  validationStatus        String?   @map("validation_status") // OK, MISSING_REQUIRED_EVIDENCE, MEASUREMENT_OUT_OF_TOLERANCE, ...
+  validationReason        String?   @map("validation_reason")
+  validatedAt             DateTime? @map("validated_at")
+  validatedById           String?   @map("validated_by_id")
+  usedPlanRevisionId      String    @map("used_plan_revision_id")
+  usedDocumentRevisionIds Json?     @map("used_document_revision_ids")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  version                 Int       @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId])
+  @@map("completion_submissions")
+}
+
+// The human confirmation ("Ich bestätige, dass ich den Arbeitsschritt ...",
+// docs/07 A5). signatureData holds a non-reversible digest binding actor,
+// step, confirmation text and time — never the PIN, which is verified
+// against User.confirmationPinHash and then discarded.
+model StepConfirmation {
+  id                      String   @id @default(uuid())
+  organizationId          String   @map("organization_id")
+  workStepInstanceId      String   @map("work_step_instance_id")
+  confirmedById           String   @map("confirmed_by_id")
+  confirmationText        String   @map("confirmation_text")
+  confirmationTextVersion String   @map("confirmation_text_version")
+  signatureMethod         String   @map("signature_method") // PIN, DIGITAL_SIGNATURE
+  signatureData           String   @map("signature_data")
+  deviceId                String?  @map("device_id")
+  confirmedAt             DateTime @map("confirmed_at")
+  createdAt               DateTime @default(now()) @map("created_at")
+  version                 Int      @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+
+  @@index([organizationId])
+  @@index([workStepInstanceId])
+  @@map("step_confirmations")
+}
+
+model ChecklistResponse {
+  id                 String   @id @default(uuid())
+  organizationId     String   @map("organization_id")
+  workStepInstanceId String   @map("work_step_instance_id")
+  checklistItemId    String   @map("checklist_item_id")
+  response           String // OK, NOK, N/A
+  comment            String?
+  respondedById      String   @map("responded_by_id")
+  respondedAt        DateTime @map("responded_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+  version            Int      @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+  checklistItem    ChecklistItem    @relation(fields: [checklistItemId], references: [id])
+
+  // One answer per item per instance — a correction overwrites the answer
+  // (the audit trail keeps the previous value, so nothing is lost).
+  @@unique([organizationId, workStepInstanceId, checklistItemId])
+  @@index([organizationId])
+  @@index([workStepInstanceId])
+  @@map("checklist_responses")
+}
+
+// isWithinTolerance is written by the service but constrained by the
+// database: the Phase 3 constraints migration adds a CHECK tying it to
+// measured_value vs. the stored limits, so no client and no service can
+// persist a measurement that claims to be in tolerance when it is not
+// (Negativtest #8). Limits are copied from the InspectionCharacteristic at
+// capture time so a later plan revision cannot retroactively change the
+// verdict of a measurement already taken.
+model MeasurementResult {
+  id                         String   @id @default(uuid())
+  organizationId             String   @map("organization_id")
+  workStepInstanceId         String   @map("work_step_instance_id")
+  inspectionCharacteristicId String   @map("inspection_characteristic_id")
+  measuredValue              Decimal  @map("measured_value") @db.Decimal(20, 6)
+  measuredUnit               String?  @map("measured_unit")
+  lowerLimit                 Decimal? @map("lower_limit") @db.Decimal(20, 6)
+  upperLimit                 Decimal? @map("upper_limit") @db.Decimal(20, 6)
+  isWithinTolerance          Boolean  @default(false) @map("is_within_tolerance")
+  measuringEquipmentRef      String?  @map("measuring_equipment_ref")
+  measuredById               String   @map("measured_by_id")
+  measuredAt                 DateTime @map("measured_at")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+  version                    Int      @default(1)
+
+  organization             Organization             @relation(fields: [organizationId], references: [id])
+  workStepInstance         WorkStepInstance         @relation(fields: [workStepInstanceId], references: [id])
+  inspectionCharacteristic InspectionCharacteristic @relation(fields: [inspectionCharacteristicId], references: [id])
+
+  @@unique([organizationId, workStepInstanceId, inspectionCharacteristicId])
+  @@index([organizationId])
+  @@index([workStepInstanceId])
+  @@map("measurement_results")
+}
+
+model PhotoEvidence {
+  id                 String    @id @default(uuid())
+  organizationId     String    @map("organization_id")
+  workStepInstanceId String    @map("work_step_instance_id")
+  photoRequirementId String?   @map("photo_requirement_id")
+  photoCategory      String?   @map("photo_category")
+  description        String?
+  storageKey         String    @map("storage_key")
+  fileHashSha256     String?   @map("file_hash_sha256")
+  fileSizeBytes      BigInt?   @map("file_size_bytes")
+  mimeType           String?   @map("mime_type")
+  malwareScanStatus  String?   @map("malware_scan_status")
+  uploadStatus       String    @default("PENDING") @map("upload_status") // PENDING, COMPLETED, FAILED
+  takenAt            DateTime? @map("taken_at")
+  uploadedAt         DateTime? @map("uploaded_at")
+  capturedById       String    @map("captured_by_id")
+  deviceId           String?   @map("device_id")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  version            Int       @default(1)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance  @relation(fields: [workStepInstanceId], references: [id])
+  photoRequirement PhotoRequirement? @relation(fields: [photoRequirementId], references: [id])
+
+  @@index([organizationId])
+  @@index([workStepInstanceId, uploadStatus])
+  @@map("photo_evidence")
+}
+
+// Created by validateAndCompleteWorkStep when the plan step demands four
+// eyes; the deciding service (releaseSecondApproval) is Phase 4 per
+// docs/10_MVP_PLAN.md (MVP feature 11 / Abnahmeszenario E). The
+// executor ≠ reviewer rule is a DB CHECK constraint, not just app logic —
+// see the Phase 3 constraints migration and docs/04 "Vier-Augen-Prinzip".
+model SecondApproval {
+  id                 String    @id @default(uuid())
+  organizationId     String    @map("organization_id")
+  workStepInstanceId String    @unique @map("work_step_instance_id")
+  executorId         String    @map("executor_id")
+  reviewerId         String?   @map("reviewer_id")
+  reviewerStatus     String    @default("PENDING") @map("reviewer_status") // PENDING, APPROVED, REJECTED
+  reviewerReason     String?   @map("reviewer_reason")
+  reviewedAt         DateTime? @map("reviewed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  version            Int       @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+
+  @@index([organizationId])
+  @@map("second_approvals")
 }

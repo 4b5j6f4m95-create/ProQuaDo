@@ -97,3 +97,174 @@ button:hover {
   padding: 1rem;
   margin: 1rem 0;
 }
+
+/* ── Tablet execution UI (docs/07 "Designprinzipien") ──────────
+   Large touch targets (min 44×44px), high contrast, no status
+   communicated by colour alone — every chip carries icon + text. */
+
+.tablet {
+  font-size: 1.05rem;
+}
+
+.touch-target,
+.tablet button,
+.tablet select,
+.tablet input[type='text'],
+.tablet input:not([type='radio']):not([type='checkbox']) {
+  min-height: 44px;
+}
+
+.tablet .radio-option {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.tablet fieldset {
+  display: flex;
+  gap: 0.5rem;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.touch-card {
+  padding: 1.25rem;
+}
+
+.card-subtitle {
+  color: #444;
+  margin-top: 0;
+}
+
+button.primary {
+  background: #1a3d7c;
+  border-color: #1a3d7c;
+  color: #fff;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #14305f;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.button-link {
+  display: inline-block;
+  padding: 0.6rem 1rem;
+  border: 1px solid #1a3d7c;
+  border-radius: 4px;
+  background: #1a3d7c;
+  color: #fff;
+  text-decoration: none;
+  min-height: 44px;
+}
+
+.status-chip {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  margin-right: 0.4rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  border: 1px solid #999;
+  background: #f4f4f4;
+}
+
+.status-ready {
+  border-color: #1c6b34;
+  background: #e6f4ea;
+  color: #10431f;
+}
+
+.status-active {
+  border-color: #1a3d7c;
+  background: #e7eefb;
+  color: #10264e;
+}
+
+.status-pending {
+  border-color: #8a6100;
+  background: #fdf3e0;
+  color: #5c4100;
+}
+
+.status-done {
+  border-color: #1c6b34;
+  background: #d9efe1;
+  color: #10431f;
+}
+
+.status-blocked {
+  border-color: #a3120a;
+  background: #fce9e8;
+  color: #6b0c07;
+}
+
+.notice {
+  padding: 0.85rem 1rem;
+  border-left: 4px solid #8a6100;
+  background: #fdf3e0;
+}
+
+.locked-notice {
+  border-left-color: #555;
+  background: #f1f1f1;
+}
+
+.blocked-card {
+  border-color: #a3120a;
+  background: #fce9e8;
+}
+
+.done-card {
+  border-color: #1c6b34;
+  background: #e6f4ea;
+}
+
+.error-text {
+  color: #a3120a;
+  font-weight: 600;
+}
+
+.muted {
+  color: #555;
+}
+
+.empty-state {
+  padding: 2rem 0;
+  color: #555;
+}
+
+.inline-form {
+  max-width: none;
+}
+
+.requirement-forms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  border-top: 1px solid #eee;
+  padding-top: 0.5rem;
+}
+
+.requirement-forms form {
+  max-width: 260px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

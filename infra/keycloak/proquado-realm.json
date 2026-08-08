@@ -57,6 +57,15 @@
       "firstName": "Quality",
       "lastName": "Manager",
       "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }]
+    },
+    {
+      "username": "pm.test",
+      "email": "pm.test@proquado.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Production",
+      "lastName": "Manager",
+      "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }]
     }
   ]
 }

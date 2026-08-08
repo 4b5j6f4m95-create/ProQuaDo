@@ -5,6 +5,9 @@ import {
   type PlanRevisionStatus,
 } from '@/domain/production-plans/plan-revision-status';
 import {
+  addChecklistItemAction,
+  addInspectionCharacteristicAction,
+  addPhotoRequirementAction,
   addPlanStepAction,
   addPlanStepDependencyAction,
   submitPlanForReviewAction,
@@ -54,37 +57,125 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
       </div>
 
       <h2>Arbeitsschritte</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Titel</th>
-            <th>Foto</th>
-            <th>Vier-Augen</th>
-            <th>Abhängigkeiten</th>
-          </tr>
-        </thead>
-        <tbody>
-          {revision.steps.map((step) => (
-            <tr key={step.id}>
-              <td>{step.stepNumber}</td>
-              <td>{step.title}</td>
-              <td>{step.photoRequired ? '✓' : ''}</td>
-              <td>{step.fourEyesRequired ? '✓' : ''}</td>
-              <td>
-                {step.predecessorLinks.length > 0
-                  ? step.predecessorLinks
-                      .map(
-                        (dep) =>
-                          revision.steps.find((s) => s.id === dep.predecessorStepId)?.stepNumber,
-                      )
-                      .join(', ')
-                  : '—'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {revision.steps.map((step) => (
+        <section key={step.id} className="card">
+          <h3>
+            {step.stepNumber}. {step.title}
+          </h3>
+          <p>
+            Vorgänger:{' '}
+            {step.predecessorLinks.length > 0
+              ? step.predecessorLinks
+                  .map(
+                    (dep) => revision.steps.find((s) => s.id === dep.predecessorStepId)?.stepNumber,
+                  )
+                  .join(', ')
+              : '—'}
+            {step.fourEyesRequired ? ' · 👥 Vier-Augen-Pflicht' : ''}
+          </p>
+
+          <h4>Checkliste</h4>
+          <ul>
+            {step.checklistItems.map((item) => (
+              <li key={item.id}>
+                {item.itemNumber}. {item.text}
+                {item.isRequired ? '' : ' (optional)'}
+              </li>
+            ))}
+            {step.checklistItems.length === 0 && <li className="muted">—</li>}
+          </ul>
+
+          <h4>Fotoanforderungen</h4>
+          <ul>
+            {step.photoRequirements.map((requirement) => (
+              <li key={requirement.id}>
+                📷 {requirement.category}: min. {requirement.minCount}
+                {requirement.maxCount ? `, max. ${requirement.maxCount}` : ''}
+              </li>
+            ))}
+            {step.photoRequirements.length === 0 && (
+              <li className="muted">{step.photoRequired ? 'mindestens ein Foto' : '—'}</li>
+            )}
+          </ul>
+
+          <h4>Prüfmerkmale</h4>
+          <ul>
+            {step.inspectionCharacteristics.map((characteristic) => (
+              <li key={characteristic.id}>
+                📏 {characteristic.name}: {characteristic.nominalValue?.toString() ?? '—'}
+                {characteristic.unit ? ` ${characteristic.unit}` : ''} (Toleranz{' '}
+                {characteristic.lowerLimit?.toString() ?? '−∞'} –{' '}
+                {characteristic.upperLimit?.toString() ?? '+∞'})
+              </li>
+            ))}
+            {step.inspectionCharacteristics.length === 0 && <li className="muted">—</li>}
+          </ul>
+
+          {editable && (
+            <div className="requirement-forms">
+              <form action={addChecklistItemAction}>
+                <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
+                <input type="hidden" name="planStepId" value={step.id} />
+                <input type="hidden" name="itemNumber" value={step.checklistItems.length + 1} />
+                <label>
+                  Checklistenpunkt
+                  <input name="text" required maxLength={500} />
+                </label>
+                <button type="submit">+ Checklistenpunkt</button>
+              </form>
+
+              <form action={addPhotoRequirementAction}>
+                <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
+                <input type="hidden" name="planStepId" value={step.id} />
+                <label>
+                  Fotokategorie
+                  <input name="category" required maxLength={50} placeholder="TYPENSCHILD" />
+                </label>
+                <label>
+                  Mindestanzahl
+                  <input name="minCount" type="number" min={1} defaultValue={1} />
+                </label>
+                <label>
+                  Höchstanzahl (optional)
+                  <input name="maxCount" type="number" min={1} />
+                </label>
+                <button type="submit">+ Fotoanforderung</button>
+              </form>
+
+              <form action={addInspectionCharacteristicAction}>
+                <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
+                <input type="hidden" name="planStepId" value={step.id} />
+                <input
+                  type="hidden"
+                  name="characteristicNumber"
+                  value={step.inspectionCharacteristics.length + 1}
+                />
+                <label>
+                  Prüfmerkmal
+                  <input name="name" required maxLength={255} placeholder="Spaltmaß" />
+                </label>
+                <label>
+                  Sollwert
+                  <input name="nominalValue" inputMode="decimal" placeholder="2.0" />
+                </label>
+                <label>
+                  Untere Toleranz
+                  <input name="lowerLimit" inputMode="decimal" placeholder="1.8" />
+                </label>
+                <label>
+                  Obere Toleranz
+                  <input name="upperLimit" inputMode="decimal" placeholder="2.2" />
+                </label>
+                <label>
+                  Einheit
+                  <input name="unit" maxLength={20} placeholder="mm" />
+                </label>
+                <button type="submit">+ Prüfmerkmal</button>
+              </form>
+            </div>
+          )}
+        </section>
+      ))}
 
       {editable && (
         <>

@@ -3,8 +3,10 @@ import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import { getProject } from '@/domain/projects/project-queries';
 import { listDocuments } from '@/domain/documents/document-queries';
 import { listProductionPlans } from '@/domain/production-plans/plan-queries';
+import { listProductionOrders } from '@/domain/production-orders/order-queries';
 import { transitionProjectStatusAction } from '../actions';
 import { isValidProjectTransition, type ProjectStatus } from '@/domain/projects/project-status';
+import { StatusChip } from '@/components/StatusChip';
 
 const ALL_STATUSES: ProjectStatus[] = [
   'DRAFT',
@@ -17,10 +19,11 @@ const ALL_STATUSES: ProjectStatus[] = [
 
 export default async function ProjectDetailPage({ params }: { params: { id: string } }) {
   const actor = await requirePageAuth();
-  const [project, documents, plans] = await Promise.all([
+  const [project, documents, plans, orders] = await Promise.all([
     getProject(actor, params.id),
     listDocuments(actor, { projectId: params.id }),
     listProductionPlans(actor, { projectId: params.id }),
+    listProductionOrders(actor, { projectId: params.id }),
   ]);
 
   const nextStatuses = ALL_STATUSES.filter((s) =>
@@ -114,6 +117,33 @@ export default async function ProjectDetailPage({ params }: { params: { id: stri
         </tbody>
       </table>
       <Link href={`/projects/${project.id}/plans/new`}>+ Fertigungsplan anlegen</Link>
+
+      <h2>Produktionsaufträge</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Auftrag</th>
+            <th>Produkt</th>
+            <th>Seriennummer</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {orders.map((order) => (
+            <tr key={order.id}>
+              <td>
+                <Link href={`/production-orders/${order.id}`}>{order.orderNumber}</Link>
+              </td>
+              <td>{order.product.name}</td>
+              <td>{order.serialNumber ?? '—'}</td>
+              <td>
+                <StatusChip status={order.status} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <Link href={`/projects/${project.id}/orders/new`}>+ Produktionsauftrag anlegen</Link>
     </main>
   );
 }

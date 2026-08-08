@@ -12,7 +12,13 @@ export async function getProductionPlanRevision(actor: Actor, revisionId: string
       include: {
         steps: {
           orderBy: { stepNumber: 'asc' },
-          include: { predecessorLinks: true, successorLinks: true, checklistItems: true },
+          include: {
+            predecessorLinks: true,
+            successorLinks: true,
+            checklistItems: { orderBy: { itemNumber: 'asc' } },
+            photoRequirements: { orderBy: { category: 'asc' } },
+            inspectionCharacteristics: { orderBy: { characteristicNumber: 'asc' } },
+          },
         },
       },
     });

@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
+import { hashConfirmationPin } from '@/lib/auth/confirmation-pin';
 import { PERMISSIONS } from './permissions-catalog';
 import { SYSTEM_ROLES, type SystemRoleCode } from './system-roles';
 
@@ -76,6 +77,10 @@ export interface DemoUserSpec {
   email: string;
   displayName: string;
   roleCode: SystemRoleCode;
+  /** Development/demo convenience only. Real users set their own PIN;
+   *  seeding one is acceptable for demo accounts and for integration tests
+   *  that need to exercise step confirmation (docs/07 A5). */
+  confirmationPin?: string;
 }
 
 export async function seedDemoUsers(
@@ -92,6 +97,10 @@ export async function seedDemoUsers(
   const userIdByEmail: Record<string, string> = {};
 
   for (const demo of users) {
+    const confirmationPinHash = demo.confirmationPin
+      ? await hashConfirmationPin(demo.confirmationPin)
+      : undefined;
+
     const user = await db.user.upsert({
       where: {
         organizationId_externalId: {
@@ -99,12 +108,13 @@ export async function seedDemoUsers(
           externalId: `pending:${demo.email}`,
         },
       },
-      update: {},
+      update: { confirmationPinHash },
       create: {
         organizationId: seeded.organizationId,
         externalId: `pending:${demo.email}`,
         email: demo.email,
         displayName: demo.displayName,
+        confirmationPinHash,
       },
     });
     userIdByEmail[demo.email] = user.id;

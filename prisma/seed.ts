@@ -19,14 +19,40 @@ async function main(): Promise<void> {
   // Demo users matching infra/keycloak/proquado-realm.json. On first SSO
   // login, resolve_org_for_login() links external_id via the
   // 'pending:<email>' sentinel — see src/lib/auth/resolve-login.ts.
+  // DEMO_CONFIRMATION_PIN is a development convenience so the step
+  // confirmation flow (docs/07 A5) works out of the box on a fresh
+  // checkout. Production users set their own PIN — never seed one there.
+  const DEMO_CONFIRMATION_PIN = '1234';
   const userIds = await seedDemoUsers(db, seeded, [
-    { email: 'admin.test@proquado.local', displayName: 'Admin Test', roleCode: 'ADMIN' },
-    { email: 'worker.test@proquado.local', displayName: 'Worker Test', roleCode: 'WORKER' },
-    { email: 'pl.test@proquado.local', displayName: 'Project Lead Test', roleCode: 'PROJECT_LEAD' },
+    {
+      email: 'admin.test@proquado.local',
+      displayName: 'Admin Test',
+      roleCode: 'ADMIN',
+      confirmationPin: DEMO_CONFIRMATION_PIN,
+    },
+    {
+      email: 'worker.test@proquado.local',
+      displayName: 'Worker Test',
+      roleCode: 'WORKER',
+      confirmationPin: DEMO_CONFIRMATION_PIN,
+    },
+    {
+      email: 'pl.test@proquado.local',
+      displayName: 'Project Lead Test',
+      roleCode: 'PROJECT_LEAD',
+      confirmationPin: DEMO_CONFIRMATION_PIN,
+    },
     {
       email: 'qm.test@proquado.local',
       displayName: 'Quality Manager Test',
       roleCode: 'QUALITY_MANAGER',
+      confirmationPin: DEMO_CONFIRMATION_PIN,
+    },
+    {
+      email: 'pm.test@proquado.local',
+      displayName: 'Production Manager Test',
+      roleCode: 'PRODUCTION_MANAGER',
+      confirmationPin: DEMO_CONFIRMATION_PIN,
     },
   ]);
   for (const [email, id] of Object.entries(userIds)) {

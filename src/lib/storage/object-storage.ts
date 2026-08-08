@@ -48,11 +48,32 @@ export async function createPresignedUploadUrl(params: {
   documentRevisionId: string;
   mimeType: string;
 }): Promise<PresignedUpload> {
-  const storageKey = `${params.organizationId}/document-revisions/${params.documentRevisionId}/${randomUUID()}`;
+  return presign(
+    `${params.organizationId}/document-revisions/${params.documentRevisionId}/${randomUUID()}`,
+    params.mimeType,
+  );
+}
+
+/** Photo evidence lives under its own prefix, still namespaced by
+ *  organization for the same reason as documents. Keyed by work step
+ *  instance so the production dossier export (Phase 6) can enumerate a
+ *  step's evidence by prefix alone. */
+export async function createPresignedPhotoUploadUrl(params: {
+  organizationId: string;
+  workStepInstanceId: string;
+  mimeType: string;
+}): Promise<PresignedUpload> {
+  return presign(
+    `${params.organizationId}/photo-evidence/${params.workStepInstanceId}/${randomUUID()}`,
+    params.mimeType,
+  );
+}
+
+async function presign(storageKey: string, mimeType: string): Promise<PresignedUpload> {
   const command = new PutObjectCommand({
     Bucket: bucket(),
     Key: storageKey,
-    ContentType: params.mimeType,
+    ContentType: mimeType,
   });
   const uploadUrl = await getSignedUrl(s3Client(), command, { expiresIn: UPLOAD_URL_TTL_SECONDS });
   return {

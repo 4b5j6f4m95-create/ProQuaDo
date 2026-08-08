@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { ZodError } from 'zod';
 import { AuthzError } from '@/lib/authz/errors';
 import { DomainError } from '@/lib/domain-errors';
 import { logger } from '@/lib/logger';
@@ -12,6 +13,7 @@ export interface ApiErrorBody {
   detail: string;
   instance: string;
   correlationId: string;
+  errors?: Array<{ field: string; message: string }>;
 }
 
 interface CodedError {
@@ -49,6 +51,28 @@ export function toErrorResponse(
         correlationId,
       },
       { status: error.status },
+    );
+  }
+
+  // A malformed request body is the client's mistake, not the server's —
+  // without this it would surface as a 500, and the per-field `errors` array
+  // from docs/05_API_CONTRACTS.md would be lost.
+  if (error instanceof ZodError) {
+    return NextResponse.json(
+      {
+        type: '/errors/validation-failed',
+        title: 'VALIDATION_ERROR',
+        status: 422,
+        code: 'VALIDATION_ERROR',
+        detail: 'Die Anfrage entspricht nicht dem erwarteten Format.',
+        instance: new URL(request.url).pathname,
+        correlationId,
+        errors: error.issues.map((issue) => ({
+          field: issue.path.join('.'),
+          message: issue.message,
+        })),
+      },
+      { status: 422 },
     );
   }
 
