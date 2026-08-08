@@ -268,3 +268,43 @@ button:disabled {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Dashboard-Kennzahlen (docs/07 B1) */
+.metric-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.metric-card {
+  flex: 1 1 10rem;
+  text-align: center;
+}
+
+.metric-value {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.metric-label {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* Schlüssel-Wert-Listen der Produktionsakte */
+.key-values {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.key-values dt {
+  font-weight: 600;
+}
+
+.key-values dd {
+  margin: 0;
+}

@@ -81,13 +81,16 @@ model Organization {
   measuringEquipment     MeasuringEquipment[]
   calibrations           Calibration[]
 
-  devices           Device[]
-  syncSequence      SyncSequence?
-  syncCursors       SyncCursor[]
-  syncCommands      SyncCommand[]
-  syncConflicts     SyncConflict[]
-  conflictDecisions ConflictDecision[]
-  photoUploadChunks PhotoUploadChunk[]
+  devices            Device[]
+  productionDossiers ProductionDossier[]
+  dossierExports     DossierExport[]
+  notifications      Notification[]
+  syncSequence       SyncSequence?
+  syncCursors        SyncCursor[]
+  syncCommands       SyncCommand[]
+  syncConflicts      SyncConflict[]
+  conflictDecisions  ConflictDecision[]
+  photoUploadChunks  PhotoUploadChunk[]
 
   @@map("organizations")
 }
@@ -185,6 +188,7 @@ model User {
   projectMemberships ProjectMember[]
   documentApprovals  DocumentApproval[]
   orderAssignments   OrderAssignment[]
+  notifications      Notification[]
 
   @@unique([organizationId, externalId])
   @@index([organizationId])
@@ -991,6 +995,7 @@ model ProductionOrder {
   nonConformances   NonConformance[]
   productionHolds   ProductionHold[]
   syncConflicts     SyncConflict[]
+  dossiers          ProductionDossier[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId])
@@ -1650,4 +1655,110 @@ model PhotoUploadChunk {
   @@unique([organizationId, photoEvidenceId, chunkIndex])
   @@index([organizationId])
   @@map("photo_upload_chunks")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Akte, Export und Benachrichtigungen (Phase 6)
+// See MASTERPROMPT.md Kap. 10 "Digitale Produktionsakte".
+// ─────────────────────────────────────────────────────────────
+
+// One assembled production dossier for one order. Versioned and
+// reproducible: `dataAsOf` pins the moment the content was read and
+// `templateVersion` the layout that rendered it, so "why does the PDF from
+// March look different" has an answer that is not "we changed something".
+//
+// The dossier row is a HEADER, not a copy of the data. Re-generating reads
+// the primary records again — Masterprompt Kap. 10 calls the dossier a
+// "reproduzierbarer Nachweis des tatsächlichen Herstellungsverlaufs", and a
+// snapshot that drifted from the records it claims to prove would be the
+// opposite of that.
+model ProductionDossier {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  productionOrderId String   @map("production_order_id")
+  dossierNumber     String   @map("dossier_number")
+  serialNumber      String?  @map("serial_number")
+  templateVersion   String   @map("template_version")
+  dataAsOf          DateTime @map("data_as_of")
+  generatedById     String   @map("generated_by_id")
+  generatedAt       DateTime @default(now()) @map("generated_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  version           Int      @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  exports DossierExport[]
+
+  @@unique([organizationId, dossierNumber])
+  @@index([organizationId, productionOrderId])
+  @@index([organizationId, serialNumber])
+  @@map("production_dossiers")
+}
+
+// One export of a dossier — PDF or ZIP. Also the job record from ADR-007:
+// written as PENDING before generation starts, so an export that dies
+// mid-flight leaves a visible, repeatable trace rather than nothing.
+//
+// `manifest` holds what Masterprompt Kap. 10 demands of it: file hashes, ids
+// and revisions of everything the archive contains. It is stored in the
+// database as well as inside the ZIP, so a manifest that was tampered with
+// in a copied archive can be told apart from the one the server issued.
+model DossierExport {
+  id                  String    @id @default(uuid())
+  organizationId      String    @map("organization_id")
+  productionDossierId String    @map("production_dossier_id")
+  format              String // PDF, ZIP
+  status              String    @default("PENDING") // PENDING, COMPLETED, FAILED
+  storageKey          String?   @map("storage_key")
+  fileHashSha256      String?   @map("file_hash_sha256")
+  fileSizeBytes       BigInt?   @map("file_size_bytes")
+  manifest            Json?
+  entryCount          Int?      @map("entry_count")
+  failureReason       String?   @map("failure_reason")
+  requestedById       String    @map("requested_by_id")
+  requestedAt         DateTime  @default(now()) @map("requested_at")
+  completedAt         DateTime? @map("completed_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  version             Int       @default(1)
+
+  organization      Organization      @relation(fields: [organizationId], references: [id])
+  productionDossier ProductionDossier @relation(fields: [productionDossierId], references: [id])
+
+  @@index([organizationId, status])
+  @@index([productionDossierId, createdAt])
+  @@map("dossier_exports")
+}
+
+// In-app notification, derived from an outbox event (docs/10 Phase 6
+// "Benachrichtigungen: In-App, Event-getrieben").
+//
+// Addressed to a USER, not broadcast to a role: who needs to know that a
+// conflict is waiting depends on assignment and permission at the moment the
+// event happened, and resolving that later would give a different answer
+// than the one that was true. `sourceEventId` makes fan-out idempotent — the
+// same outbox event never produces a second notification for the same user.
+model Notification {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  eventType      String    @map("event_type")
+  title          String
+  body           String
+  severity       String    @default("INFO") // INFO, WARNING, CRITICAL
+  resourceType   String?   @map("resource_type")
+  resourceId     String?   @map("resource_id")
+  linkPath       String?   @map("link_path")
+  sourceEventId  String?   @map("source_event_id")
+  readAt         DateTime? @map("read_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId, sourceEventId])
+  @@index([organizationId, userId, readAt])
+  @@map("notifications")
 }

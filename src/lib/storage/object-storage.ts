@@ -161,6 +161,23 @@ export async function getObjectBytes(storageKey: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/** Short-lived signed GET for a generated export. The server does not stream
+ *  the archive itself: a dossier ZIP is the largest object this system
+ *  produces, and proxying it would tie up a request worker for the whole
+ *  download (see ADR-007 on why that matters here). */
+export async function createPresignedDownloadUrl(params: {
+  storageKey: string;
+  downloadFileName: string;
+}): Promise<{ url: string; expiresAt: Date }> {
+  const command = new GetObjectCommand({
+    Bucket: bucket(),
+    Key: params.storageKey,
+    ResponseContentDisposition: `attachment; filename="${params.downloadFileName.replace(/"/g, '')}"`,
+  });
+  const url = await getSignedUrl(s3Client(), command, { expiresIn: UPLOAD_URL_TTL_SECONDS });
+  return { url, expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000) };
+}
+
 export async function deleteObjects(storageKeys: readonly string[]): Promise<void> {
   if (storageKeys.length === 0) return;
   await s3Client().send(
