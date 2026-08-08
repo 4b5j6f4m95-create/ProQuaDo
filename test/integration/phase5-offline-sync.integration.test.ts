@@ -972,6 +972,8 @@ describe('Negativtest #14 — Serverausfall nach Upload, vor Quittung', () => {
     expect(again.uploadStatus).toBe('COMPLETED');
   }, 180_000);
 
+  // Negativtest #7 auf Blockebene: ein beschädigter Block wird als Block
+  // abgewiesen, statt am Ende als beschädigtes Foto aufzufallen.
   it('refuses a chunk whose content does not match its declared hash', async () => {
     const fx = await seedScenario('neg-14-hash');
     const bundle = await buildOfflineBundle(fx.worker, fx.deviceId);

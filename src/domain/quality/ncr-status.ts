@@ -48,7 +48,8 @@ export type DispositionType = 'REWORK' | 'CONCESSION' | 'SCRAP';
  * gilt bei potenziell kritischen Kategorien die konservative Sperrregel").
  *
  * The rule set is deliberately hard-coded and conservative for the MVP: a
- * configurable rule engine is a Phase 6 concern, and until it exists,
+ * configurable rule engine appears in no phase of docs/10 and is therefore a
+ * post-MVP concern, not a scheduled one. Until it exists,
  * guessing "probably not blocking" would be the one failure mode with
  * physical consequences. A reporter can raise the classification but never
  * lower it — only a QM assessment may do that, with a reason.
