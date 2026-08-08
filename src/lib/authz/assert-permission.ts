@@ -4,8 +4,9 @@ import { AuthzError } from './errors';
 import type { PermissionCode } from '@/domain/identity/permissions-catalog';
 
 /**
- * The self-defense check every domain service opens with — see docs/14
- * "Schichtenregeln": the API layer resolves and validates syntax/authN, but
+ * The self-defense check every domain service opens with — see
+ * MASTERPROMPT.md Kap. 14 "Schichtenregeln" and docs/01_SYSTEM_CONTEXT.md
+ * "Schichtenarchitektur": the API layer resolves and validates syntax/authN, but
  * authorization is a domain-layer responsibility so that no future caller
  * (another service, a script, a test) can accidentally bypass it by calling
  * the service directly. Throws AuthzError (mapped to the right HTTP status

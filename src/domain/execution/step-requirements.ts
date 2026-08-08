@@ -108,10 +108,13 @@ export function evaluateStepRequirements(
       });
       continue;
     }
-    // A "not OK" answer is a deviation, not a completion. Phase 4 turns
-    // this into an NCR with a disposition; until then the step simply
-    // cannot be completed with an open NOK, which is the conservative
+    // A "not OK" answer is a deviation, not a completion — the conservative
     // reading of Geschäftsgrundsatz 4 ("Abweichungen vollständig melden").
+    // Unlike an out-of-tolerance measurement, this does NOT raise an NCR
+    // automatically: a checklist item carries no error category the server
+    // could classify from (see classifyBlocking). The worker either
+    // corrects the answer or reports the deviation via "Abweichung melden"
+    // (docs/07 A9), which is what turns it into an NCR with a disposition.
     if (response === 'NOK') {
       gaps.push({
         code: 'CHECKLIST_ITEM_NOT_OK',

@@ -1,8 +1,9 @@
 import pino from 'pino';
 import pretty from 'pino-pretty';
 
-// Structured, data-sparse logging per docs/16 (Observability) and
-// 08_THREAT_MODEL_PRIVACY.md ("Sensible Daten in Logs" mitigation): redact
+// Structured, data-sparse logging per MASTERPROMPT.md Kap. 16 (Sicherheit,
+// Datenschutz und Betrieb) and docs/08_THREAT_MODEL_PRIVACY.md ("Sensible
+// Daten in Logs" mitigation): redact
 // known secret/PII-shaped fields regardless of where they appear in the
 // log object, rather than trusting every call site to remember.
 const REDACT_PATHS = [
