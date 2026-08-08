@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { assertWithinRateLimit } from '@/lib/api/rate-limit';
 import { requestPhotoUploadUrl } from '@/domain/execution/photo-evidence';
 
 const uploadUrlSchema = z.object({
@@ -20,6 +21,8 @@ export async function POST(
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const body = uploadUrlSchema.parse(await request.json());
+    // docs/05: 20 Fotouploads pro Minute und Gerät.
+    assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId: body.deviceId });
     const result = await requestPhotoUploadUrl({
       actor,
       workStepInstanceId: params.id,

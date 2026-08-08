@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { assertWithinRateLimit } from '@/lib/api/rate-limit';
 import { uploadPhotoChunk } from '@/domain/execution/photo-upload-chunks';
 
 /**
@@ -29,6 +30,13 @@ export async function POST(
       chunkIndex: request.headers.get('x-chunk-index'),
       chunkHashSha256: request.headers.get('x-chunk-hash'),
       deviceId: request.headers.get('x-device-id') ?? undefined,
+    });
+
+    // Blöcke zählen wie Fotouploads: ein Gerät, das eine Datei in 1-MiB-Blöcken
+    // sendet, darf dabei nicht am Fotolimit vorbeilaufen.
+    assertWithinRateLimit('PHOTO_UPLOAD', {
+      userId: actor.userId,
+      deviceId: headers.deviceId,
     });
 
     const chunk = new Uint8Array(await request.arrayBuffer());

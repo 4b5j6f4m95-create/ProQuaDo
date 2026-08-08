@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { assertWithinRateLimit } from '@/lib/api/rate-limit';
 import { exportProductionDossier, listDossierExports } from '@/domain/dossier/export-dossier';
 
 const exportSchema = z.object({ format: z.enum(['PDF', 'ZIP']) });
@@ -19,6 +20,9 @@ export async function POST(
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const { format } = exportSchema.parse(await request.json());
+    // docs/05: 5 Exporte pro Stunde und Benutzer. ADR-007 beruft sich darauf,
+    // dass ein synchroner Export begrenzt bleibt — hier ist die Grenze.
+    assertWithinRateLimit('EXPORT', { userId: actor.userId });
 
     const result = await exportProductionDossier({
       actor,

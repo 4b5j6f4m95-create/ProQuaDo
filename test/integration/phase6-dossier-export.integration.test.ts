@@ -99,6 +99,9 @@ beforeAll(async () => {
   process.env.S3_ACCESS_KEY_ID = 'testuser';
   process.env.S3_SECRET_ACCESS_KEY = 'testpassword';
   process.env.S3_FORCE_PATH_STYLE = 'true';
+  // Explicit: getMalwareScanner() warns when nothing is configured, and the
+  // tests are not the place to rehearse that warning (see malware-scan.ts).
+  process.env.MALWARE_SCANNER = 'stub';
 
   await new S3Client({
     endpoint: minioEndpoint,

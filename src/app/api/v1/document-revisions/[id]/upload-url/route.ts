@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { assertWithinRateLimit } from '@/lib/api/rate-limit';
 import { requestDocumentUploadUrl } from '@/domain/documents/document-upload';
 
 const requestUploadSchema = z.object({
@@ -14,6 +15,8 @@ export async function POST(
 ): Promise<NextResponse> {
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
+    // docs/05: 5 Dokumentuploads pro Minute und Benutzer.
+    assertWithinRateLimit('DOCUMENT_UPLOAD', { userId: actor.userId });
     const body = requestUploadSchema.parse(await request.json());
     const result = await requestDocumentUploadUrl({
       actor,

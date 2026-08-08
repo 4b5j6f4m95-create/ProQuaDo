@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
 import { AuthzError } from '@/lib/authz/errors';
 import { DomainError } from '@/lib/domain-errors';
+import { RateLimitExceededError } from './rate-limit';
 import { logger } from '@/lib/logger';
 
 // RFC-7807-ish shape from docs/05_API_CONTRACTS.md "Standard-Fehlerformat".
@@ -50,7 +51,16 @@ export function toErrorResponse(
         instance: new URL(request.url).pathname,
         correlationId,
       },
-      { status: error.status },
+      {
+        status: error.status,
+        // A 429 without Retry-After leaves a client guessing, and an offline
+        // device that guesses wrong either hammers the server or stalls a
+        // shift. The number is the one the limiter computed.
+        headers:
+          error instanceof RateLimitExceededError
+            ? { 'retry-after': String(error.retryAfterSeconds) }
+            : undefined,
+      },
     );
   }
 

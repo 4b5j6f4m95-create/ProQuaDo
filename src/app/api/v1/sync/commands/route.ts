@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { assertWithinRateLimit } from '@/lib/api/rate-limit';
 import { processSyncCommands } from '@/domain/sync/sync-commands';
 import { syncCommandsRequestSchema } from '@/domain/sync/sync-command-types';
 
@@ -18,6 +19,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const body = syncCommandsRequestSchema.parse(await request.json());
+    // docs/05: 10 Batches pro Minute und Gerät. Ein Batch löst bis zu 500
+    // vollständige serverseitige Neuvalidierungen aus — das ist die teuerste
+    // Operation, die ein Gerät auslösen kann.
+    assertWithinRateLimit('SYNC_COMMANDS', { userId: actor.userId, deviceId: body.deviceId });
 
     const results = await processSyncCommands({
       actor,
