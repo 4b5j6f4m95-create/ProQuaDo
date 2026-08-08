@@ -1,0 +1,376 @@
+// ProQuaDo — Prisma Schema
+// Phase 1: Identity & Organization + Audit/Outbox Foundation
+// See docs/02_DOMAIN_MODEL.md for the full target domain model.
+// Later phases add Projects, Documents, Production Planning/Execution, Quality.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// `url` is used by the generated Client at runtime and MUST point at the
+// least-privileged `proquado_app` role (RLS-restricted, see ADR-006 and
+// migration 20260808151300_rls_and_audit_hardening). `directUrl` is used by
+// `prisma migrate`/`prisma db push` and MUST point at the schema-owning role,
+// which bypasses RLS by default (required to create tables/policies at all).
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Identity & Organization
+// ─────────────────────────────────────────────────────────────
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  version     Int      @default(1)
+
+  sites            Site[]
+  departments      Department[]
+  workCenters      WorkCenter[]
+  users            User[]
+  employees        Employee[]
+  roles            Role[]
+  permissions      Permission[]
+  userRoles        UserRole[]
+  rolePermissions  RolePermission[]
+  qualifications   Qualification[]
+  employeeQualifications EmployeeQualification[]
+  delegations      Delegation[]
+  auditEvents      AuditEvent[]
+  outboxEvents     OutboxEvent[]
+
+  @@map("organizations")
+}
+
+model Site {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String
+  name           String
+  location       String?
+  timezone       String   @default("UTC")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  departments  Department[]
+  employees    Employee[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("sites")
+}
+
+model Department {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  siteId         String   @map("site_id")
+  name           String
+  code           String?
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  site         Site         @relation(fields: [siteId], references: [id])
+  workCenters  WorkCenter[]
+  employees    Employee[]
+
+  @@index([organizationId])
+  @@index([siteId])
+  @@map("departments")
+}
+
+model WorkCenter {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  departmentId   String   @map("department_id")
+  name           String
+  description    String?
+  equipmentRef   String?  @map("equipment_ref")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  department   Department   @relation(fields: [departmentId], references: [id])
+
+  @@index([organizationId])
+  @@index([departmentId])
+  @@map("work_centers")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  externalId     String   @map("external_id") // subject claim from OIDC provider
+  email          String
+  displayName    String?  @map("display_name")
+  isActive       Boolean  @default(true) @map("is_active")
+  mfaRequired    Boolean  @default(false) @map("mfa_required")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  employee     Employee?
+  userRoles    UserRole[]
+  devices      Device[]
+  sessions     Session[]
+
+  delegationsGiven    Delegation[] @relation("DelegatingUser")
+  delegationsReceived Delegation[] @relation("DelegatedUser")
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId])
+  @@map("users")
+}
+
+model Device {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  deviceLabel  String?   @map("device_label")
+  isRevoked    Boolean   @default(false) @map("is_revoked")
+  lastSeenAt   DateTime? @map("last_seen_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("devices")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  deviceId     String?  @map("device_id")
+  expiresAt    DateTime @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Employee {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String   @unique @map("user_id")
+  employeeNumber String   @map("employee_number")
+  departmentId   String?  @map("department_id")
+  siteId         String?  @map("site_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  department   Department?  @relation(fields: [departmentId], references: [id])
+  site         Site?        @relation(fields: [siteId], references: [id])
+
+  qualifications EmployeeQualification[]
+
+  @@unique([organizationId, employeeNumber])
+  @@index([organizationId])
+  @@map("employees")
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String // ADMIN, QUALITY_MANAGER, PROJECT_LEAD, PRODUCTION_MANAGER, WORKER, INSPECTOR, AUDITOR
+  name           String
+  description    String?
+  isSystem       Boolean  @default(false) @map("is_system")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("roles")
+}
+
+model Permission {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String // e.g. "document.release"
+  name           String
+  resource       String // e.g. "document"
+  action         String // e.g. "release"
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  version        Int      @default(1)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  rolePermissions RolePermission[]
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, resource, action])
+  @@index([organizationId])
+  @@map("permissions")
+}
+
+model UserRole {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  roleId         String    @map("role_id")
+  assignedAt     DateTime  @default(now()) @map("assigned_at")
+  expiresAt      DateTime? @map("expires_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  version        Int       @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId, roleId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  roleId         String   @map("role_id")
+  permissionId   String   @map("permission_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  role         Role         @relation(fields: [roleId], references: [id])
+  permission   Permission   @relation(fields: [permissionId], references: [id])
+
+  @@unique([organizationId, roleId, permissionId])
+  @@index([organizationId])
+  @@map("role_permissions")
+}
+
+model Qualification {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  employeeQualifications EmployeeQualification[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("qualifications")
+}
+
+model EmployeeQualification {
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  employeeId       String    @map("employee_id")
+  qualificationId  String    @map("qualification_id")
+  certifiedAt      DateTime  @map("certified_at")
+  expiresAt        DateTime? @map("expires_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  version          Int       @default(1)
+
+  organization  Organization  @relation(fields: [organizationId], references: [id])
+  employee      Employee      @relation(fields: [employeeId], references: [id])
+  qualification Qualification @relation(fields: [qualificationId], references: [id])
+
+  @@index([organizationId])
+  @@index([employeeId])
+  @@index([qualificationId, expiresAt])
+  @@map("employee_qualifications")
+}
+
+model Delegation {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  delegatingUserId  String   @map("delegating_user_id")
+  delegatedUserId   String   @map("delegated_user_id")
+  scopeType         String?  @map("scope_type") // ROLE, PERMISSION, QUALIFICATION
+  scopeId           String?  @map("scope_id")
+  reason            String
+  startsAt          DateTime @map("starts_at")
+  expiresAt         DateTime @map("expires_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  version           Int      @default(1)
+
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  delegatingUser  User         @relation("DelegatingUser", fields: [delegatingUserId], references: [id])
+  delegatedUser   User         @relation("DelegatedUser", fields: [delegatedUserId], references: [id])
+
+  @@index([organizationId])
+  @@map("delegations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Audit Trail (append-only) & Transactional Outbox
+// ─────────────────────────────────────────────────────────────
+
+model AuditEvent {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  correlationId     String?  @map("correlation_id")
+  actorId           String?  @map("actor_id")
+  delegatedActorId  String?  @map("delegated_actor_id")
+  eventType         String   @map("event_type") // e.g. "work_step.started"
+  resourceType      String   @map("resource_type")
+  resourceId        String?  @map("resource_id")
+  previousValues    Json?    @map("previous_values")
+  newValues         Json?    @map("new_values")
+  reason            String?
+  source            String? // web, mobile, api, import
+  deviceId          String?  @map("device_id")
+  clientTimestamp   DateTime? @map("client_timestamp")
+  serverTimestamp   DateTime @default(now()) @map("server_timestamp")
+  result            String? // SUCCESS, FAILURE, PARTIAL
+  failureReason     String?  @map("failure_reason")
+  requestId         String?  @map("request_id")
+  idempotencyKey    String?  @map("idempotency_key")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, resourceType, resourceId])
+  @@index([organizationId, serverTimestamp])
+  @@index([correlationId])
+  @@map("audit_events")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid())
+  organizationId String   @map("organization_id")
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id")
+  eventType     String    @map("event_type")
+  payload       Json
+  createdAt     DateTime  @default(now()) @map("created_at")
+  processedAt   DateTime? @map("processed_at")
+  processed     Boolean   @default(false)
+  retryCount    Int       @default(0) @map("retry_count")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, processed])
+  @@map("outbox_events")
+}

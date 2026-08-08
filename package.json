@@ -1,0 +1,62 @@
+{
+  "name": "proquado",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm test:unit && pnpm test:integration",
+    "test:unit": "jest --config jest.unit.config.js",
+    "test:unit:watch": "jest --config jest.unit.config.js --watch",
+    "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "test:coverage": "jest --config jest.unit.config.js --coverage",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "tsx prisma/seed.ts",
+    "db:up": "docker compose up -d postgres minio keycloak",
+    "db:down": "docker compose down"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "next": "^14.2.13",
+    "next-auth": "5.0.0-beta.21",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^10.13.2",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.7.4",
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.13",
+    "eslint-config-prettier": "^9.1.0",
+    "jest": "^29.7.0",
+    "prettier": "^3.3.3",
+    "prisma": "^5.20.0",
+    "testcontainers": "^10.13.2",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  }
+}

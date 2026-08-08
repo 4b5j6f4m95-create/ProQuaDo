@@ -1,0 +1,14 @@
+import type { Metadata } from 'next';
+
+export const metadata: Metadata = {
+  title: 'ProQuaDo',
+  description: 'Produktions-, Qualitäts- und Dokumentationssoftware',
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="de">
+      <body>{children}</body>
+    </html>
+  );
+}

@@ -1,0 +1,41 @@
+{
+  "realm": "proquado",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "proquado-web",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "secret": "proquado_dev_client_secret",
+      "redirectUris": ["http://localhost:3000/api/auth/callback/*"],
+      "webOrigins": ["http://localhost:3000"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin.test",
+      "email": "admin.test@proquado.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "Test",
+      "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }]
+    },
+    {
+      "username": "worker.test",
+      "email": "worker.test@proquado.local",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Worker",
+      "lastName": "Test",
+      "credentials": [{ "type": "password", "value": "devpassword", "temporary": false }]
+    }
+  ]
+}

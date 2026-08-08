@@ -1,0 +1,54 @@
+name: proquado
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: proquado
+      POSTGRES_PASSWORD: proquado_dev_only
+      POSTGRES_DB: proquado
+    ports:
+      - '5433:5432'
+    volumes:
+      - ./.docker-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U proquado -d proquado']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: proquado
+      MINIO_ROOT_PASSWORD: proquado_dev_only
+    ports:
+      - '9010:9000'
+      - '9011:9001'
+    volumes:
+      - ./.docker-data/minio:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin_dev_only
+      KC_DB: dev-file
+    ports:
+      - '8081:8080'
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import
+
+networks:
+  default:
+    name: proquado_dev

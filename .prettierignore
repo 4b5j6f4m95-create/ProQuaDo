@@ -1,0 +1,10 @@
+node_modules/
+.next/
+dist/
+coverage/
+pnpm-lock.yaml
+prisma/migrations/
+
+# Prose documentation, not code — not subject to Prettier's code formatting.
+docs/
+MASTERPROMPT.md
