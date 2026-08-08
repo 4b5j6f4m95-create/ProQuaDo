@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { assertPermission } from '@/lib/authz/assert-permission';
+import { hasPermissionWithin } from '@/lib/authz/permission-within';
 import { NotFoundError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 import {
@@ -135,18 +136,8 @@ export async function listProductionOrders(
   });
 }
 
-async function hasUnrestrictedVisibility(
-  tx: Prisma.TransactionClient,
-  actor: Actor,
-): Promise<boolean> {
-  const grant = await tx.userRole.findFirst({
-    where: {
-      userId: actor.userId,
-      organizationId: actor.organizationId,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-      role: { rolePermissions: { some: { permission: { code: 'audit.view' } } } },
-    },
-    select: { id: true },
-  });
-  return grant !== null;
+function hasUnrestrictedVisibility(tx: Prisma.TransactionClient, actor: Actor): Promise<boolean> {
+  // Same discriminator as assertOrderVisible() — see order-access.ts for
+  // why audit.view separates the two visibility classes.
+  return hasPermissionWithin(tx, actor, 'audit.view');
 }

@@ -69,6 +69,19 @@ export async function createPresignedPhotoUploadUrl(params: {
   );
 }
 
+/** Evidence attached to a deviation report, under its own prefix so the
+ *  production dossier can enumerate an NCR's attachments by prefix. */
+export async function createPresignedNcrEvidenceUploadUrl(params: {
+  organizationId: string;
+  nonConformanceId: string;
+  mimeType: string;
+}): Promise<PresignedUpload> {
+  return presign(
+    `${params.organizationId}/ncr-evidence/${params.nonConformanceId}/${randomUUID()}`,
+    params.mimeType,
+  );
+}
+
 async function presign(storageKey: string, mimeType: string): Promise<PresignedUpload> {
   const command = new PutObjectCommand({
     Bucket: bucket(),

@@ -122,3 +122,49 @@ export class ConfirmationFailedError extends DomainError {
     super('CONFIRMATION_FAILED', message, 403);
   }
 }
+
+// ── Quality errors (Phase 4) ─────────────────────────────────
+
+/** A hold freezes work in its scope. The message always names the reason
+ *  and, where configured, the condition for release — docs/07: "Sperren
+ *  benötigen Ursache und nächste Handlung, nicht nur einen deaktivierten
+ *  Button." */
+export class ProductionHoldActiveError extends DomainError {
+  constructor(holdReason: string, releaseCondition?: string) {
+    super(
+      'ORDER_ON_HOLD',
+      `Gesperrt: ${holdReason}.${releaseCondition ? ` Freigabebedingung: ${releaseCondition}.` : ''}`,
+      423,
+    );
+  }
+}
+
+export class BlockingNonConformanceError extends DomainError {
+  constructor() {
+    super(
+      'BLOCKING_NCR_OPEN',
+      'Eine blockierende Abweichung ist offen — der Arbeitsschritt bleibt gesperrt, bis sie abgeschlossen ist.',
+      423,
+    );
+  }
+}
+
+export class EquipmentCalibrationExpiredError extends DomainError {
+  constructor(equipmentLabel: string, detail: string) {
+    super(
+      'EQUIPMENT_CALIBRATION_EXPIRED',
+      `Prüfmittel ${equipmentLabel} ist nicht einsatzbereit: ${detail}`,
+      422,
+    );
+  }
+}
+
+export class SamePersonReviewDeniedError extends DomainError {
+  constructor() {
+    super(
+      'SAME_PERSON_REVIEW_DENIED',
+      'Die unabhängige Prüfung darf nicht von der ausführenden Person bestätigt werden.',
+      403,
+    );
+  }
+}

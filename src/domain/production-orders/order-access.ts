@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { AuthzError } from '@/lib/authz/errors';
-import type { PermissionCode } from '@/domain/identity/permissions-catalog';
+import { hasPermissionWithin } from '@/lib/authz/permission-within';
 import type { Actor } from '@/domain/shared/actor';
 
 /**
@@ -16,24 +16,6 @@ import type { Actor } from '@/domain/shared/actor';
  * discriminator keeps a single source of truth (system-roles.ts) instead of
  * a second, silently divergent list of "broad" roles here.
  */
-
-async function hasPermission(
-  tx: Prisma.TransactionClient,
-  actor: Actor,
-  action: PermissionCode,
-): Promise<boolean> {
-  const now = new Date();
-  const grant = await tx.userRole.findFirst({
-    where: {
-      userId: actor.userId,
-      organizationId: actor.organizationId,
-      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      role: { rolePermissions: { some: { permission: { code: action } } } },
-    },
-    select: { id: true },
-  });
-  return grant !== null;
-}
 
 export async function isAssignedToOrder(
   tx: Prisma.TransactionClient,
@@ -57,7 +39,7 @@ export async function assertOrderVisible(
   actor: Actor,
   productionOrderId: string,
 ): Promise<void> {
-  if (await hasPermission(tx, actor, 'audit.view')) return;
+  if (await hasPermissionWithin(tx, actor, 'audit.view')) return;
   if (await isAssignedToOrder(tx, actor, productionOrderId)) return;
   throw new AuthzError('CROSS_TENANT_ACCESS_DENIED', 'Zugriff verweigert.');
 }

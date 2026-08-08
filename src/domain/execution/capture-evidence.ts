@@ -1,10 +1,10 @@
 import { Prisma } from '@prisma/client';
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
-import { assertPermission } from '@/lib/authz/assert-permission';
 import { NotFoundError, ValidationError } from '@/lib/domain-errors';
 import { parseDecimalInput } from '@/lib/decimal-input';
 import type { Actor } from '@/domain/shared/actor';
+import { assertEquipmentUsable } from '@/domain/quality/measuring-equipment';
 import { loadInstanceForEvidence } from './execution-guards';
 
 const ALLOWED_RESPONSES = ['OK', 'NOK', 'N/A'] as const;
@@ -27,7 +27,8 @@ export interface RecordChecklistResponseCommand {
  * reconstructible without a second history table.
  */
 export async function recordChecklistResponse(command: RecordChecklistResponseCommand) {
-  await assertPermission(command.actor, 'work_step.execute');
+  // The execute permission is asserted inside loadInstanceForEvidence,
+  // where the step's kind is known (production vs. rework vs. reinspection).
 
   if (!ALLOWED_RESPONSES.includes(command.response)) {
     throw new ValidationError(`Ungültige Checklisten-Antwort: "${command.response}".`);
@@ -101,6 +102,9 @@ export interface RecordMeasurementCommand {
   /** Accepted as a string to avoid binary floating point ever touching a
    *  measured value on its way from the tablet into a NUMERIC column. */
   measuredValue: string;
+  /** Preferred over the free-text ref: only a real equipment record can be
+   *  checked for a valid calibration (Negativtest #11). */
+  measuringEquipmentId?: string;
   measuringEquipmentRef?: string;
   deviceId?: string;
   clientTimestamp?: Date;
@@ -119,8 +123,6 @@ export interface RecordMeasurementCommand {
  *    as "in tolerance" by any code path (Negativtest #8).
  */
 export async function recordMeasurementResult(command: RecordMeasurementCommand) {
-  await assertPermission(command.actor, 'work_step.execute');
-
   const measuredValue = parseDecimalInput(command.measuredValue, 'Messwert');
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
@@ -133,10 +135,25 @@ export async function recordMeasurementResult(command: RecordMeasurementCommand)
     if (characteristic.planStepId !== instance.planStepId) {
       throw new ValidationError('Das Prüfmerkmal gehört nicht zu diesem Arbeitsschritt.');
     }
-    if (characteristic.requiresMeasuringEquipment && !command.measuringEquipmentRef) {
+    const measuredAt = command.clientTimestamp ?? new Date();
+
+    if (
+      characteristic.requiresMeasuringEquipment &&
+      !command.measuringEquipmentId &&
+      !command.measuringEquipmentRef
+    ) {
       throw new ValidationError(
         'Für dieses Prüfmerkmal muss das verwendete Prüfmittel angegeben werden.',
       );
+    }
+
+    // The calibration gate: checked against the moment of MEASUREMENT, not
+    // "now", and the calibration in force is pinned onto the result so a
+    // later certificate change cannot silently revalidate or invalidate it
+    // (MASTERPROMPT.md Kap. 8, Negativtest #11).
+    let calibrationId: string | undefined;
+    if (command.measuringEquipmentId) {
+      calibrationId = await assertEquipmentUsable(tx, command.measuringEquipmentId, measuredAt);
     }
 
     const isWithinTolerance = isWithinLimits(
@@ -158,9 +175,11 @@ export async function recordMeasurementResult(command: RecordMeasurementCommand)
       lowerLimit: characteristic.lowerLimit,
       upperLimit: characteristic.upperLimit,
       isWithinTolerance,
+      measuringEquipmentId: command.measuringEquipmentId,
       measuringEquipmentRef: command.measuringEquipmentRef,
+      calibrationId,
       measuredById: command.actor.userId,
-      measuredAt: command.clientTimestamp ?? new Date(),
+      measuredAt,
     };
 
     const saved = existing
@@ -196,7 +215,9 @@ export async function recordMeasurementResult(command: RecordMeasurementCommand)
         lowerLimit: saved.lowerLimit?.toString() ?? null,
         upperLimit: saved.upperLimit?.toString() ?? null,
         isWithinTolerance: saved.isWithinTolerance,
+        measuringEquipmentId: saved.measuringEquipmentId,
         measuringEquipmentRef: saved.measuringEquipmentRef,
+        calibrationId: saved.calibrationId,
       },
       deviceId: command.deviceId,
       clientTimestamp: command.clientTimestamp,

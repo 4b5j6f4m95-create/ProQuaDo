@@ -75,6 +75,12 @@ model Organization {
   photoEvidence         PhotoEvidence[]
   secondApprovals       SecondApproval[]
 
+  nonConformances        NonConformance[]
+  nonConformanceEvidence NonConformanceEvidence[]
+  productionHolds        ProductionHold[]
+  measuringEquipment     MeasuringEquipment[]
+  calibrations           Calibration[]
+
   @@map("organizations")
 }
 
@@ -474,6 +480,8 @@ model Project {
   documents        Document[]
   productionPlans  ProductionPlan[]
   productionOrders ProductionOrder[]
+  nonConformances  NonConformance[]
+  productionHolds  ProductionHold[]
 
   @@unique([organizationId, projectNumber])
   @@index([organizationId])
@@ -516,6 +524,7 @@ model Product {
   assemblies       Assembly[]
   productionPlans  ProductionPlan[]
   productionOrders ProductionOrder[]
+  nonConformances  NonConformance[]
 
   @@unique([organizationId, productNumber])
   @@index([organizationId])
@@ -851,9 +860,10 @@ model InspectionCharacteristic {
   updatedAt                  DateTime @updatedAt @map("updated_at")
   version                    Int      @default(1)
 
-  organization Organization        @relation(fields: [organizationId], references: [id])
-  planStep     PlanStep            @relation(fields: [planStepId], references: [id])
-  results      MeasurementResult[]
+  organization    Organization        @relation(fields: [organizationId], references: [id])
+  planStep        PlanStep            @relation(fields: [planStepId], references: [id])
+  results         MeasurementResult[]
+  nonConformances NonConformance[]
 
   @@unique([organizationId, planStepId, characteristicNumber])
   @@index([organizationId])
@@ -927,6 +937,8 @@ model ProductionOrder {
 
   assignments       OrderAssignment[]
   workStepInstances WorkStepInstance[]
+  nonConformances   NonConformance[]
+  productionHolds   ProductionHold[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId])
@@ -966,32 +978,50 @@ model OrderAssignment {
 // machine and src/domain/execution/complete-work-step.ts for the only code
 // path that may set COMPLETED.
 model WorkStepInstance {
-  id                String    @id @default(uuid())
-  organizationId    String    @map("organization_id")
-  productionOrderId String    @map("production_order_id")
-  planStepId        String    @map("plan_step_id")
-  stepNumber        Int       @map("step_number") // denormalized from PlanStep for stable ordering/display
-  status            String    @default("LOCKED")
-  startedById       String?   @map("started_by_id")
-  startedAt         DateTime? @map("started_at")
-  completedAt       DateTime? @map("completed_at")
-  createdAt         DateTime  @default(now()) @map("created_at")
-  updatedAt         DateTime  @updatedAt @map("updated_at")
-  version           Int       @default(1)
+  id                       String    @id @default(uuid())
+  organizationId           String    @map("organization_id")
+  productionOrderId        String    @map("production_order_id")
+  planStepId               String    @map("plan_step_id")
+  stepNumber               Int       @map("step_number") // denormalized from PlanStep for stable ordering/display
+  // PRODUCTION | REWORK | REINSPECTION. Rework is executed as its OWN step
+  // linked to origin and NCR ("Nacharbeit wird als eigener, mit Ursprung und
+  // NCR verknüpfter Schritt ausgeführt", MASTERPROMPT.md Kap. 9) — the
+  // failed original is never re-opened and rewritten as if it had been
+  // fine. attemptNumber orders the chain for one plan step.
+  stepKind                 String    @default("PRODUCTION") @map("step_kind")
+  attemptNumber            Int       @default(1) @map("attempt_number")
+  originWorkStepInstanceId String?   @map("origin_work_step_instance_id")
+  nonConformanceId         String?   @map("non_conformance_id")
+  status                   String    @default("LOCKED")
+  startedById              String?   @map("started_by_id")
+  startedAt                DateTime? @map("started_at")
+  completedAt              DateTime? @map("completed_at")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+  version                  Int       @default(1)
 
   organization    Organization    @relation(fields: [organizationId], references: [id])
   productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
   planStep        PlanStep        @relation(fields: [planStepId], references: [id])
 
-  release              WorkStepRelease?
-  completionSubmission CompletionSubmission?
-  secondApproval       SecondApproval?
-  confirmations        StepConfirmation[]
-  checklistResponses   ChecklistResponse[]
-  measurementResults   MeasurementResult[]
-  photoEvidence        PhotoEvidence[]
+  originWorkStepInstance   WorkStepInstance?  @relation("WorkStepRework", fields: [originWorkStepInstanceId], references: [id])
+  derivedWorkStepInstances WorkStepInstance[] @relation("WorkStepRework")
+  nonConformance           NonConformance?    @relation("NcrDerivedSteps", fields: [nonConformanceId], references: [id])
 
-  @@unique([organizationId, productionOrderId, planStepId])
+  release               WorkStepRelease?
+  secondApproval        SecondApproval?
+  // Plural since Phase 4: a rejected completion may be corrected and
+  // resubmitted, so one instance can carry several submissions. The
+  // authoritative one is the newest — see latestSubmission() helpers.
+  completionSubmissions CompletionSubmission[]
+  confirmations         StepConfirmation[]
+  checklistResponses    ChecklistResponse[]
+  measurementResults    MeasurementResult[]
+  photoEvidence         PhotoEvidence[]
+  raisedNonConformances NonConformance[]       @relation("NcrOriginStep")
+  productionHolds       ProductionHold[]
+
+  @@unique([organizationId, productionOrderId, planStepId, attemptNumber])
   @@index([organizationId])
   @@index([productionOrderId, status])
   @@map("work_step_instances")
@@ -1031,10 +1061,17 @@ model WorkStepRelease {
 // only ever moved to VALIDATED/REJECTED by the server. idempotencyKey makes
 // a repeated submission return the original outcome instead of completing
 // twice (docs/05 "Idempotency Key", Negativtest #3).
+//
+// docs/02_DOMAIN_MODEL.md specifies UNIQUE (organization_id,
+// work_step_instance_id) here. Phase 4 drops that: a rejected completion
+// can be corrected and resubmitted (COMPLETION_REJECTED → IN_PROGRESS),
+// which the one-row-per-step rule made impossible. Idempotency still holds
+// — it hangs off idempotency_key, which is where it belongs. Rejected
+// submissions stay as historical records; the newest one is authoritative.
 model CompletionSubmission {
   id                      String    @id @default(uuid())
   organizationId          String    @map("organization_id")
-  workStepInstanceId      String    @unique @map("work_step_instance_id")
+  workStepInstanceId      String    @map("work_step_instance_id")
   idempotencyKey          String    @map("idempotency_key")
   submittedById           String    @map("submitted_by_id")
   submittedAt             DateTime  @map("submitted_at")
@@ -1056,6 +1093,7 @@ model CompletionSubmission {
 
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId])
+  @@index([workStepInstanceId, createdAt])
   @@map("completion_submissions")
 }
 
@@ -1127,7 +1165,13 @@ model MeasurementResult {
   lowerLimit                 Decimal? @map("lower_limit") @db.Decimal(20, 6)
   upperLimit                 Decimal? @map("upper_limit") @db.Decimal(20, 6)
   isWithinTolerance          Boolean  @default(false) @map("is_within_tolerance")
+  measuringEquipmentId       String?  @map("measuring_equipment_id")
+  // Free-text fallback kept from Phase 3 for equipment that is not (yet) in
+  // the master data. When measuringEquipmentId is set, the calibration that
+  // was valid at measuring time is pinned below, so a later re-calibration
+  // or an invalidated certificate cannot silently rewrite history.
   measuringEquipmentRef      String?  @map("measuring_equipment_ref")
+  calibrationId              String?  @map("calibration_id")
   measuredById               String   @map("measured_by_id")
   measuredAt                 DateTime @map("measured_at")
   createdAt                  DateTime @default(now()) @map("created_at")
@@ -1137,6 +1181,8 @@ model MeasurementResult {
   organization             Organization             @relation(fields: [organizationId], references: [id])
   workStepInstance         WorkStepInstance         @relation(fields: [workStepInstanceId], references: [id])
   inspectionCharacteristic InspectionCharacteristic @relation(fields: [inspectionCharacteristicId], references: [id])
+  measuringEquipment       MeasuringEquipment?      @relation(fields: [measuringEquipmentId], references: [id])
+  calibration              Calibration?             @relation(fields: [calibrationId], references: [id])
 
   @@unique([organizationId, workStepInstanceId, inspectionCharacteristicId])
   @@index([organizationId])
@@ -1197,4 +1243,196 @@ model SecondApproval {
 
   @@index([organizationId])
   @@map("second_approvals")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Quality: Non-Conformances, Holds, Measuring Equipment (Phase 4)
+// ─────────────────────────────────────────────────────────────
+
+// Status machine: DRAFT → OPEN → ASSESSMENT_REQUIRED → CONTAINMENT →
+// REWORK → REINSPECTION → AWAITING_DISPOSITION → CLOSED, plus CANCELLED —
+// see docs/03_STATE_MACHINES.md §5 and src/domain/quality/ncr-status.ts.
+//
+// isBlocking is decided SERVER-side (MASTERPROMPT.md Kap. 9: "Der Server
+// klassifiziert anhand konfigurierter Regeln"), never by the reporting
+// client, and a blocking NCR keeps its step and every successor locked
+// until it is closed (Negativtest #10).
+model NonConformance {
+  id                         String  @id @default(uuid())
+  organizationId             String  @map("organization_id")
+  ncrNumber                  String  @map("ncr_number")
+  projectId                  String  @map("project_id")
+  productionOrderId          String  @map("production_order_id")
+  productId                  String  @map("product_id")
+  workStepInstanceId         String? @map("work_step_instance_id")
+  // Set when the NCR was raised automatically because a measurement was out
+  // of tolerance — makes the auto-raise idempotent per characteristic
+  // instead of creating a new NCR on every completion attempt.
+  inspectionCharacteristicId String? @map("inspection_characteristic_id")
+  batchNumber                String? @map("batch_number")
+  serialNumber               String? @map("serial_number")
+
+  description        String
+  errorCategory      String?   @map("error_category")
+  discoveredLocation String?   @map("discovered_location")
+  discoveredAt       DateTime  @map("discovered_at")
+  discoveredById     String    @map("discovered_by_id")
+  priority           String    @default("MEDIUM") // CRITICAL, HIGH, MEDIUM, LOW
+  status             String    @default("OPEN")
+  isBlocking         Boolean   @default(false) @map("is_blocking")
+  assignedToId       String?   @map("assigned_to_id")
+  dueDate            DateTime? @map("due_date") @db.Date
+
+  immediateAction String? @map("immediate_action")
+  assessmentNotes String? @map("assessment_notes")
+  rootCause       String? @map("root_cause")
+
+  // Disposition is kept as fields rather than a separate table: docs/02's
+  // concrete table list has no ncr_dispositions, and the audit trail
+  // already preserves the decision history. CAPA (Ursache, Maßnahme,
+  // Wirksamkeitsprüfung) is a later phase — MASTERPROMPT.md Kap. 9.
+  dispositionType   String?   @map("disposition_type") // REWORK, CONCESSION, SCRAP
+  dispositionReason String?   @map("disposition_reason")
+  dispositionById   String?   @map("disposition_by_id")
+  dispositionAt     DateTime? @map("disposition_at")
+  closedAt          DateTime? @map("closed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  version   Int      @default(1)
+
+  organization             Organization              @relation(fields: [organizationId], references: [id])
+  project                  Project                   @relation(fields: [projectId], references: [id])
+  productionOrder          ProductionOrder           @relation(fields: [productionOrderId], references: [id])
+  product                  Product                   @relation(fields: [productId], references: [id])
+  workStepInstance         WorkStepInstance?         @relation("NcrOriginStep", fields: [workStepInstanceId], references: [id])
+  inspectionCharacteristic InspectionCharacteristic? @relation(fields: [inspectionCharacteristicId], references: [id])
+
+  evidence     NonConformanceEvidence[]
+  holds        ProductionHold[]
+  /// Rework/reinspection steps created to resolve this NCR.
+  derivedSteps WorkStepInstance[]       @relation("NcrDerivedSteps")
+
+  @@unique([organizationId, ncrNumber])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@index([productionOrderId])
+  @@map("non_conformances")
+}
+
+model NonConformanceEvidence {
+  id                String    @id @default(uuid())
+  organizationId    String    @map("organization_id")
+  nonConformanceId  String    @map("non_conformance_id")
+  storageKey        String    @map("storage_key")
+  description       String?
+  mimeType          String?   @map("mime_type")
+  fileHashSha256    String?   @map("file_hash_sha256")
+  fileSizeBytes     BigInt?   @map("file_size_bytes")
+  malwareScanStatus String?   @map("malware_scan_status")
+  uploadStatus      String    @default("PENDING") @map("upload_status")
+  capturedById      String    @map("captured_by_id")
+  uploadedAt        DateTime? @map("uploaded_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  version           Int       @default(1)
+
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  nonConformance NonConformance @relation(fields: [nonConformanceId], references: [id])
+
+  @@index([organizationId])
+  @@index([nonConformanceId])
+  @@map("non_conformance_evidence")
+}
+
+// A hold freezes work within a scope (MASTERPROMPT.md Kap. 9: Projekt,
+// Auftrag, Los/Seriennummer, Schritt). Checked by every execution service
+// before anything may start, be captured or be completed — a hold is not a
+// UI state, it is a server-side gate.
+model ProductionHold {
+  id                 String  @id @default(uuid())
+  organizationId     String  @map("organization_id")
+  scopeType          String  @map("scope_type") // PROJECT, ORDER, SERIAL, WORK_STEP
+  projectId          String? @map("project_id")
+  productionOrderId  String? @map("production_order_id")
+  serialNumber       String? @map("serial_number")
+  workStepInstanceId String? @map("work_step_instance_id")
+  nonConformanceId   String? @map("non_conformance_id")
+
+  holdReason       String    @map("hold_reason")
+  releaseCondition String?   @map("release_condition")
+  isActive         Boolean   @default(true) @map("is_active")
+  issuedById       String    @map("issued_by_id")
+  issuedAt         DateTime  @default(now()) @map("issued_at")
+  releasedById     String?   @map("released_by_id")
+  releasedAt       DateTime? @map("released_at")
+  releaseReason    String?   @map("release_reason")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  version          Int       @default(1)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  project          Project?          @relation(fields: [projectId], references: [id])
+  productionOrder  ProductionOrder?  @relation(fields: [productionOrderId], references: [id])
+  workStepInstance WorkStepInstance? @relation(fields: [workStepInstanceId], references: [id])
+  nonConformance   NonConformance?   @relation(fields: [nonConformanceId], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@index([productionOrderId, isActive])
+  @@map("production_holds")
+}
+
+model MeasuringEquipment {
+  id                  String   @id @default(uuid())
+  organizationId      String   @map("organization_id")
+  equipmentNumber     String   @map("equipment_number")
+  name                String
+  manufacturer        String?
+  model               String?
+  serialNumber        String?  @map("serial_number")
+  measurementRangeMin Decimal? @map("measurement_range_min") @db.Decimal(20, 6)
+  measurementRangeMax Decimal? @map("measurement_range_max") @db.Decimal(20, 6)
+  measurementUnit     String?  @map("measurement_unit")
+  status              String   @default("ACTIVE") // ACTIVE, MAINTENANCE, OUT_OF_SERVICE, RETIRED
+  location            String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  version             Int      @default(1)
+
+  organization       Organization        @relation(fields: [organizationId], references: [id])
+  calibrations       Calibration[]
+  measurementResults MeasurementResult[]
+
+  @@unique([organizationId, equipmentNumber])
+  @@index([organizationId])
+  @@map("measuring_equipment")
+}
+
+// INVALIDATED exists because of MASTERPROMPT.md Kap. 8: "Eine spätere
+// Erkenntnis über fehlerhafte Kalibrierung muss eine Auswirkungsanalyse auf
+// betroffene Messungen ermöglichen" — the certificate is marked bad, and
+// every measurement pinned to it becomes findable.
+model Calibration {
+  id                        String    @id @default(uuid())
+  organizationId            String    @map("organization_id")
+  measuringEquipmentId      String    @map("measuring_equipment_id")
+  calibratedAt              DateTime  @map("calibrated_at")
+  nextCalibrationDueAt      DateTime  @map("next_calibration_due_at")
+  calibratedBy              String?   @map("calibrated_by")
+  calibrationCertificateKey String?   @map("calibration_certificate_key")
+  status                    String    @default("VALID") // VALID, FAILED, INVALIDATED
+  invalidatedAt             DateTime? @map("invalidated_at")
+  invalidatedReason         String?   @map("invalidated_reason")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
+  version                   Int       @default(1)
+
+  organization       Organization        @relation(fields: [organizationId], references: [id])
+  measuringEquipment MeasuringEquipment  @relation(fields: [measuringEquipmentId], references: [id])
+  measurementResults MeasurementResult[]
+
+  @@index([organizationId])
+  @@index([measuringEquipmentId, nextCalibrationDueAt])
+  @@map("calibrations")
 }

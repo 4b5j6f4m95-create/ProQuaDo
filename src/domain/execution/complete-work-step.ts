@@ -19,6 +19,9 @@ import {
   isValidProductionOrderTransition,
   type ProductionOrderStatus,
 } from '@/domain/production-orders/production-order-status';
+import { raiseNonConformanceWithin } from '@/domain/quality/raise-non-conformance';
+import { advanceNonConformanceAfterDerivedStep } from '@/domain/quality/ncr-workflow';
+import { assertCompletionPermission, assertNotBlockedForStep } from './execution-guards';
 import { releaseEligibleSuccessors } from './release-work-step';
 import { evaluateStepRequirements } from './step-requirements';
 import { countsAsPredecessorSatisfied, type WorkStepStatus } from './work-step-status';
@@ -74,7 +77,9 @@ export interface SubmitCompletionCommand {
 export async function submitWorkStepCompletion(
   command: SubmitCompletionCommand,
 ): Promise<CompletionResult> {
-  await assertPermission(command.actor, 'work_step.complete_locally');
+  // The permission depends on the step's kind (production, rework,
+  // reinspection) and is therefore asserted inside the transaction, once
+  // the instance has been read — see assertCompletionPermission.
 
   // The PIN is checked before the mutating transaction and its plaintext
   // never enters it — scrypt verification is also slow enough that holding
@@ -110,8 +115,13 @@ export async function submitWorkStepCompletion(
     });
     if (!instance) throw new NotFoundError('Arbeitsschritt');
 
+    await assertCompletionPermission(tx, command.actor, instance.stepKind);
     await assertAssignedToOrder(tx, command.actor, instance.productionOrderId);
-    if (!isOrderExecutable(instance.productionOrder.status as ProductionOrderStatus)) {
+    await assertNotBlockedForStep(tx, instance);
+    if (
+      !isOrderExecutable(instance.productionOrder.status as ProductionOrderStatus) &&
+      !(instance.stepKind !== 'PRODUCTION' && instance.productionOrder.status === 'QUALITY_BLOCKED')
+    ) {
       throw new OrderOnHoldError(instance.productionOrder.status);
     }
     if (instance.status !== 'IN_PROGRESS') {
@@ -296,6 +306,30 @@ async function validateSubmissionWithin(
 
   if (!evaluation.satisfied) {
     const reasons = [...evaluation.gaps, ...evaluation.toleranceViolations];
+
+    // Abnahmeszenario D: an out-of-tolerance value is not just a rejected
+    // completion, it is a finding. The server raises the NCR itself
+    // ("System erzeugt oder verlangt NCR, serverseitig blockierend",
+    // MASTERPROMPT.md Kap. 22 D) — blocking, which holds the order and
+    // keeps every successor locked. Raising happens here, at the moment the
+    // worker asserts they are finished, not at capture time: a mistyped
+    // value that is corrected before completion must not block a line.
+    // raiseNonConformanceWithin is idempotent per (step, characteristic),
+    // so repeated attempts reuse the open NCR instead of piling up.
+    for (const violation of evaluation.toleranceViolations) {
+      const characteristicId = violation.affectedField?.split(':')[1];
+      if (!characteristicId) continue;
+      await raiseNonConformanceWithin(tx, {
+        actor: { userId: params.validatedById, organizationId: params.organizationId },
+        productionOrderId: instance.productionOrderId,
+        workStepInstanceId: instance.id,
+        inspectionCharacteristicId: characteristicId,
+        description: violation.detail,
+        errorCategory: 'MEASUREMENT_OUT_OF_TOLERANCE',
+        priority: 'HIGH',
+        reporterSuggestsBlocking: true,
+      });
+    }
     // Deliberately NOT thrown: a rejection is a persisted business outcome,
     // and throwing would roll back the very record that documents it.
     await tx.completionSubmission.update({
@@ -312,10 +346,18 @@ async function validateSubmissionWithin(
         version: { increment: 1 },
       },
     });
-    await tx.workStepInstance.update({
-      where: { id: instance.id },
-      data: { status: 'COMPLETION_REJECTED', version: { increment: 1 } },
-    });
+    // A tolerance violation already moved the step to BLOCKED via the NCR
+    // above — leaving it there rather than overwriting with
+    // COMPLETION_REJECTED, because the step is not merely "incomplete", it
+    // is held by quality until the NCR is disposed.
+    const rejectedStatus: WorkStepStatus =
+      evaluation.toleranceViolations.length > 0 ? 'BLOCKED' : 'COMPLETION_REJECTED';
+    if (rejectedStatus === 'COMPLETION_REJECTED') {
+      await tx.workStepInstance.update({
+        where: { id: instance.id },
+        data: { status: 'COMPLETION_REJECTED', version: { increment: 1 } },
+      });
+    }
 
     const audit = await writeAuditEvent(tx, {
       organizationId: params.organizationId,
@@ -324,7 +366,7 @@ async function validateSubmissionWithin(
       resourceId: instance.id,
       actorId: params.validatedById,
       previousValues: { status: instance.status },
-      newValues: { status: 'COMPLETION_REJECTED', reasons },
+      newValues: { status: rejectedStatus, reasons },
       result: 'FAILURE',
       failureReason: reasons.map((r) => r.code).join(','),
       idempotencyKey: submission.idempotencyKey,
@@ -342,7 +384,7 @@ async function validateSubmissionWithin(
     return {
       submissionId: submission.id,
       result: 'REJECTED',
-      workStepStatus: 'COMPLETION_REJECTED',
+      workStepStatus: rejectedStatus,
       rejectionReasons: reasons,
       nextStepInstanceIds: [],
       auditEventId: audit.id,
@@ -402,6 +444,54 @@ async function validateSubmissionWithin(
     };
   }
 
+  const finalized = await finalizeStepCompletion(tx, {
+    organizationId: params.organizationId,
+    workStepInstanceId: instance.id,
+    actorId: params.validatedById,
+    idempotencyKey: submission.idempotencyKey,
+    usedPlanRevisionId: submission.usedPlanRevisionId,
+    usedDocumentRevisionIds: submission.usedDocumentRevisionIds,
+  });
+
+  return {
+    submissionId: submission.id,
+    result: 'COMPLETED',
+    workStepStatus: 'COMPLETED',
+    rejectionReasons: [],
+    nextStepInstanceIds: finalized.nextStepInstanceIds,
+    auditEventId: finalized.auditEventId,
+  };
+}
+
+/**
+ * The final act: mark COMPLETED, advance the NCR if this was a rework or
+ * reinspection, release the successors the plan allows, and close the order
+ * if nothing is left. Shared by the direct completion path and by the
+ * four-eyes approval path (src/domain/quality/second-approval.ts) so that
+ * both produce the same events and the same downstream releases.
+ */
+export async function finalizeStepCompletion(
+  tx: Prisma.TransactionClient,
+  params: {
+    organizationId: string;
+    workStepInstanceId: string;
+    actorId: string;
+    idempotencyKey?: string;
+    usedPlanRevisionId?: string;
+    usedDocumentRevisionIds?: Prisma.JsonValue;
+  },
+): Promise<{ nextStepInstanceIds: string[]; auditEventId: string }> {
+  const instance = await tx.workStepInstance.findFirstOrThrow({
+    where: { id: params.workStepInstanceId },
+    select: {
+      id: true,
+      status: true,
+      stepKind: true,
+      nonConformanceId: true,
+      productionOrderId: true,
+    },
+  });
+
   const completedAt = new Date();
   await tx.workStepInstance.update({
     where: { id: instance.id },
@@ -413,15 +503,15 @@ async function validateSubmissionWithin(
     eventType: 'work_step.completed',
     resourceType: 'work_step_instance',
     resourceId: instance.id,
-    actorId: params.validatedById,
+    actorId: params.actorId,
     previousValues: { status: instance.status },
     newValues: {
       status: 'COMPLETED',
       completedAt: completedAt.toISOString(),
-      usedPlanRevisionId: submission.usedPlanRevisionId,
-      usedDocumentRevisionIds: submission.usedDocumentRevisionIds,
+      usedPlanRevisionId: params.usedPlanRevisionId,
+      usedDocumentRevisionIds: params.usedDocumentRevisionIds,
     },
-    idempotencyKey: submission.idempotencyKey,
+    idempotencyKey: params.idempotencyKey,
     source: 'system',
   });
 
@@ -433,27 +523,35 @@ async function validateSubmissionWithin(
     payload: {
       productionOrderId: instance.productionOrderId,
       completedAt: completedAt.toISOString(),
-      usedPlanRevisionId: submission.usedPlanRevisionId,
+      usedPlanRevisionId: params.usedPlanRevisionId ?? null,
     },
   });
+
+  // A rework or reinspection step that completes advances the NCR instead
+  // of the plan: the successors wait for the disposition, not for this step
+  // (MASTERPROMPT.md Kap. 9 "Fehlerhafter Schritt → NCR → Nacharbeit →
+  // Nachprüfung → Freigabe → regulärer Nachfolger").
+  if (instance.stepKind !== 'PRODUCTION' && instance.nonConformanceId) {
+    await advanceNonConformanceAfterDerivedStep(tx, {
+      actor: { userId: params.actorId, organizationId: params.organizationId },
+      nonConformanceId: instance.nonConformanceId,
+      stepKind: instance.stepKind,
+    });
+  }
 
   const released = await releaseEligibleSuccessors(tx, {
     organizationId: params.organizationId,
     completedWorkStepInstanceId: instance.id,
-    releasedById: params.validatedById,
+    releasedById: params.actorId,
   });
 
   await completeOrderIfFinished(tx, {
     organizationId: params.organizationId,
     productionOrderId: instance.productionOrderId,
-    actorId: params.validatedById,
+    actorId: params.actorId,
   });
 
   return {
-    submissionId: submission.id,
-    result: 'COMPLETED',
-    workStepStatus: 'COMPLETED',
-    rejectionReasons: [],
     nextStepInstanceIds: released.map((r) => r.workStepInstanceId),
     auditEventId: audit.id,
   };
@@ -465,9 +563,22 @@ async function completeOrderIfFinished(
 ): Promise<void> {
   const instances = await tx.workStepInstance.findMany({
     where: { productionOrderId: params.productionOrderId },
-    select: { status: true },
+    select: { planStepId: true, status: true, attemptNumber: true },
   });
-  const allDone = instances.every((i) => countsAsPredecessorSatisfied(i.status as WorkStepStatus));
+
+  // Only the latest attempt per plan step counts — a failed original that
+  // was reworked must not keep the order open forever (see the same rule in
+  // releaseEligibleSuccessors).
+  const latestByPlanStep = new Map<string, { status: string; attemptNumber: number }>();
+  for (const instance of instances) {
+    const current = latestByPlanStep.get(instance.planStepId);
+    if (!current || instance.attemptNumber > current.attemptNumber) {
+      latestByPlanStep.set(instance.planStepId, instance);
+    }
+  }
+  const allDone = [...latestByPlanStep.values()].every((i) =>
+    countsAsPredecessorSatisfied(i.status as WorkStepStatus),
+  );
   if (!allDone) return;
 
   const order = await tx.productionOrder.findFirstOrThrow({

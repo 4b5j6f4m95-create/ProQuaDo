@@ -123,6 +123,11 @@ export const SYSTEM_ROLES = {
       'skip_request.create',
       'ncr.create',
       'ncr.view',
+      // The matrix grants WORKER `rework.execute`; it was missing from this
+      // transcription until Phase 4 needed it, which meant nobody could
+      // execute a rework step (INSPECTOR holds `reinspection.execute` for
+      // the verification that follows).
+      'rework.execute',
     ],
   },
   INSPECTOR: {

@@ -41,7 +41,11 @@ const VALID_TRANSITIONS: Record<WorkStepStatus, readonly WorkStepStatus[]> = {
   PAUSED: ['IN_PROGRESS', 'BLOCKED', 'SUPERSEDED'],
   COMPLETED_PENDING_SYNC: ['WAITING_FOR_SERVER'],
   WAITING_FOR_SERVER: ['VALIDATING'],
-  VALIDATING: ['COMPLETED', 'COMPLETION_REJECTED', 'AWAITING_SECOND_APPROVAL'],
+  // BLOCKED is reachable from VALIDATING since Phase 4: validation is
+  // exactly where an out-of-tolerance measurement is turned into a blocking
+  // NCR (Abnahmeszenario D). The step is then not merely "rejected", it is
+  // held by quality — same event as IN_PROGRESS → BLOCKED, one moment later.
+  VALIDATING: ['COMPLETED', 'COMPLETION_REJECTED', 'AWAITING_SECOND_APPROVAL', 'BLOCKED'],
   AWAITING_SECOND_APPROVAL: ['COMPLETED', 'COMPLETION_REJECTED'],
   // Deliberate addition beyond docs/03: the documented machine has no exit
   // from COMPLETION_REJECTED, which would leave a step (and therefore the

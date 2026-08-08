@@ -15,6 +15,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/">ProQuaDo</Link>
           <Link href="/projects">Projekte</Link>
           <Link href="/my-orders">Meine Aufträge</Link>
+          <Link href="/quality/ncrs">Abweichungen</Link>
+          <Link href="/quality/equipment">Prüfmittel</Link>
         </nav>
         {children}
       </body>

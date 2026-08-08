@@ -8,6 +8,7 @@ import {
   newTokenNonce,
   type ReleaseTokenPayload,
 } from '@/lib/security/release-token';
+import { hasOpenBlockingNonConformance } from '@/domain/quality/production-holds';
 import { countsAsPredecessorSatisfied, type WorkStepStatus } from './work-step-status';
 
 /**
@@ -178,6 +179,11 @@ export async function releaseEligibleSuccessors(
     include: { planStep: { select: { successorLinks: { select: { dependentStepId: true } } } } },
   });
 
+  // Nothing downstream opens while quality still has the order (Negativtest
+  // #10). The check is here rather than only in startWorkStep so that a
+  // successor is not even shown as READY while a blocking NCR is open.
+  if (await hasOpenBlockingNonConformance(tx, completed.productionOrderId)) return [];
+
   const successorPlanStepIds = completed.planStep.successorLinks.map((l) => l.dependentStepId);
   if (successorPlanStepIds.length === 0) return [];
 
@@ -186,6 +192,9 @@ export async function releaseEligibleSuccessors(
       productionOrderId: completed.productionOrderId,
       planStepId: { in: successorPlanStepIds },
       status: 'LOCKED',
+      // Rework and reinspection steps are released by the NCR workflow, not
+      // by the plan graph — they are not "the next step of the plan".
+      stepKind: 'PRODUCTION',
     },
     include: {
       planStep: { select: { predecessorLinks: { select: { predecessorStepId: true } } } },
@@ -202,15 +211,30 @@ export async function releaseEligibleSuccessors(
         productionOrderId: completed.productionOrderId,
         planStepId: { in: predecessorPlanStepIds },
       },
-      select: { status: true },
+      select: { planStepId: true, status: true, attemptNumber: true },
     });
 
-    // Guard against a partially materialized order: fewer instances than
-    // edges means we cannot prove all predecessors are done, so we don't
-    // release. Failing closed is the only safe direction here.
+    // A plan step can have several instances since Phase 4: the failed
+    // original plus its rework/reinspection attempts. Only the LATEST
+    // attempt decides whether the predecessor is done — the failed original
+    // stays in the history as BLOCKED and must not veto forever, and an old
+    // COMPLETED attempt must not outvote a newer failed one.
+    const latestByPlanStep = new Map<string, { status: string; attemptNumber: number }>();
+    for (const instance of predecessorInstances) {
+      const current = latestByPlanStep.get(instance.planStepId);
+      if (!current || instance.attemptNumber > current.attemptNumber) {
+        latestByPlanStep.set(instance.planStepId, instance);
+      }
+    }
+
+    // Guard against a partially materialized order: fewer plan steps
+    // represented than edges means we cannot prove all predecessors are
+    // done, so we don't release. Failing closed is the only safe direction.
     const allSatisfied =
-      predecessorInstances.length === predecessorPlanStepIds.length &&
-      predecessorInstances.every((p) => countsAsPredecessorSatisfied(p.status as WorkStepStatus));
+      latestByPlanStep.size === new Set(predecessorPlanStepIds).size &&
+      [...latestByPlanStep.values()].every((p) =>
+        countsAsPredecessorSatisfied(p.status as WorkStepStatus),
+      );
     if (!allSatisfied) continue;
 
     released.push(

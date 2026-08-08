@@ -3,6 +3,7 @@ import { assertPermission } from '@/lib/authz/assert-permission';
 import { NotFoundError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 import { assertOrderVisible, isAssignedToOrder } from '@/domain/production-orders/order-access';
+import { findActiveHolds } from '@/domain/quality/production-holds';
 import { evaluateStepRequirements, type RequirementEvaluation } from './step-requirements';
 
 /**
@@ -21,10 +22,40 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
       where: { id: workStepInstanceId },
       include: {
         release: { select: { isValid: true, validUntil: true, releasedAt: true } },
-        completionSubmission: {
-          select: { id: true, status: true, validationStatus: true, validationReason: true },
+        // Newest submission only: a step may have several once a rejected
+        // completion has been corrected and resubmitted.
+        completionSubmissions: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            validationStatus: true,
+            validationReason: true,
+            submittedById: true,
+          },
         },
-        secondApproval: { select: { id: true, reviewerStatus: true } },
+        secondApproval: {
+          select: { id: true, reviewerStatus: true, executorId: true, reviewerId: true },
+        },
+        originWorkStepInstance: {
+          select: { id: true, stepNumber: true, stepKind: true, status: true },
+        },
+        derivedWorkStepInstances: {
+          orderBy: { attemptNumber: 'asc' },
+          select: { id: true, stepKind: true, status: true, attemptNumber: true },
+        },
+        nonConformance: { select: { id: true, ncrNumber: true, status: true } },
+        raisedNonConformances: {
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            ncrNumber: true,
+            status: true,
+            isBlocking: true,
+            description: true,
+          },
+        },
         productionOrder: {
           select: {
             id: true,
@@ -109,6 +140,7 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
             measuredUnit: true,
             isWithinTolerance: true,
             measuringEquipmentRef: true,
+            measuringEquipment: { select: { id: true, equipmentNumber: true, name: true } },
           },
         },
         confirmations: { select: { id: true, confirmedAt: true, signatureMethod: true } },
@@ -118,6 +150,12 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
 
     await assertOrderVisible(tx, actor, instance.productionOrderId);
     const assigned = await isAssignedToOrder(tx, actor, instance.productionOrderId);
+    // Holds are surfaced with the step so the UI can always name the cause
+    // and the next action, never just a disabled button (docs/07 F).
+    const activeHolds = await findActiveHolds(tx, {
+      productionOrderId: instance.productionOrderId,
+      workStepInstanceId: instance.id,
+    });
 
     const evaluation: RequirementEvaluation = evaluateStepRequirements(
       {
@@ -140,7 +178,13 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
       },
     );
 
-    return { ...instance, evaluation, isAssignedToOrder: assigned };
+    return {
+      ...instance,
+      evaluation,
+      isAssignedToOrder: assigned,
+      activeHolds,
+      latestSubmission: instance.completionSubmissions[0] ?? null,
+    };
   });
 }
 

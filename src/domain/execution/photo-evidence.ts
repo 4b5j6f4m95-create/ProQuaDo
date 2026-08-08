@@ -1,6 +1,5 @@
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
-import { assertPermission } from '@/lib/authz/assert-permission';
 import { NotFoundError, ValidationError } from '@/lib/domain-errors';
 import {
   computeObjectSha256,
@@ -30,8 +29,6 @@ export interface RequestPhotoUploadCommand {
  * evidence (see step-requirements.ts).
  */
 export async function requestPhotoUploadUrl(command: RequestPhotoUploadCommand) {
-  await assertPermission(command.actor, 'work_step.execute');
-
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const instance = await loadInstanceForEvidence(tx, command.actor, command.workStepInstanceId);
 
@@ -97,8 +94,6 @@ export interface CompletePhotoUploadCommand {
  * does not fail and does not duplicate evidence.
  */
 export async function completePhotoUpload(command: CompletePhotoUploadCommand) {
-  await assertPermission(command.actor, 'work_step.execute');
-
   const existing = await withOrgContext(command.actor.organizationId, async (tx) => {
     const evidence = await tx.photoEvidence.findFirst({ where: { id: command.photoEvidenceId } });
     if (!evidence) throw new NotFoundError('Fotonachweis');

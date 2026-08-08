@@ -3,12 +3,16 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { writeOutboxEvent } from '@/lib/audit/write-outbox-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
+import { assertPermissionWithin } from '@/lib/authz/permission-within';
 import { AuthzError } from '@/lib/authz/errors';
+import type { PermissionCode } from '@/domain/identity/permissions-catalog';
 import {
+  BlockingNonConformanceError,
   InvalidReleaseTokenError,
   InvalidStateTransitionError,
   NotFoundError,
   OrderOnHoldError,
+  ProductionHoldActiveError,
   WorkStepNotReadyError,
 } from '@/lib/domain-errors';
 import { hashTokenSignature, verifyReleaseToken } from '@/lib/security/release-token';
@@ -19,6 +23,7 @@ import {
   isValidProductionOrderTransition,
   type ProductionOrderStatus,
 } from '@/domain/production-orders/production-order-status';
+import { assertNotBlockedForStep } from './execution-guards';
 import { isValidWorkStepTransition, type WorkStepStatus } from './work-step-status';
 
 export interface StartWorkStepCommand {
@@ -64,8 +69,9 @@ export async function canStartWorkStep(
   workStepInstanceId: string,
   releaseToken?: string,
 ): Promise<StartDecision> {
-  await assertPermission(actor, 'work_step.execute');
-
+  // No permission assert up front: which permission applies depends on the
+  // step's kind, which is only known after loading it. The check happens
+  // inside assertStartPreconditions, in the same transaction.
   return withOrgContext(actor.organizationId, async (tx) => {
     const instance = await loadInstance(tx, workStepInstanceId);
     if (!instance)
@@ -87,8 +93,8 @@ export async function canStartWorkStep(
  * and the role the plan step demands.
  */
 export async function startWorkStep(command: StartWorkStepCommand) {
-  await assertPermission(command.actor, 'work_step.execute');
-
+  // See canStartWorkStep: the required permission depends on the step kind,
+  // so it is asserted inside the transaction rather than here.
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const instance = await loadInstance(tx, command.workStepInstanceId);
     if (!instance) throw new NotFoundError('Arbeitsschritt');
@@ -236,6 +242,18 @@ async function loadInstance(tx: Prisma.TransactionClient, workStepInstanceId: st
   });
 }
 
+const PERMISSION_BY_STEP_KIND: Record<string, PermissionCode> = {
+  PRODUCTION: 'work_step.execute',
+  REWORK: 'rework.execute',
+  REINSPECTION: 'reinspection.execute',
+};
+
+const STEP_KIND_DENIED_MESSAGE: Record<string, string> = {
+  PRODUCTION: 'Sie besitzen nicht die Berechtigung, Arbeitsschritte auszuführen.',
+  REWORK: 'Sie besitzen nicht die Berechtigung, Nacharbeit auszuführen.',
+  REINSPECTION: 'Nachprüfungen dürfen nur von einer prüfberechtigten Person ausgeführt werden.',
+};
+
 /**
  * The guard chain, in the order the failures should be reported: what you
  * are allowed to touch, whether the order allows work at all, whether this
@@ -250,8 +268,30 @@ async function assertStartPreconditions(
 ): Promise<void> {
   await assertAssignedToOrder(tx, actor, instance.productionOrderId);
 
+  // Which permission a step demands depends on what kind of step it is
+  // (docs/04): a WORKER executes production and rework, an INSPECTOR the
+  // reinspection. Checked here rather than up front because the answer is
+  // only known once the instance has been read.
+  await assertPermissionWithin(
+    tx,
+    actor,
+    PERMISSION_BY_STEP_KIND[instance.stepKind] ?? 'work_step.execute',
+    STEP_KIND_DENIED_MESSAGE[instance.stepKind],
+  );
+
+  // Holds freeze regular production but not the rework/reinspection that
+  // resolves the very NCR behind the hold — see assertNotBlockedForStep.
+  await assertNotBlockedForStep(tx, instance);
+
   if (!isOrderExecutable(instance.productionOrder.status as ProductionOrderStatus)) {
-    throw new OrderOnHoldError(instance.productionOrder.status);
+    // A quality-blocked order still permits its rework and reinspection
+    // steps; everything else stops here (Negativtest #10).
+    if (
+      instance.stepKind === 'PRODUCTION' ||
+      instance.productionOrder.status !== 'QUALITY_BLOCKED'
+    ) {
+      throw new OrderOnHoldError(instance.productionOrder.status);
+    }
   }
 
   if (instance.status !== 'READY') {
@@ -319,9 +359,12 @@ function toDecision(error: unknown): StartDecision {
   if (error instanceof AuthzError) {
     return {
       allowed: false,
-      reason: error.message.includes('Rolle') ? 'ROLE_NOT_HELD' : 'NOT_ASSIGNED',
+      reason: error.message.includes('zugewiesen') ? 'NOT_ASSIGNED' : 'ROLE_NOT_HELD',
       message: error.message,
     };
+  }
+  if (error instanceof BlockingNonConformanceError || error instanceof ProductionHoldActiveError) {
+    return { allowed: false, reason: 'ORDER_ON_HOLD', message: error.message };
   }
   throw error;
 }

@@ -3,9 +3,11 @@ import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import { getWorkStepInstance, listWorkStepsOfOrder } from '@/domain/execution/execution-queries';
 import { STEP_CONFIRMATION_TEXT } from '@/domain/execution/complete-work-step';
 import { openRequirementCount } from '@/domain/execution/step-requirements';
+import { listMeasuringEquipment } from '@/domain/quality/measuring-equipment';
 import { StatusChip } from '@/components/StatusChip';
 import { CompleteStepForm } from '@/components/CompleteStepForm';
 import { PhotoCaptureWidget } from '@/components/PhotoCaptureWidget';
+import { SecondApprovalForm } from '@/components/SecondApprovalForm';
 import {
   pauseWorkStepAction,
   recordChecklistResponseAction,
@@ -14,14 +16,27 @@ import {
   resumeWorkStepAction,
   startWorkStepAction,
 } from '../actions';
+import { raiseNonConformanceAction } from '@/app/quality/actions';
 
 const RESPONSE_OPTIONS = ['OK', 'NOK', 'N/A'] as const;
 
-/** Arbeitsschritt-Ansicht — docs/07_WIREFLOWS_UX.md A2–A6. */
+const STEP_KIND_LABEL: Record<string, string> = {
+  PRODUCTION: '',
+  REWORK: '🔁 Nacharbeit',
+  REINSPECTION: '🔍 Nachprüfung',
+};
+
+/** Arbeitsschritt-Ansicht — docs/07_WIREFLOWS_UX.md A2–A6 und A9. */
 export default async function WorkStepPage({ params }: { params: { id: string } }) {
   const actor = await requirePageAuth();
   const step = await getWorkStepInstance(actor, params.id);
   const siblings = await listWorkStepsOfOrder(actor, step.productionOrderId);
+  // Only equipment that is usable right now is offered — the same verdict
+  // the capture gate applies (Negativtest #11).
+  const equipment = step.planStep.inspectionCharacteristics.length
+    ? await listMeasuringEquipment(actor)
+    : [];
+  const usableEquipment = equipment.filter((item) => item.isUsable);
 
   const openCount = openRequirementCount(step.evaluation);
   const canWork = step.isAssignedToOrder;
@@ -30,8 +45,15 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
     step.measurementResults.map((m) => [m.inspectionCharacteristicId, m]),
   );
   const completedPhotos = step.photoEvidence.filter((p) => p.uploadStatus === 'COMPLETED');
-  const rejectionReasons = parseReasons(step.completionSubmission?.validationReason ?? null);
+  const rejectionReasons = parseReasons(step.latestSubmission?.validationReason ?? null);
   const nextStep = siblings.find((s) => s.stepNumber > step.stepNumber);
+  const openNcrs = step.raisedNonConformances.filter(
+    (ncr) => ncr.status !== 'CLOSED' && ncr.status !== 'CANCELLED',
+  );
+  const awaitsMyReview =
+    step.status === 'AWAITING_SECOND_APPROVAL' &&
+    step.secondApproval !== null &&
+    step.secondApproval.executorId !== actor.userId;
 
   return (
     <main className="tablet">
@@ -46,10 +68,57 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
       </h1>
       <p aria-live="polite">
         <StatusChip status={step.status} />
+        {step.stepKind !== 'PRODUCTION' && (
+          <span className="status-chip">{STEP_KIND_LABEL[step.stepKind]}</span>
+        )}
         {step.planStep.fourEyesRequired && (
           <span className="status-chip">👥 Vier-Augen-Pflicht</span>
         )}
       </p>
+
+      {step.originWorkStepInstance && (
+        <p className="muted">
+          {step.stepKind === 'REWORK' ? 'Nacharbeit' : 'Nachprüfung'} zu{' '}
+          <Link href={`/work-steps/${step.originWorkStepInstance.id}`}>
+            Schritt {step.originWorkStepInstance.stepNumber} (Erstausführung)
+          </Link>
+          {step.nonConformance && (
+            <>
+              {' · '}
+              <Link href={`/quality/ncrs/${step.nonConformance.id}`}>
+                {step.nonConformance.ncrNumber}
+              </Link>
+            </>
+          )}
+        </p>
+      )}
+
+      {(step.activeHolds.length > 0 || openNcrs.length > 0) && (
+        <section className="card blocked-card">
+          <h2>⛔ Qualitätssperre</h2>
+          {step.activeHolds.map((hold) => (
+            <p key={hold.id}>
+              {hold.holdReason}
+              {hold.releaseCondition && (
+                <>
+                  <br />
+                  <strong>Nächste Handlung:</strong> {hold.releaseCondition}
+                </>
+              )}
+            </p>
+          ))}
+          {openNcrs.length > 0 && (
+            <ul>
+              {openNcrs.map((ncr) => (
+                <li key={ncr.id}>
+                  <Link href={`/quality/ncrs/${ncr.id}`}>{ncr.ncrNumber}</Link> —{' '}
+                  {ncr.isBlocking ? 'blockierend' : 'nicht blockierend'} · {ncr.status}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       {step.planStep.description && <p>{step.planStep.description}</p>}
       {step.planStep.instruction && (
@@ -118,10 +187,27 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
       )}
 
       {step.status === 'AWAITING_SECOND_APPROVAL' && (
-        <p className="notice">
-          👥 Ausführung bestätigt. Der Schritt gilt erst als abgeschlossen, wenn eine zweite,
-          unabhängige Person die Prüfung bestätigt hat.
-        </p>
+        <>
+          <p className="notice">
+            👥 Ausführung bestätigt. Der Schritt gilt erst als abgeschlossen, wenn eine zweite,
+            unabhängige Person die Prüfung bestätigt hat.
+          </p>
+          {awaitsMyReview ? (
+            <SecondApprovalForm
+              workStepInstanceId={step.id}
+              executorLabel={
+                step.latestSubmission?.submittedById === step.secondApproval?.executorId
+                  ? 'ausführende Person dieses Schritts'
+                  : 'ausführende Person'
+              }
+            />
+          ) : (
+            <p className="muted">
+              Sie haben diesen Schritt ausgeführt und können die unabhängige Prüfung deshalb nicht
+              selbst bestätigen.
+            </p>
+          )}
+        </>
       )}
 
       {step.status === 'COMPLETION_REJECTED' && (
@@ -290,7 +376,11 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
                 {measurement && (
                   <p>
                     Istwert: {measurement.measuredValue.toString()}
-                    {measurement.measuredUnit ? ` ${measurement.measuredUnit}` : ''} —{' '}
+                    {measurement.measuredUnit ? ` ${measurement.measuredUnit}` : ''}
+                    {measurement.measuringEquipment
+                      ? ` · Prüfmittel ${measurement.measuringEquipment.equipmentNumber}`
+                      : ''}{' '}
+                    —{' '}
                     {measurement.isWithinTolerance ? (
                       <span className="status-chip status-done">✓ in Toleranz</span>
                     ) : (
@@ -317,12 +407,27 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
                     </label>
                     <label>
                       Prüfmittel
-                      <input
-                        name="measuringEquipmentRef"
-                        defaultValue={measurement?.measuringEquipmentRef ?? ''}
+                      <select
+                        name="measuringEquipmentId"
+                        defaultValue={measurement?.measuringEquipment?.id ?? ''}
                         required={characteristic.requiresMeasuringEquipment}
-                      />
+                      >
+                        <option value="">— kein Prüfmittel —</option>
+                        {usableEquipment.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.equipmentNumber} · {item.name}
+                            {item.nextCalibrationDueAt
+                              ? ` (kalibriert bis ${item.nextCalibrationDueAt.toLocaleDateString('de-DE')})`
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
                     </label>
+                    {equipment.length > usableEquipment.length && (
+                      <p className="muted">
+                        Gesperrte oder überfällige Prüfmittel werden nicht angeboten.
+                      </p>
+                    )}
                     <button type="submit" className="touch-target">
                       Messwert speichern
                     </button>
@@ -363,6 +468,52 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
             </button>
           </form>
         </>
+      )}
+
+      {canWork && (
+        // Abweichung melden (docs/07 A9). Available in any state a worker
+        // can see: a deviation noticed after the fact is still a deviation.
+        <details className="card">
+          <summary className="touch-target">Abweichung melden</summary>
+          <form action={raiseNonConformanceAction}>
+            <input type="hidden" name="productionOrderId" value={step.productionOrderId} />
+            <input type="hidden" name="workStepInstanceId" value={step.id} />
+            <label>
+              Fehlerart
+              <select name="errorCategory">
+                <option value="MASSABWEICHUNG">Maßabweichung</option>
+                <option value="MASSABWEICHUNG_KRITISCH">Maßabweichung (kritisch)</option>
+                <option value="MATERIALFEHLER">Materialfehler</option>
+                <option value="FUNKTIONSFEHLER">Funktionsfehler</option>
+                <option value="OBERFLAECHE">Oberflächenfehler</option>
+                <option value="SONSTIGES">Sonstiges</option>
+              </select>
+            </label>
+            <label>
+              Beschreibung
+              <textarea name="description" rows={3} required maxLength={4000} />
+            </label>
+            <label>
+              Schweregrad
+              <select name="priority" defaultValue="MEDIUM">
+                <option value="CRITICAL">Kritisch</option>
+                <option value="HIGH">Hoch</option>
+                <option value="MEDIUM">Mittel</option>
+                <option value="LOW">Gering</option>
+              </select>
+            </label>
+            <label className="radio-option">
+              <input type="checkbox" name="reporterSuggestsBlocking" /> Produktion sofort sperren
+            </label>
+            <p className="muted">
+              Die endgültige Einstufung als blockierend trifft der Server anhand von Fehlerart und
+              Schweregrad — eine Meldung kann sie verschärfen, aber nicht abschwächen.
+            </p>
+            <button type="submit" className="touch-target">
+              Abweichung melden
+            </button>
+          </form>
+        </details>
       )}
     </main>
   );
