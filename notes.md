@@ -10,7 +10,8 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 - **Phase 2 (Dokumente und Planung)**: abgeschlossen — Projekte, Dokument-Freigabeworkflow, Fertigungsplan mit Zyklenerkennung, Objektspeicher (S3/MinIO), funktionale UI.
 - **Phase 3 (Online-Ausführung)**: abgeschlossen — Produktionsaufträge, Auftragszuweisungen, serverseitige Schrittfreigabe mit Release Token, Tablet-UI (Checkliste/Foto/Messwert/PIN-Bestätigung), Abschlussvalidierung und Nachfolgerfreigabe. Abnahmeszenario A läuft end-to-end (Integrationstest).
 - **Phase 4 (Qualität)**: abgeschlossen — NCR mit serverseitiger Blockier-Klassifikation, Produktionssperren, Nacharbeit/Nachprüfung als eigene Schrittinstanzen, Prüfmittel + Kalibrierungs-Gate, Vier-Augen-Entscheidung, Revisionsauswirkungsanalyse. Abnahmeszenarien D und E laufen end-to-end (Integrationstest).
-- **Nächster Schritt**: Phase 5 (Offline und Synchronisation) gemäß [docs/10_MVP_PLAN.md](docs/10_MVP_PLAN.md) — IndexedDB, Outbox, Release-Token-Auslieferung ans Gerät, Konfliktcenter, Abnahmeszenarien B und C. **Vorher Stakeholder-Checkpoint** (siehe „Kritischer Pfad" in docs/10).
+- **Phase 5 (Offline und Synchronisation)**: abgeschlossen — Geräteregistrierung mit Fernsperre, commit-geordneter Ereignis-Cursor, Sync-API (health/commands/changes/bundle), Release-Token-Auslieferung ans Gerät, verschlüsselte IndexedDB mit Outbox, chunk-basierter Foto-Upload mit Wiederaufnahme, alle sieben Konflikttypen im Konfliktcenter. Abnahmeszenarien B und C laufen end-to-end; **alle 15 Negativtests sind grün**.
+- **Nächster Schritt**: Phase 6 (Akte, Reporting, Integrationen) gemäß [docs/10_MVP_PLAN.md](docs/10_MVP_PLAN.md) — Produktionsakte als PDF, Export mit Manifest, Seriennummernsuche, Dashboard, Benachrichtigungen. **Vor Phase 7 offen**: die von docs/10 für Phase 5 geforderte dedizierte Sicherheitsüberprüfung der Offline-Invariante (manueller Penetrationsversuch, `COMPLETED` clientseitig zu erzwingen) — die automatisierten Tests decken sie ab, die manuelle Prüfung steht aus.
 
 Alle 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden.
 
@@ -46,6 +47,8 @@ Ein durchgängiger Ausführungsflow braucht zusätzlich: Fertigungsplan mit Schr
 
 Für den Qualitätsfluss zusätzlich: Prüfmittel unter **Prüfmittel** anlegen und kalibrieren (QM) — ohne gültige Kalibrierung wird eine Messung abgelehnt, sobald das Prüfmerkmal ein Prüfmittel verlangt. Gemeldete und automatisch erzeugte Abweichungen stehen unter **Abweichungen** (QM: bewerten → Sofortmaßnahme → Nacharbeit → Nachprüfung → Disposition). Die Nachprüfung kann nur ausführen, wer die Rolle INSPECTOR hat.
 
+Für den Offline-Fluss: **Offline** öffnen (registriert das Gerät beim ersten Aufruf mit Verbindung), **Für Offline vorbereiten** laden, Netzwerk trennen (DevTools → Network → Offline), Schritt starten/erfassen/lokal abschließen, Netzwerk wieder verbinden, **Jetzt synchronisieren**. Konflikte landen unter **Konflikte** (PL/QM entscheiden mit PIN). Der Service Worker läuft nur im Production-Build — in `next dev` würde er HMR-Antworten cachen, siehe `src/components/ServiceWorkerRegistration.tsx`.
+
 ---
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
@@ -80,6 +83,18 @@ Der etablierte Aufbau „`assertPermission` als erste Zeile des Service, dann `w
 
 Lösung: `src/lib/authz/permission-within.ts` (`assertPermissionWithin`) prüft innerhalb der laufenden Transaktion. Die Zuordnung Schritt-Art → Atom steht **einmal** in `src/domain/execution/execution-guards.ts`. Kein zweiter Prüfpfad, keine geschachtelte Transaktion.
 
+### Eine bereits angewendete Migration nachträglich zu ändern, wird nicht bemerkt
+
+In Phase 5 wurde eine Migration nach dem Anwenden auf die Dev-Datenbank noch einmal editiert (ein CHECK-Constraint um einen Wert erweitert). `prisma migrate status` meldete danach weiterhin „Database schema is up to date" — die Datei war neu, die Datenbank alt, und nichts wies darauf hin. Erst ein direkter Blick per `pg_get_constraintdef` zeigte den Unterschied.
+
+**Regel:** Nach der Änderung einer bereits angewendeten Migration entweder `prisma migrate reset` (Dev-Daten weg) oder die Differenz von Hand nachziehen **und** die Prüfsumme aktualisieren:
+
+```bash
+docker exec -i proquado-postgres-1 psql -U proquado -d proquado -c "UPDATE _prisma_migrations SET checksum = '<shasum -a 256 der migration.sql>' WHERE migration_name = '<name>';"
+```
+
+Nebenbei: `docker exec` ohne `-i` verschluckt ein Here-Document stillschweigend — das SQL läuft dann gar nicht, ohne Fehlermeldung.
+
 ### Relationsnamen bei bidirektionalen Prisma-Beziehungen
 
 Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.dependents` waren so benannt, dass sie das Gegenteil dessen enthielten, was der Name suggeriert (Prisma-Rückrelationen benennen sich nach der Relation, nicht nach der eigenen Rolle). Umbenannt zu `predecessorLinks`/`successorLinks` mit erklärendem Kommentar direkt im Schema. **Lehre:** Bei selbstreferenzierenden n:m-artigen Relationen über ein Join-Modell (hier `PlanStepDependency`) immer explizit prüfen, welche Richtung eine Rückrelations-Array tatsächlich liefert — nicht vom Feldnamen ausgehen.
@@ -106,6 +121,15 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 - **Prüferqualifikation beim Vier-Augen-Prinzip ist noch nicht erzwungen.** `executor_id ≠ reviewer_id` (App **und** DB-Constraint), die zeitlich gültige Berechtigung (`user_roles.expires_at`) und die PIN-Rückbestätigung stehen. Die von Masterprompt Kap. 8 geforderte „passende Prüferqualifikation" lässt sich nicht prüfen, weil Planschritte kein Prüfer-Qualifikationsfeld haben — das ist eine Planungsmodell-Erweiterung, nicht ein vergessener Check.
 - **`UNIQUE (organization_id, work_step_instance_id)` auf `completion_submissions` wurde entfernt.** docs/02 fordert sie, aber sie machte die Nachbesserung nach einem abgelehnten Abschluss unmöglich (`COMPLETION_REJECTED → IN_PROGRESS` → zweite Meldung ⇒ Constraint-Verletzung). Ein Phase-3-Bug, der erst durch den Phase-4-Regressionstest sichtbar wurde. Idempotenz hängt weiterhin am `idempotency_key`, wo sie hingehört.
 - **Messtoleranz wird von der Datenbank nachgeprüft**, nicht nur vom Service: `measurement_results_tolerance_verdict_consistent` bindet `is_within_tolerance` an `measured_value` und die gespeicherten Grenzwerte. Die Grenzwerte werden bei der Erfassung vom Prüfmerkmal auf das Ergebnis **kopiert**, damit eine spätere Planrevision das Urteil einer bereits erfolgten Messung nicht rückwirkend ändert.
+- **Der Sync-Cursor kommt nicht aus einer Postgres-Sequenz.** Eine Sequenz vergibt ihre Nummer beim INSERT, nicht beim COMMIT: zwei Transaktionen können 41 und 42 ziehen und in umgekehrter Reihenfolge committen. Ein Client, der dazwischen pollt, sieht 42, merkt sich Cursor 42 — und Ereignis 41 wird eine Millisekunde später sichtbar, hinter dem Cursor, für immer unzustellbar. Bei einem Strom, dessen Ereignisse „Schritt freigegeben" heißen, ist das ein Tablet, das den Folgeschritt nie entsperrt. Deshalb `sync_sequences`: ein Zählerdatensatz je Organisation, dessen Zeilensperre bis zum Commit gehalten wird, also ist Nummernreihenfolge = Commit-Reihenfolge. Preis: Outbox-Schreibvorgänge einer Organisation serialisieren. Falls das je zum Engpass wird, ist die Lösung ein Zähler je Produktionsauftrag — **nicht** die Rückkehr zur Sequenz. Siehe `src/domain/sync/outbox-sequence.ts`.
+- **Der Revisionsvergleich sitzt in der normalen Abschlussvalidierung**, nicht im Sync-Pfad. docs/06 listet ihn unter den Bedingungen, die der Server beim Abschluss erneut prüft — und ein Online-Client kann genauso einen veralteten Dokumentsatz vor sich haben wie ein Offline-Gerät (eine Seite, die über eine Freigabe hinweg offen bleibt). Ein zweiter Erkennungspfad wäre eine zweite Gelegenheit, es falsch zu machen. Folge: `CompleteStepForm` sendet die angezeigten Revisions-IDs mit; ein leeres Feld heißt „keine Aussage" und löst deshalb keinen Konflikt aus, ein _überholte_ Bindung dagegen immer.
+- **Die Outbox darf ohne Berechtigung zugestellt werden.** `processSyncCommands` prüft absichtlich **kein** `sync.execute` — ein Rechteentzug würde sonst offline erfasste Arbeit dauerhaft auf dem Tablet einsperren, während docs/06 ausdrücklich verlangt, dass sie erhalten bleibt und zur Entscheidung wird (Negativtest #5). _Angewendet_ wird trotzdem nichts ohne Berechtigung: jedes Kommando wird einzeln autorisiert und wird andernfalls zum `PERMISSION_REVOKED`-Konflikt mit unveränderter Nutzlast. Lesen (Changes, Offline-Bundle) bleibt hinter `sync.execute` — das gibt Daten heraus, statt sie entgegenzunehmen.
+- **„Weiterhin gültig" überspringt keine Prüfungen.** Die Entscheidung lautet „die alte Revision ist weiterhin akzeptabel", nicht „Abschluss durchwinken": `acceptAsValid` schickt die Abschlussmeldung durch dieselbe `validateSubmissionWithin`, nur mit der Revisionsfrage als bereits beantwortet markiert. Ein Schritt mit fehlendem Pflichtfoto bleibt auch nach dieser Entscheidung abgelehnt.
+- **`ACCEPT_AS_VALID` gibt es bei `PERMISSION_REVOKED` nicht.** docs/04 sagt, offline erfasste Arbeit nach Rechteentzug werde „nicht automatisch freigegeben" — und sie stellvertretend durchzuwinken ist derselbe Vorgang mit einer anderen Unterschrift darunter. Möglich bleiben Zusatzprüfung oder Verwerfen der Abschlussmeldung; die erfassten Nachweise bleiben in beiden Fällen erhalten.
+- **`devices` hat jetzt `organization_id` und eine RLS-Policy.** Die Phase-1-Migration hatte notiert, Mandantentrennung für `devices`/`sessions` laufe „bis zu einer eigenen Policy" auf Anwendungsebene. Phase 5 ist der erste Verwender und schließt die Lücke für `devices`; `sessions` bleibt offen (kein Verwender).
+- **`step_document_bindings` bekam erst in Phase 5 einen Service.** docs/10 listet die Schritt-Dokumentbindung unter Phase 2; das Modell entstand dort, der Service nicht. Abnahmeszenario C ist vollständig über diese Bindungen definiert und war ohne ihn aus der Anwendung heraus gar nicht herstellbar — daher `bindDocumentToPlanStep` in `plan-step-requirements.ts`. Eine **UI** dafür fehlt weiterhin (Planbearbeitung bietet die Bindung noch nicht an); das ist die letzte bekannte Lücke im Planungsbildschirm.
+- **Ein Release-Token wird pro Schritt genau einmal gültig gehalten.** Der Server speichert nur den Hash der Signatur, kann ein ausgegebenes Token also nicht erneut herausgeben — die Auslieferung ans Gerät prägt ein **neues** und ersetzt den Hash, wodurch das vorherige ungültig wird. Gewollt: ein verlorenes Tablet kann nicht weiter an einem Schritt arbeiten, der inzwischen auf einem anderen Gerät liegt.
+- **Der Offline-Arbeitsbereich ist bewusst eine einzelne clientseitig gerenderte Seite** (`/offline`). Alle übrigen Seiten sind Server Components und brauchen einen Netzwerk-Roundtrip, um überhaupt etwas anzuzeigen — genau das fehlt in der Halle, für die dieser Bildschirm gedacht ist.
 
 ---
 
@@ -119,20 +143,24 @@ pnpm run build               # Production Build als Kompilier-/Bundling-Check
 
 Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks — siehe `docs/09_TEST_PYRAMID.md`.
 
-### Abgedeckte Negativtests (Stand Phase 4)
+### Abgedeckte Negativtests (Stand Phase 5 — alle 15)
 
 | #   | Test                                                              | Wo                                                        |
 | --- | ----------------------------------------------------------------- | --------------------------------------------------------- |
-| 1   | Folgeschritt nach lokalem Abschluss nicht startbar                | `test/integration/phase3-execution.integration.test.ts`   |
+| 1   | Folgeschritt nach lokalem Abschluss nicht startbar                | `phase3-execution` + `phase5-offline-sync` (Sync-Pfad)    |
 | 2   | Gefälschter/fremder Release Token abgewiesen                      | ebd. + `src/lib/security/__tests__/release-token.test.ts` |
-| 3   | Doppelte Abschlussmeldung → genau ein Abschluss + ein Audit-Event | ebd.                                                      |
-| 6   | Fotoanforderung nicht erfüllt → Abschluss abgelehnt               | ebd.                                                      |
-| 7   | Hash-Mismatch bei Foto- und Dokumentupload                        | ebd. + `phase2-documents-plans`                           |
-| 8   | Messwert außerhalb Toleranz (Service **und** DB-Constraint)       | ebd.                                                      |
+| 3   | Doppelte Abschlussmeldung → genau ein Abschluss + ein Audit-Event | ebd. + `phase5-offline-sync` (ganzer Batch erneut)        |
+| 4   | Dokumentrevision während Offline geändert → Konflikt              | `phase5-offline-sync`                                     |
+| 5   | Rechteentzug vor Sync → Daten bleiben, Entscheidung nötig         | `phase5-offline-sync`                                     |
+| 6   | Fotoanforderung nicht erfüllt → Abschluss abgelehnt               | `phase3-execution`                                        |
+| 7   | Hash-Mismatch bei Foto- und Dokumentupload                        | ebd. + `phase2-documents-plans` + `phase5-offline-sync`   |
+| 8   | Messwert außerhalb Toleranz (Service **und** DB-Constraint)       | `phase3-execution`                                        |
 | 9   | Ausführender ≠ Prüfer (Service **und** DB-Constraint)             | `phase4-quality` + `phase3-execution`                     |
 | 10  | Offene blockierende NCR → Nachfolger bleibt gesperrt              | `phase4-quality`                                          |
 | 11  | Abgelaufenes/gesperrtes Prüfmittel → Messung abgelehnt            | `phase4-quality`                                          |
-| 12  | Objekt-ID einer fremden Organisation → kein Datenleck             | ebd. + `rbac-audit-tenant`                                |
+| 12  | Objekt-ID einer fremden Organisation → kein Datenleck             | ebd. + `rbac-audit-tenant` + `phase5-offline-sync`        |
+| 13  | Parallele Syncs auf dieselbe Entität → Versionskonflikt           | `phase5-offline-sync`                                     |
+| 14  | Serverausfall nach Upload, vor Quittung → Resume ohne Duplikat    | `phase5-offline-sync`                                     |
 | 15  | Plan mit Zyklus → Validierungsfehler                              | `phase2-documents-plans`                                  |
 
-Offen (Phase 5, Offline/Sync): #4 (Revisionskonflikt), #5 (Rechteentzug vor Sync), #13 (parallele Syncs), #14 (Serverausfall nach Upload).
+Die Client-Typsicherheit aus docs/06 (der Client kennt `COMPLETED` gar nicht) wird zusätzlich als Unit-Test geprüft: `src/lib/offline/__tests__/client-work-step-status.test.ts`.

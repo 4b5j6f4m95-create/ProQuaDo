@@ -21,9 +21,12 @@ describe('isValidWorkStepTransition', () => {
 
   // The central invariant, expressed as a type-level fact: there is no
   // transition from any client-reachable state directly to COMPLETED.
-  // COMPLETED is reachable only via VALIDATING or AWAITING_SECOND_APPROVAL,
-  // both of which only the server can enter (docs/06, Negativtest #2).
-  it('never allows COMPLETED except from a server-owned validation state', () => {
+  // COMPLETED is reachable only from states that ONLY the server can enter —
+  // VALIDATING, AWAITING_SECOND_APPROVAL, and since Phase 5 BLOCKED, which
+  // a recorded conflict decision can resolve as "Weiterhin gültig"
+  // (src/domain/sync/decide-conflict.ts). No device can produce any of the
+  // three (docs/06, Negativtest #2).
+  it('never allows COMPLETED except from a server-owned state', () => {
     const allStatuses: WorkStepStatus[] = [
       'LOCKED',
       'READY',
@@ -45,7 +48,7 @@ describe('isValidWorkStepTransition', () => {
     const canReachCompleted = allStatuses.filter((from) =>
       isValidWorkStepTransition(from, 'COMPLETED'),
     );
-    expect(canReachCompleted.sort()).toEqual(['AWAITING_SECOND_APPROVAL', 'VALIDATING']);
+    expect(canReachCompleted.sort()).toEqual(['AWAITING_SECOND_APPROVAL', 'BLOCKED', 'VALIDATING']);
   });
 
   it('rejects skipping validation', () => {

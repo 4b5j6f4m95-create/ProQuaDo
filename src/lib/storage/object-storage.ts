@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
   GetObjectCommand,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'node:crypto';
@@ -124,6 +125,50 @@ export async function computeObjectSha256(storageKey: string): Promise<string> {
     hash.update(chunk as Uint8Array);
   }
   return hash.digest('hex');
+}
+
+/** Storage key of one chunk of a resumable upload. Kept under the final
+ *  object's key so a bucket lifecycle rule can clean up abandoned uploads by
+ *  prefix, and so an orphaned part is obviously an orphan. */
+export function chunkStorageKey(finalStorageKey: string, chunkIndex: number): string {
+  return `${finalStorageKey}.parts/${String(chunkIndex).padStart(6, '0')}`;
+}
+
+/** Server-side writes for the chunked upload path. The device does not get a
+ *  presigned URL per chunk: the server has to see each chunk anyway to hash
+ *  it, and a presigned PUT it never observes could not be verified. */
+export async function putObjectBytes(params: {
+  storageKey: string;
+  body: Uint8Array;
+  mimeType?: string;
+}): Promise<void> {
+  await s3Client().send(
+    new PutObjectCommand({
+      Bucket: bucket(),
+      Key: params.storageKey,
+      Body: params.body,
+      ContentType: params.mimeType,
+    }),
+  );
+}
+
+export async function getObjectBytes(storageKey: string): Promise<Buffer> {
+  const result = await s3Client().send(new GetObjectCommand({ Bucket: bucket(), Key: storageKey }));
+  const chunks: Buffer[] = [];
+  for await (const chunk of result.Body as Readable) {
+    chunks.push(Buffer.from(chunk as Uint8Array));
+  }
+  return Buffer.concat(chunks);
+}
+
+export async function deleteObjects(storageKeys: readonly string[]): Promise<void> {
+  if (storageKeys.length === 0) return;
+  await s3Client().send(
+    new DeleteObjectsCommand({
+      Bucket: bucket(),
+      Delete: { Objects: storageKeys.map((Key) => ({ Key })) },
+    }),
+  );
 }
 
 function isNotFound(error: unknown): boolean {

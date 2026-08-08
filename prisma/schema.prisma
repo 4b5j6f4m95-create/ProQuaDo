@@ -81,6 +81,14 @@ model Organization {
   measuringEquipment     MeasuringEquipment[]
   calibrations           Calibration[]
 
+  devices           Device[]
+  syncSequence      SyncSequence?
+  syncCursors       SyncCursor[]
+  syncCommands      SyncCommand[]
+  syncConflicts     SyncConflict[]
+  conflictDecisions ConflictDecision[]
+  photoUploadChunks PhotoUploadChunk[]
+
   @@map("organizations")
 }
 
@@ -183,18 +191,37 @@ model User {
   @@map("users")
 }
 
+// A registered tablet. Phase 5 gives it `organizationId` so it can carry an
+// RLS policy like every other business table — the Phase 1 migration noted
+// its absence as a gap to close once devices were actually used, and the
+// sync API is what uses them.
+//
+// A revoked device fails the very next sync health check, which is the
+// remote-wipe lever from docs/06 "Geräteverlust und Sicherheit": the device
+// can neither push its outbox nor pull changes, and the client clears its
+// local database.
 model Device {
-  id          String    @id @default(uuid())
-  userId      String    @map("user_id")
-  deviceLabel String?   @map("device_label")
-  isRevoked   Boolean   @default(false) @map("is_revoked")
-  lastSeenAt  DateTime? @map("last_seen_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  deviceLabel    String?   @map("device_label")
+  isRevoked      Boolean   @default(false) @map("is_revoked")
+  revokedAt      DateTime? @map("revoked_at")
+  revokedById    String?   @map("revoked_by_id")
+  revokedReason  String?   @map("revoked_reason")
+  lastSeenAt     DateTime? @map("last_seen_at")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  syncCursors  SyncCursor[]
+  syncCommands SyncCommand[]
 
   @@index([userId])
+  @@index([organizationId, isRevoked])
   @@map("devices")
 }
 
@@ -412,6 +439,13 @@ model OutboxEvent {
   aggregateId    String    @map("aggregate_id")
   eventType      String    @map("event_type")
   payload        Json
+  // Per-organization, gap-free, commit-ordered event number — the cursor of
+  // GET /sync/changes (docs/05 "Sync Changes"). Deliberately NOT a Postgres
+  // sequence: those hand out numbers at INSERT time, so a transaction that
+  // takes a low number and commits late becomes visible *after* a client has
+  // already read past it, and the event is lost forever. See
+  // src/domain/sync/outbox-sequence.ts for how the ordering is enforced.
+  sequence       BigInt    @map("sequence")
   createdAt      DateTime  @default(now()) @map("created_at")
   processedAt    DateTime? @map("processed_at")
   processed      Boolean   @default(false)
@@ -419,8 +453,25 @@ model OutboxEvent {
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
+  @@unique([organizationId, sequence])
   @@index([organizationId, processed])
   @@map("outbox_events")
+}
+
+// One counter row per organization. Every outbox write does
+// `UPDATE ... SET last_sequence = last_sequence + 1 RETURNING`, which takes a
+// row lock held until commit — so two concurrent writers can never commit in
+// a different order than they were numbered. That serializes outbox writes
+// within an organization, which is the price of a cursor a client can trust
+// not to skip events.
+model SyncSequence {
+  organizationId String   @id @map("organization_id")
+  lastSequence   BigInt   @default(0) @map("last_sequence")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@map("sync_sequences")
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -939,6 +990,7 @@ model ProductionOrder {
   workStepInstances WorkStepInstance[]
   nonConformances   NonConformance[]
   productionHolds   ProductionHold[]
+  syncConflicts     SyncConflict[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId])
@@ -1020,6 +1072,7 @@ model WorkStepInstance {
   photoEvidence         PhotoEvidence[]
   raisedNonConformances NonConformance[]       @relation("NcrOriginStep")
   productionHolds       ProductionHold[]
+  syncConflicts         SyncConflict[]
 
   @@unique([organizationId, productionOrderId, planStepId, attemptNumber])
   @@index([organizationId])
@@ -1203,6 +1256,13 @@ model PhotoEvidence {
   mimeType           String?   @map("mime_type")
   malwareScanStatus  String?   @map("malware_scan_status")
   uploadStatus       String    @default("PENDING") @map("upload_status") // PENDING, COMPLETED, FAILED
+  // SINGLE = one presigned PUT (the online path from Phase 3).
+  // CHUNKED = resumable upload from a device that may lose connectivity
+  // mid-transfer (docs/06 "Resumable Upload", Negativtest #14).
+  uploadMode         String    @default("SINGLE") @map("upload_mode")
+  declaredSizeBytes  BigInt?   @map("declared_size_bytes")
+  chunkSizeBytes     Int?      @map("chunk_size_bytes")
+  chunkCount         Int?      @map("chunk_count")
   takenAt            DateTime? @map("taken_at")
   uploadedAt         DateTime? @map("uploaded_at")
   capturedById       String    @map("captured_by_id")
@@ -1211,9 +1271,10 @@ model PhotoEvidence {
   updatedAt          DateTime  @updatedAt @map("updated_at")
   version            Int       @default(1)
 
-  organization     Organization      @relation(fields: [organizationId], references: [id])
-  workStepInstance WorkStepInstance  @relation(fields: [workStepInstanceId], references: [id])
-  photoRequirement PhotoRequirement? @relation(fields: [photoRequirementId], references: [id])
+  organization     Organization       @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance   @relation(fields: [workStepInstanceId], references: [id])
+  photoRequirement PhotoRequirement?  @relation(fields: [photoRequirementId], references: [id])
+  uploadChunks     PhotoUploadChunk[]
 
   @@index([organizationId])
   @@index([workStepInstanceId, uploadStatus])
@@ -1435,4 +1496,158 @@ model Calibration {
   @@index([organizationId])
   @@index([measuringEquipmentId, nextCalibrationDueAt])
   @@map("calibrations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Offline & Synchronisation (Phase 5)
+// See docs/06_OFFLINE_SYNC_CONFLICT.md.
+// ─────────────────────────────────────────────────────────────
+
+// How far a specific device has consumed the organization's event stream.
+// Kept per (user, device) rather than per device alone because the same
+// tablet may be handed between shifts, and each user's projection is
+// filtered to the orders they are assigned to.
+model SyncCursor {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  userId         String    @map("user_id")
+  deviceId       String    @map("device_id")
+  lastCursor     BigInt    @default(0) @map("last_cursor")
+  lastSyncAt     DateTime? @map("last_sync_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  version        Int       @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  device       Device       @relation(fields: [deviceId], references: [id])
+
+  @@unique([organizationId, userId, deviceId])
+  @@index([organizationId])
+  @@map("sync_cursors")
+}
+
+// The server-side record of every command a device pushed, whatever the
+// outcome. Two jobs:
+//
+//  1. Idempotency. The unique key (organization, device, idempotencyKey)
+//     from docs/05 means a retried batch after a lost response returns the
+//     ORIGINAL result instead of applying anything twice (Negativtest #3).
+//  2. Preservation. A command that was rejected or conflicted still keeps
+//     its payload here — docs/06 PERMISSION_REVOKED is explicit that
+//     offline-captured data is "als historisches Faktum" retained and never
+//     silently dropped (Negativtest #5).
+model SyncCommand {
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  deviceId        String    @map("device_id")
+  actorId         String    @map("actor_id")
+  idempotencyKey  String    @map("idempotency_key")
+  commandType     String    @map("command_type")
+  payload         Json
+  clientTimestamp DateTime  @map("client_timestamp")
+  sequenceNumber  Int       @map("sequence_number") // monotone per device, defines processing order
+  baseVersion     Int?      @map("base_version")
+  status          String // ACCEPTED, REJECTED, CONFLICT, DUPLICATE
+  conflictType    String?   @map("conflict_type")
+  resultPayload   Json?     @map("result_payload")
+  errorCode       String?   @map("error_code")
+  errorMessage    String?   @map("error_message")
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  processedAt     DateTime? @map("processed_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  version         Int       @default(1)
+
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  device       Device         @relation(fields: [deviceId], references: [id])
+  conflicts    SyncConflict[]
+
+  @@unique([organizationId, deviceId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([organizationId, deviceId, sequenceNumber])
+  @@map("sync_commands")
+}
+
+// A conflict that a human must decide. Never auto-resolved when quality
+// data is involved (docs/06 "Kein Last-Write-Wins für Qualitätsdaten").
+//
+// conflictType is one of the seven from docs/03 §6 — see
+// src/domain/sync/conflict-types.ts, which is the single place the list and
+// the decisions each type permits are defined.
+model SyncConflict {
+  id                     String    @id @default(uuid())
+  organizationId         String    @map("organization_id")
+  conflictType           String    @map("conflict_type")
+  status                 String    @default("OPEN") // OPEN, RESOLVED, CANCELLED
+  syncCommandId          String?   @map("sync_command_id")
+  productionOrderId      String?   @map("production_order_id")
+  workStepInstanceId     String?   @map("work_step_instance_id")
+  completionSubmissionId String?   @map("completion_submission_id")
+  summary                String
+  detail                 Json
+  detectedAt             DateTime  @default(now()) @map("detected_at")
+  resolvedAt             DateTime? @map("resolved_at")
+  resolvedById           String?   @map("resolved_by_id")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+  version                Int       @default(1)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  syncCommand      SyncCommand?      @relation(fields: [syncCommandId], references: [id])
+  productionOrder  ProductionOrder?  @relation(fields: [productionOrderId], references: [id])
+  workStepInstance WorkStepInstance? @relation(fields: [workStepInstanceId], references: [id])
+
+  decisions ConflictDecision[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, workStepInstanceId])
+  @@map("sync_conflicts")
+}
+
+// "Alle Entscheidungen: conflict_decisions Tabelle mit Grund, Person,
+// Zeitpunkt" (docs/06). Append-only in practice: a decision is a signed
+// statement about what was done with a real execution, so it is never
+// edited — a wrong decision is followed by a new one, and both stay.
+model ConflictDecision {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  syncConflictId  String   @map("sync_conflict_id")
+  decidedById     String   @map("decided_by_id")
+  decisionType    String   @map("decision_type")
+  reason          String
+  // What the decision actually caused server-side (step completed, rework
+  // step created, hold applied, ...) — so the audit reads as cause → effect
+  // without replaying the code.
+  resultingAction String?  @map("resulting_action")
+  decidedAt       DateTime @default(now()) @map("decided_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  syncConflict SyncConflict @relation(fields: [syncConflictId], references: [id])
+
+  @@index([organizationId, syncConflictId])
+  @@map("conflict_decisions")
+}
+
+// One received chunk of a resumable photo upload. The chunk hash is the
+// deduplication key: a device that retries after a lost acknowledgement
+// re-sends a chunk the server already has, and the server recognizes it
+// instead of appending it twice (docs/06 "Serverausfall nach Upload, vor
+// Quittung", Negativtest #14).
+model PhotoUploadChunk {
+  id              String   @id @default(uuid())
+  organizationId  String   @map("organization_id")
+  photoEvidenceId String   @map("photo_evidence_id")
+  chunkIndex      Int      @map("chunk_index")
+  sizeBytes       Int      @map("size_bytes")
+  chunkHashSha256 String   @map("chunk_hash_sha256")
+  storageKey      String   @map("storage_key")
+  receivedAt      DateTime @default(now()) @map("received_at")
+
+  organization  Organization  @relation(fields: [organizationId], references: [id])
+  photoEvidence PhotoEvidence @relation(fields: [photoEvidenceId], references: [id])
+
+  @@unique([organizationId, photoEvidenceId, chunkIndex])
+  @@index([organizationId])
+  @@map("photo_upload_chunks")
 }

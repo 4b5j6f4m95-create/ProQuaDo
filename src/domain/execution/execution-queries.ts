@@ -144,6 +144,14 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
           },
         },
         confirmations: { select: { id: true, confirmedAt: true, signatureMethod: true } },
+        // Phase 5: a step can be waiting on a conflict decision rather than
+        // on the worker (docs/07 A8). Loaded with the step so the page can
+        // always say WHY nothing can be done, not just that nothing can.
+        syncConflicts: {
+          where: { status: 'OPEN' },
+          orderBy: { detectedAt: 'desc' },
+          select: { id: true, conflictType: true, summary: true, detectedAt: true },
+        },
       },
     });
     if (!instance) throw new NotFoundError('Arbeitsschritt');
@@ -183,6 +191,7 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
       evaluation,
       isAssignedToOrder: assigned,
       activeHolds,
+      openConflicts: instance.syncConflicts,
       latestSubmission: instance.completionSubmissions[0] ?? null,
     };
   });

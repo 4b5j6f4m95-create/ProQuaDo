@@ -29,6 +29,8 @@ export const SYSTEM_ROLES = {
       'production_order.view',
       'work_step.view',
       'ncr.view',
+      'device.manage',
+      'sync_conflict.view',
       'audit.view',
       'report.generate',
       'dossier.export',
@@ -61,6 +63,8 @@ export const SYSTEM_ROLES = {
       'production_hold.release',
       'equipment.manage',
       'calibration.manage',
+      'sync_conflict.view',
+      'sync_conflict.decide',
       'audit.view',
       'report.generate',
       'export.create',
@@ -87,6 +91,8 @@ export const SYSTEM_ROLES = {
       'work_step.view',
       'ncr.create',
       'ncr.view',
+      'sync_conflict.view',
+      'sync_conflict.decide',
       'audit.view',
       'report.generate',
       'export.create',
@@ -106,6 +112,7 @@ export const SYSTEM_ROLES = {
       'ncr.create',
       'ncr.view',
       'production_hold.create',
+      'sync_conflict.view',
       'audit.view',
       'report.generate',
     ],
@@ -123,6 +130,10 @@ export const SYSTEM_ROLES = {
       'skip_request.create',
       'ncr.create',
       'ncr.view',
+      // Phase 5: the offline device pushes its outbox as the worker who
+      // captured the data. Without this atom the entire sync API is closed
+      // to exactly the role it exists for.
+      'sync.execute',
       // The matrix grants WORKER `rework.execute`; it was missing from this
       // transcription until Phase 4 needed it, which meant nobody could
       // execute a rework step (INSPECTOR holds `reinspection.execute` for
@@ -141,6 +152,7 @@ export const SYSTEM_ROLES = {
       'ncr.create',
       'ncr.view',
       'reinspection.execute',
+      'sync.execute',
     ],
   },
   AUDITOR: {

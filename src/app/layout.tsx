@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { ServiceWorkerRegistration } from '@/components/ServiceWorkerRegistration';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -17,7 +18,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/my-orders">Meine Aufträge</Link>
           <Link href="/quality/ncrs">Abweichungen</Link>
           <Link href="/quality/equipment">Prüfmittel</Link>
+          <Link href="/offline">Offline</Link>
+          <Link href="/sync/conflicts">Konflikte</Link>
         </nav>
+        <ServiceWorkerRegistration />
         {children}
       </body>
     </html>

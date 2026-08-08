@@ -19,16 +19,25 @@ export function CompleteStepForm({
   workStepInstanceId,
   confirmationText,
   openRequirements,
+  usedDocumentRevisionIds,
 }: {
   workStepInstanceId: string;
   confirmationText: string;
   openRequirements: number;
+  /** The revisions this page rendered. Submitted with the completion so the
+   *  server can compare them against what is currently binding — a page open
+   *  across a document release is as stale as an offline device
+   *  (Abnahmeszenario C). */
+  usedDocumentRevisionIds: readonly string[];
 }) {
   const [state, formAction] = useFormState(completeWorkStepAction, INITIAL_STATE);
 
   return (
     <form action={formAction} className="card">
       <input type="hidden" name="workStepInstanceId" value={workStepInstanceId} />
+      {usedDocumentRevisionIds.map((revisionId) => (
+        <input key={revisionId} type="hidden" name="usedDocumentRevisionIds" value={revisionId} />
+      ))}
       <p>{confirmationText}</p>
       <label>
         PIN

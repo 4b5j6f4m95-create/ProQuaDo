@@ -205,3 +205,71 @@ function toDecimal(value: string | undefined, label: string): Prisma.Decimal | u
   if (value === undefined || value === '') return undefined;
   return parseDecimalInput(value, label);
 }
+
+export interface BindDocumentToStepCommand {
+  actor: Actor;
+  productionPlanRevisionId: string;
+  planStepId: string;
+  /** Always a specific revision, never a document. Geschäftsgrundsatz 6:
+   *  "verbindlich ist genau die freigegebene Revision", not "the newest". */
+  documentRevisionId: string;
+  pageNumber?: number;
+  markerLabel?: string;
+}
+
+/**
+ * `step_document_bindings` — which released document revision is binding for
+ * a plan step (docs/10 Phase 2 "Schritt-Dokumentbindung"). The table existed
+ * from Phase 2; the service arrived with Phase 5, because the offline
+ * revision conflict (Abnahmeszenario C) is defined entirely in terms of these
+ * bindings and could not otherwise be produced by the application at all.
+ *
+ * Only a RELEASED revision may be bound: binding a draft would make an
+ * unreviewed drawing binding for production, which is the failure mode
+ * Geschäftsgrundsatz 6 exists to prevent.
+ */
+export async function bindDocumentToPlanStep(command: BindDocumentToStepCommand) {
+  await assertPermission(command.actor, 'work_step_definition.update');
+
+  return withOrgContext(command.actor.organizationId, async (tx) => {
+    const step = await loadEditableStep(tx, command.planStepId, command.productionPlanRevisionId);
+
+    const revision = await tx.documentRevision.findFirst({
+      where: { id: command.documentRevisionId },
+      select: { id: true, documentId: true, status: true, revisionNumber: true },
+    });
+    if (!revision) throw new NotFoundError('Dokumentrevision');
+    if (revision.status !== 'RELEASED') {
+      throw new ValidationError(
+        `Nur eine freigegebene Dokumentrevision darf verbindlich gebunden werden (Status: ${revision.status}).`,
+      );
+    }
+
+    const binding = await tx.stepDocumentBinding.create({
+      data: {
+        organizationId: command.actor.organizationId,
+        planStepId: step.id,
+        documentId: revision.documentId,
+        documentRevisionId: revision.id,
+        pageNumber: command.pageNumber,
+        markerLabel: command.markerLabel,
+      },
+    });
+
+    await writeAuditEvent(tx, {
+      organizationId: command.actor.organizationId,
+      eventType: 'step_document_binding.created',
+      resourceType: 'step_document_binding',
+      resourceId: binding.id,
+      actorId: command.actor.userId,
+      newValues: {
+        planStepId: step.id,
+        documentRevisionId: revision.id,
+        revisionNumber: revision.revisionNumber,
+      },
+      source: 'web',
+    });
+
+    return binding;
+  });
+}

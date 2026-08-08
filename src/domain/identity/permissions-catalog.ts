@@ -71,6 +71,17 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   perm('equipment', 'manage', 'Prüfmittel verwalten'),
   perm('calibration', 'manage', 'Kalibrierung verwalten'),
 
+  // Offline & Synchronisation (Phase 5). docs/04 does not enumerate these
+  // atoms — it describes the behaviour ("Offline erfasste Arbeit nach
+  // Rechteentzug ... erfordert manuelle Entscheidung durch berechtigte
+  // Person") without naming the permission that makes a person "berechtigt".
+  // `sync_conflict.decide` is that name; it goes to the two roles docs/06
+  // notifies on a conflict, Projektleitung and QM.
+  perm('sync', 'execute', 'Offline synchronisieren'),
+  perm('sync_conflict', 'view', 'Synchronisationskonflikte ansehen'),
+  perm('sync_conflict', 'decide', 'Synchronisationskonflikt entscheiden'),
+  perm('device', 'manage', 'Geräte verwalten'),
+
   // Audit & Reporting
   perm('audit', 'view', 'Audit Trail ansehen'),
   perm('report', 'generate', 'Bericht erzeugen'),

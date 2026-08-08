@@ -21,6 +21,8 @@ import {
 } from '@/domain/production-orders/production-order-status';
 import { raiseNonConformanceWithin } from '@/domain/quality/raise-non-conformance';
 import { advanceNonConformanceAfterDerivedStep } from '@/domain/quality/ncr-workflow';
+import { recordConflictWithin } from '@/domain/sync/conflicts';
+import { checkRevisionConflict, describeRevisionConflict } from '@/domain/sync/revision-conflict';
 import { assertCompletionPermission, assertNotBlockedForStep } from './execution-guards';
 import { releaseEligibleSuccessors } from './release-work-step';
 import { evaluateStepRequirements } from './step-requirements';
@@ -44,7 +46,8 @@ export const STEP_CONFIRMATION_TEXT =
   'Ich bestätige, dass ich den Arbeitsschritt entsprechend der angezeigten Arbeitsanweisung ' +
   'und den dokumentierten Unterlagen ausgeführt habe. Abweichungen habe ich vollständig gemeldet.';
 
-export type CompletionOutcome = 'COMPLETED' | 'REJECTED' | 'AWAITING_SECOND_APPROVAL' | 'DUPLICATE';
+export type CompletionOutcome =
+  'COMPLETED' | 'REJECTED' | 'AWAITING_SECOND_APPROVAL' | 'REVISION_CONFLICT' | 'DUPLICATE';
 
 /** Mirrors ValidateCompletionResponse in docs/05_API_CONTRACTS.md. */
 export interface CompletionResult {
@@ -56,6 +59,9 @@ export interface CompletionResult {
    *  step actually reached COMPLETED. */
   nextStepInstanceIds: string[];
   auditEventId?: string;
+  /** Set only for REVISION_CONFLICT: the conflict awaiting a decision in the
+   *  conflict centre (docs/07 B4). */
+  conflictId?: string;
 }
 
 export interface SubmitCompletionCommand {
@@ -236,9 +242,17 @@ export async function validateCompletionSubmission(
  * Runs inside the caller's transaction so that verdict, status change,
  * successor release, audit and outbox events are one atomic fact.
  */
-async function validateSubmissionWithin(
+export async function validateSubmissionWithin(
   tx: Prisma.TransactionClient,
-  params: { organizationId: string; submissionId: string; validatedById: string },
+  params: {
+    organizationId: string;
+    submissionId: string;
+    validatedById: string;
+    /** Set only when a conflict decision has already ruled on the revision
+     *  question ("Weiterhin gültig", docs/06 a). Without it the same check
+     *  would fire again and the decision could never take effect. */
+    revisionConflictAlreadyDecided?: boolean;
+  },
 ): Promise<CompletionResult> {
   const submission = await tx.completionSubmission.findFirstOrThrow({
     where: { id: params.submissionId },
@@ -391,6 +405,26 @@ async function validateSubmissionWithin(
     };
   }
 
+  // "Revision-Vergleich (aktuell vs. zum Ausführungszeitpunkt)" — docs/06
+  // lists this among the conditions the server re-checks at completion, and
+  // it is the last one because it is the only one whose answer is not
+  // "incomplete" but "someone has to decide". Abnahmeszenario C /
+  // Negativtest #4.
+  //
+  // Deliberately part of the ordinary validation path rather than a
+  // sync-only pre-check: an online client can hold a stale document set just
+  // as easily as an offline one, and a second detection path would be a
+  // second chance to get it wrong.
+  if (!params.revisionConflictAlreadyDecided) {
+    const conflict = await detectRevisionConflictWithin(tx, {
+      organizationId: params.organizationId,
+      submission,
+      instance,
+      detectedByUserId: params.validatedById,
+    });
+    if (conflict) return conflict;
+  }
+
   await tx.completionSubmission.update({
     where: { id: submission.id },
     data: {
@@ -460,6 +494,90 @@ async function validateSubmissionWithin(
     rejectionReasons: [],
     nextStepInstanceIds: finalized.nextStepInstanceIds,
     auditEventId: finalized.auditEventId,
+  };
+}
+
+/**
+ * The offline case the whole conflict machinery exists for: the work was
+ * performed against a document revision that has since been replaced.
+ *
+ * Three things happen, and the third is the one that matters most:
+ *  - the step goes to BLOCKED — not COMPLETED, not REJECTED (docs/06);
+ *  - the submission stays PENDING_VALIDATION, because validation is not
+ *    finished, it is waiting for a person;
+ *  - the execution record is left exactly as it is. The history says
+ *    "performed against Rev. 04" and will keep saying so, whatever is
+ *    decided. It is never rewritten to Rev. 05.
+ */
+async function detectRevisionConflictWithin(
+  tx: Prisma.TransactionClient,
+  params: {
+    organizationId: string;
+    submission: { id: string; usedDocumentRevisionIds: Prisma.JsonValue };
+    instance: { id: string; status: string; stepNumber: number; productionOrderId: string };
+    detectedByUserId: string;
+  },
+): Promise<CompletionResult | null> {
+  const declared = Array.isArray(params.submission.usedDocumentRevisionIds)
+    ? (params.submission.usedDocumentRevisionIds as string[]).filter((v) => typeof v === 'string')
+    : [];
+
+  const check = await checkRevisionConflict(tx, {
+    workStepInstanceId: params.instance.id,
+    usedDocumentRevisionIds: declared,
+  });
+  if (!check.hasConflict) return null;
+
+  await tx.completionSubmission.update({
+    where: { id: params.submission.id },
+    data: { validationStatus: 'REVISION_CONFLICT', version: { increment: 1 } },
+  });
+
+  await tx.workStepInstance.update({
+    where: { id: params.instance.id },
+    data: { status: 'BLOCKED', version: { increment: 1 } },
+  });
+
+  const summary = describeRevisionConflict(check);
+  const conflict = await recordConflictWithin(tx, {
+    organizationId: params.organizationId,
+    conflictType: 'REVISION_CONFLICT',
+    summary,
+    detail: {
+      workStepInstanceId: params.instance.id,
+      productionOrderId: params.instance.productionOrderId,
+      stepNumber: params.instance.stepNumber,
+      usedDocumentRevisionIds: declared,
+      mismatches: check.mismatches,
+      missingBindings: check.missingBindings,
+    },
+    productionOrderId: params.instance.productionOrderId,
+    workStepInstanceId: params.instance.id,
+    completionSubmissionId: params.submission.id,
+    detectedByUserId: params.detectedByUserId,
+  });
+
+  const audit = await writeAuditEvent(tx, {
+    organizationId: params.organizationId,
+    eventType: 'work_step.blocked',
+    resourceType: 'work_step_instance',
+    resourceId: params.instance.id,
+    actorId: params.detectedByUserId,
+    previousValues: { status: params.instance.status },
+    newValues: { status: 'BLOCKED', cause: 'REVISION_CONFLICT', conflictId: conflict.id },
+    result: 'PARTIAL',
+    failureReason: 'REVISION_CONFLICT',
+    source: 'system',
+  });
+
+  return {
+    submissionId: params.submission.id,
+    result: 'REVISION_CONFLICT',
+    workStepStatus: 'BLOCKED',
+    rejectionReasons: [{ code: 'REVISION_CONFLICT', detail: summary }],
+    nextStepInstanceIds: [],
+    auditEventId: audit.id,
+    conflictId: conflict.id,
   };
 }
 

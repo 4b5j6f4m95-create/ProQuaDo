@@ -168,3 +168,37 @@ export class SamePersonReviewDeniedError extends DomainError {
     );
   }
 }
+
+// ── Offline & sync errors (Phase 5) ──────────────────────────
+
+/** The remote-wipe response from docs/06 "Geräteverlust und Sicherheit":
+ *  the next sync health check of a revoked device fails, which is the signal
+ *  the client acts on to clear its local database. 403 rather than 401 —
+ *  the session is fine, the device is not. */
+export class DeviceRevokedError extends DomainError {
+  constructor(reason?: string) {
+    super(
+      'DEVICE_REVOKED',
+      `Dieses Gerät wurde gesperrt und darf nicht mehr synchronisieren.${reason ? ` Grund: ${reason}` : ''}`,
+      403,
+    );
+  }
+}
+
+/** A document or plan revision changed while the device was offline
+ *  (Abnahmeszenario C, Negativtest #4). Never thrown on the sync path —
+ *  there it becomes a `sync_conflicts` row for a person to decide. It exists
+ *  for the online callers that must refuse outright. */
+export class RevisionConflictError extends DomainError {
+  constructor(detail: string) {
+    super('REVISION_CONFLICT', `Revisionskonflikt: ${detail}`, 409);
+  }
+}
+
+/** A chunked upload whose parts do not add up to what the device declared,
+ *  or whose reassembled bytes hash differently than announced. */
+export class CorruptEvidenceError extends DomainError {
+  constructor(detail: string) {
+    super('MISSING_OR_CORRUPT_EVIDENCE', `Nachweis nicht verwertbar: ${detail}`, 422);
+  }
+}

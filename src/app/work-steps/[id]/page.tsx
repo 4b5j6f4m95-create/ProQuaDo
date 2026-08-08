@@ -50,6 +50,7 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
   const openNcrs = step.raisedNonConformances.filter(
     (ncr) => ncr.status !== 'CLOSED' && ncr.status !== 'CANCELLED',
   );
+  const openConflicts = step.openConflicts;
   const awaitsMyReview =
     step.status === 'AWAITING_SECOND_APPROVAL' &&
     step.secondApproval !== null &&
@@ -91,6 +92,25 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
             </>
           )}
         </p>
+      )}
+
+      {openConflicts.length > 0 && (
+        // docs/07 A8. The worker is told what happened and that it is being
+        // decided — not offered a way to decide it themselves, and not told
+        // to try again.
+        <section className="card blocked-card">
+          <h2>⚠ Konflikt erkannt</h2>
+          {openConflicts.map((conflict) => (
+            <p key={conflict.id}>
+              {conflict.summary}
+              <br />
+              Ihre Ausführung bleibt mit der verwendeten Revision dokumentiert. Eine verantwortliche
+              Person muss entscheiden, wie fortgefahren wird.
+              <br />
+              <Link href={`/sync/conflicts/${conflict.id}`}>Details anzeigen</Link>
+            </p>
+          ))}
+        </section>
       )}
 
       {(step.activeHolds.length > 0 || openNcrs.length > 0) && (
@@ -459,6 +479,9 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
             workStepInstanceId={step.id}
             confirmationText={STEP_CONFIRMATION_TEXT}
             openRequirements={openCount}
+            usedDocumentRevisionIds={step.planStep.documentBindings.map(
+              (binding) => binding.documentRevision.id,
+            )}
           />
 
           <form action={pauseWorkStepAction}>

@@ -54,7 +54,13 @@ const VALID_TRANSITIONS: Record<WorkStepStatus, readonly WorkStepStatus[]> = {
   // gap and resubmit; the rejected submission itself stays as a historical
   // record with its reasons.
   COMPLETION_REJECTED: ['IN_PROGRESS'],
-  BLOCKED: ['IN_PROGRESS', 'REWORK_REQUIRED'],
+  // COMPLETED and SUPERSEDED are reachable from BLOCKED since Phase 5, and
+  // only through a recorded conflict decision (src/domain/sync/decide-conflict.ts):
+  // "Weiterhin gültig" completes the step with its original revision
+  // reference, "Wiederholung erforderlich" retires it in favour of a fresh
+  // attempt. Both are docs/06 outcomes of a REVISION_CONFLICT; neither is
+  // reachable from a device.
+  BLOCKED: ['IN_PROGRESS', 'REWORK_REQUIRED', 'COMPLETED', 'SUPERSEDED'],
   SKIP_REQUESTED: ['SKIPPED', 'IN_PROGRESS'],
   REWORK_REQUIRED: ['IN_PROGRESS'],
   COMPLETED: [],

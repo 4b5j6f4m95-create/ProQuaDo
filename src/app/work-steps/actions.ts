@@ -103,6 +103,15 @@ export async function completeWorkStepAction(
         signatureMethod: 'PIN',
         pin: String(formData.get('pin')),
       },
+      // Which document revisions were on screen while the step was worked
+      // on. The online client can state this too, and should: the revision
+      // comparison at validation is not an offline-only concern — a page
+      // left open across a release is stale in exactly the same way
+      // (Abnahmeszenario C).
+      usedDocumentRevisionIds: formData
+        .getAll('usedDocumentRevisionIds')
+        .map(String)
+        .filter(Boolean),
     });
   } catch (error) {
     if (error instanceof DomainError || error instanceof AuthzError) {

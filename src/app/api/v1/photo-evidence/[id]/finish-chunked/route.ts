@@ -1,0 +1,36 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { withErrorHandling } from '@/lib/api/handler';
+import { requireAuthContext } from '@/lib/authz/require-permission';
+import { finishChunkedPhotoUpload } from '@/domain/execution/photo-upload-chunks';
+
+// Assembles the chunks and verifies the whole file server-side. The declared
+// hash is checked, never trusted (Negativtest #7); re-finishing an already
+// completed upload is a no-op (Negativtest #14).
+const finishSchema = z.object({
+  expectedHashSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  deviceId: z.string().max(255).optional(),
+});
+
+export async function POST(
+  request: Request,
+  { params }: { params: { id: string } },
+): Promise<NextResponse> {
+  return withErrorHandling(request, async () => {
+    const actor = await requireAuthContext();
+    const body = finishSchema.parse(await request.json());
+
+    const evidence = await finishChunkedPhotoUpload({
+      actor,
+      photoEvidenceId: params.id,
+      ...body,
+    });
+
+    return NextResponse.json({
+      photoEvidenceId: evidence.id,
+      uploadStatus: evidence.uploadStatus,
+      fileHashSha256: evidence.fileHashSha256,
+      malwareScanStatus: evidence.malwareScanStatus,
+    });
+  });
+}
