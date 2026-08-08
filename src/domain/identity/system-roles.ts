@@ -2,11 +2,17 @@
 // Berechtigungen Matrix" in docs/04_ROLES_PERMISSIONS_MATRIX.md.
 //
 // Permissions marked `*` or `**` in that matrix (organisationsweit
-// konfigurierbar bzw. kontextabhängig/Delegation) are deliberately NOT
-// included in PROJECT_LEAD's default grant below — masterprompt.md Kap. 0
-// requires a conservative default for open points, and the doc's own
-// footnote says QM decides by default. Granting them org-wide is a Phase 2+
-// configuration action (role.manage), not a hardcoded default.
+// konfigurierbar bzw. kontextabhängig/Delegation) are by default NOT
+// included in PROJECT_LEAD's grant below where the matrix's footnote gives
+// an alternative default holder — masterprompt.md Kap. 0 requires a
+// conservative default for open points, and QM decides document approval/
+// release by default. `production_plan.release` is the one exception: the
+// matrix has NO other role holding it at all, and masterprompt.md Kap. 3
+// lists production plan authorship/release as a core Projektleiter
+// responsibility ("Arbeitsschritte, Abhängigkeiten... definieren"), unlike
+// document release which Kap. 3 explicitly assigns to QM's "fachlich
+// vorgesehene Freigaben". Excluding it here would mean NO ONE could ever
+// release a plan — not a conservative default, just a functional gap.
 
 export const SYSTEM_ROLES = {
   ADMIN: {
@@ -74,6 +80,7 @@ export const SYSTEM_ROLES = {
       'document.view',
       'production_plan.create',
       'production_plan.update',
+      'production_plan.release',
       'work_step_definition.create',
       'work_step_definition.update',
       'production_order.view',

@@ -22,10 +22,74 @@ async function main(): Promise<void> {
   const userIds = await seedDemoUsers(db, seeded, [
     { email: 'admin.test@proquado.local', displayName: 'Admin Test', roleCode: 'ADMIN' },
     { email: 'worker.test@proquado.local', displayName: 'Worker Test', roleCode: 'WORKER' },
+    { email: 'pl.test@proquado.local', displayName: 'Project Lead Test', roleCode: 'PROJECT_LEAD' },
+    {
+      email: 'qm.test@proquado.local',
+      displayName: 'Quality Manager Test',
+      roleCode: 'QUALITY_MANAGER',
+    },
   ]);
   for (const [email, id] of Object.entries(userIds)) {
     console.log(`Demo user ${email} (${id}) — pending first login`);
   }
+
+  // Minimal demo fixtures so Phase 2 UI has something to show on first run.
+  const site = await db.site.upsert({
+    where: { organizationId_code: { organizationId: seeded.organizationId, code: 'HQ' } },
+    update: {},
+    create: { organizationId: seeded.organizationId, code: 'HQ', name: 'Hauptstandort' },
+  });
+  const customer = await db.customer.upsert({
+    where: {
+      organizationId_customerNumber: {
+        organizationId: seeded.organizationId,
+        customerNumber: 'CUST-001',
+      },
+    },
+    update: {},
+    create: {
+      organizationId: seeded.organizationId,
+      customerNumber: 'CUST-001',
+      name: 'Musterfirma GmbH',
+    },
+  });
+  const projectLeadId = userIds['pl.test@proquado.local'];
+  if (!projectLeadId) throw new Error('pl.test user was not seeded');
+
+  const project = await db.project.upsert({
+    where: {
+      organizationId_projectNumber: {
+        organizationId: seeded.organizationId,
+        projectNumber: 'PROJ-2026-0001',
+      },
+    },
+    update: {},
+    create: {
+      organizationId: seeded.organizationId,
+      siteId: site.id,
+      projectNumber: 'PROJ-2026-0001',
+      name: 'Demo-Projekt Gehäusebaugruppe',
+      customerId: customer.id,
+      createdById: projectLeadId,
+      status: 'ACTIVE',
+    },
+  });
+  await db.product.upsert({
+    where: {
+      organizationId_productNumber: {
+        organizationId: seeded.organizationId,
+        productNumber: 'PROD-001',
+      },
+    },
+    update: {},
+    create: {
+      organizationId: seeded.organizationId,
+      projectId: project.id,
+      productNumber: 'PROD-001',
+      name: 'Gehäuse Baugruppe A',
+    },
+  });
+  console.log(`Demo project: ${project.name} (${project.id})`);
 }
 
 main()

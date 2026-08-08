@@ -31,20 +31,36 @@ model Organization {
   updatedAt   DateTime @updatedAt @map("updated_at")
   version     Int      @default(1)
 
-  sites            Site[]
-  departments      Department[]
-  workCenters      WorkCenter[]
-  users            User[]
-  employees        Employee[]
-  roles            Role[]
-  permissions      Permission[]
-  userRoles        UserRole[]
-  rolePermissions  RolePermission[]
-  qualifications   Qualification[]
+  sites                  Site[]
+  departments            Department[]
+  workCenters            WorkCenter[]
+  users                  User[]
+  employees              Employee[]
+  roles                  Role[]
+  permissions            Permission[]
+  userRoles              UserRole[]
+  rolePermissions        RolePermission[]
+  qualifications         Qualification[]
   employeeQualifications EmployeeQualification[]
-  delegations      Delegation[]
-  auditEvents      AuditEvent[]
-  outboxEvents     OutboxEvent[]
+  delegations            Delegation[]
+  auditEvents            AuditEvent[]
+  outboxEvents           OutboxEvent[]
+
+  customers               Customer[]
+  projects                Project[]
+  projectMembers          ProjectMember[]
+  products                Product[]
+  assemblies              Assembly[]
+  parts                   Part[]
+  documents               Document[]
+  documentRevisions       DocumentRevision[]
+  documentApprovals       DocumentApproval[]
+  productionPlans         ProductionPlan[]
+  productionPlanRevisions ProductionPlanRevision[]
+  planSteps               PlanStep[]
+  planStepDependencies    PlanStepDependency[]
+  stepDocumentBindings    StepDocumentBinding[]
+  checklistItems          ChecklistItem[]
 
   @@map("organizations")
 }
@@ -63,6 +79,7 @@ model Site {
   organization Organization @relation(fields: [organizationId], references: [id])
   departments  Department[]
   employees    Employee[]
+  projects     Project[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -84,6 +101,7 @@ model Department {
   site         Site         @relation(fields: [siteId], references: [id])
   workCenters  WorkCenter[]
   employees    Employee[]
+  planSteps    PlanStep[]
 
   @@index([organizationId])
   @@index([siteId])
@@ -103,6 +121,7 @@ model WorkCenter {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   department   Department   @relation(fields: [departmentId], references: [id])
+  planSteps    PlanStep[]
 
   @@index([organizationId])
   @@index([departmentId])
@@ -130,19 +149,22 @@ model User {
   delegationsGiven    Delegation[] @relation("DelegatingUser")
   delegationsReceived Delegation[] @relation("DelegatedUser")
 
+  projectMemberships ProjectMember[]
+  documentApprovals  DocumentApproval[]
+
   @@unique([organizationId, externalId])
   @@index([organizationId])
   @@map("users")
 }
 
 model Device {
-  id           String    @id @default(uuid())
-  userId       String    @map("user_id")
-  deviceLabel  String?   @map("device_label")
-  isRevoked    Boolean   @default(false) @map("is_revoked")
-  lastSeenAt   DateTime? @map("last_seen_at")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  deviceLabel String?   @map("device_label")
+  isRevoked   Boolean   @default(false) @map("is_revoked")
+  lastSeenAt  DateTime? @map("last_seen_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id])
 
@@ -151,12 +173,12 @@ model Device {
 }
 
 model Session {
-  id           String   @id @default(uuid())
-  userId       String   @map("user_id")
-  deviceId     String?  @map("device_id")
-  expiresAt    DateTime @map("expires_at")
-  revokedAt    DateTime? @map("revoked_at")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  deviceId  String?   @map("device_id")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id])
 
@@ -273,7 +295,7 @@ model Qualification {
   updatedAt      DateTime @updatedAt @map("updated_at")
   version        Int      @default(1)
 
-  organization Organization            @relation(fields: [organizationId], references: [id])
+  organization           Organization            @relation(fields: [organizationId], references: [id])
   employeeQualifications EmployeeQualification[]
 
   @@unique([organizationId, code])
@@ -282,15 +304,15 @@ model Qualification {
 }
 
 model EmployeeQualification {
-  id               String    @id @default(uuid())
-  organizationId   String    @map("organization_id")
-  employeeId       String    @map("employee_id")
-  qualificationId  String    @map("qualification_id")
-  certifiedAt      DateTime  @map("certified_at")
-  expiresAt        DateTime? @map("expires_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
-  version          Int       @default(1)
+  id              String    @id @default(uuid())
+  organizationId  String    @map("organization_id")
+  employeeId      String    @map("employee_id")
+  qualificationId String    @map("qualification_id")
+  certifiedAt     DateTime  @map("certified_at")
+  expiresAt       DateTime? @map("expires_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  version         Int       @default(1)
 
   organization  Organization  @relation(fields: [organizationId], references: [id])
   employee      Employee      @relation(fields: [employeeId], references: [id])
@@ -303,21 +325,21 @@ model EmployeeQualification {
 }
 
 model Delegation {
-  id                String   @id @default(uuid())
-  organizationId    String   @map("organization_id")
-  delegatingUserId  String   @map("delegating_user_id")
-  delegatedUserId   String   @map("delegated_user_id")
-  scopeType         String?  @map("scope_type") // ROLE, PERMISSION, QUALIFICATION
-  scopeId           String?  @map("scope_id")
-  reason            String
-  startsAt          DateTime @map("starts_at")
-  expiresAt         DateTime @map("expires_at")
-  createdAt         DateTime @default(now()) @map("created_at")
-  version           Int      @default(1)
+  id               String   @id @default(uuid())
+  organizationId   String   @map("organization_id")
+  delegatingUserId String   @map("delegating_user_id")
+  delegatedUserId  String   @map("delegated_user_id")
+  scopeType        String?  @map("scope_type") // ROLE, PERMISSION, QUALIFICATION
+  scopeId          String?  @map("scope_id")
+  reason           String
+  startsAt         DateTime @map("starts_at")
+  expiresAt        DateTime @map("expires_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  version          Int      @default(1)
 
-  organization    Organization @relation(fields: [organizationId], references: [id])
-  delegatingUser  User         @relation("DelegatingUser", fields: [delegatingUserId], references: [id])
-  delegatedUser   User         @relation("DelegatedUser", fields: [delegatedUserId], references: [id])
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  delegatingUser User         @relation("DelegatingUser", fields: [delegatingUserId], references: [id])
+  delegatedUser  User         @relation("DelegatedUser", fields: [delegatedUserId], references: [id])
 
   @@index([organizationId])
   @@map("delegations")
@@ -328,26 +350,26 @@ model Delegation {
 // ─────────────────────────────────────────────────────────────
 
 model AuditEvent {
-  id                String   @id @default(uuid())
-  organizationId    String   @map("organization_id")
-  correlationId     String?  @map("correlation_id")
-  actorId           String?  @map("actor_id")
-  delegatedActorId  String?  @map("delegated_actor_id")
-  eventType         String   @map("event_type") // e.g. "work_step.started"
-  resourceType      String   @map("resource_type")
-  resourceId        String?  @map("resource_id")
-  previousValues    Json?    @map("previous_values")
-  newValues         Json?    @map("new_values")
-  reason            String?
-  source            String? // web, mobile, api, import
-  deviceId          String?  @map("device_id")
-  clientTimestamp   DateTime? @map("client_timestamp")
-  serverTimestamp   DateTime @default(now()) @map("server_timestamp")
-  result            String? // SUCCESS, FAILURE, PARTIAL
-  failureReason     String?  @map("failure_reason")
-  requestId         String?  @map("request_id")
-  idempotencyKey    String?  @map("idempotency_key")
-  createdAt         DateTime @default(now()) @map("created_at")
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  correlationId    String?   @map("correlation_id")
+  actorId          String?   @map("actor_id")
+  delegatedActorId String?   @map("delegated_actor_id")
+  eventType        String    @map("event_type") // e.g. "work_step.started"
+  resourceType     String    @map("resource_type")
+  resourceId       String?   @map("resource_id")
+  previousValues   Json?     @map("previous_values")
+  newValues        Json?     @map("new_values")
+  reason           String?
+  source           String? // web, mobile, api, import
+  deviceId         String?   @map("device_id")
+  clientTimestamp  DateTime? @map("client_timestamp")
+  serverTimestamp  DateTime  @default(now()) @map("server_timestamp")
+  result           String? // SUCCESS, FAILURE, PARTIAL
+  failureReason    String?   @map("failure_reason")
+  requestId        String?   @map("request_id")
+  idempotencyKey   String?   @map("idempotency_key")
+  createdAt        DateTime  @default(now()) @map("created_at")
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
@@ -358,19 +380,421 @@ model AuditEvent {
 }
 
 model OutboxEvent {
-  id            String    @id @default(uuid())
-  organizationId String   @map("organization_id")
-  aggregateType String    @map("aggregate_type")
-  aggregateId   String    @map("aggregate_id")
-  eventType     String    @map("event_type")
-  payload       Json
-  createdAt     DateTime  @default(now()) @map("created_at")
-  processedAt   DateTime? @map("processed_at")
-  processed     Boolean   @default(false)
-  retryCount    Int       @default(0) @map("retry_count")
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  aggregateType  String    @map("aggregate_type")
+  aggregateId    String    @map("aggregate_id")
+  eventType      String    @map("event_type")
+  payload        Json
+  createdAt      DateTime  @default(now()) @map("created_at")
+  processedAt    DateTime? @map("processed_at")
+  processed      Boolean   @default(false)
+  retryCount     Int       @default(0) @map("retry_count")
 
   organization Organization @relation(fields: [organizationId], references: [id])
 
   @@index([organizationId, processed])
   @@map("outbox_events")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Projects & Products (Phase 2)
+// ─────────────────────────────────────────────────────────────
+
+model Customer {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  customerNumber String   @map("customer_number")
+  name           String
+  email          String?
+  phone          String?
+  address        String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  projects     Project[]
+
+  @@unique([organizationId, customerNumber])
+  @@index([organizationId])
+  @@map("customers")
+}
+
+// Status machine: DRAFT → ACTIVE → COMPLETED, with ON_HOLD/CANCELLED/ARCHIVED
+// side states — see src/domain/projects/project-status.ts.
+model Project {
+  id                  String    @id @default(uuid())
+  organizationId      String    @map("organization_id")
+  siteId              String    @map("site_id")
+  projectNumber       String    @map("project_number")
+  name                String
+  customerId          String    @map("customer_id")
+  customerOrderNumber String?   @map("customer_order_number")
+  description         String?
+  status              String    @default("DRAFT")
+  priority            Int       @default(3)
+  plannedStartDate    DateTime? @map("planned_start_date") @db.Date
+  plannedEndDate      DateTime? @map("planned_end_date") @db.Date
+  // Audit-adjacent reference, deliberately not a Prisma relation — same
+  // pattern as AuditEvent.actorId (see src/lib/audit/write-audit-event.ts):
+  // avoids forcing a back-relation array onto User for every "created by"
+  // column in the schema, and survives user anonymization cleanly.
+  createdById         String    @map("created_by_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  version             Int       @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  site         Site         @relation(fields: [siteId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+
+  members         ProjectMember[]
+  products        Product[]
+  documents       Document[]
+  productionPlans ProductionPlan[]
+
+  @@unique([organizationId, projectNumber])
+  @@index([organizationId])
+  @@index([organizationId, status])
+  @@map("projects")
+}
+
+model ProjectMember {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  projectId      String   @map("project_id")
+  userId         String   @map("user_id")
+  role           String? // free-text label, e.g. 'PROJECT_MANAGER' — RBAC is enforced via user_roles, not this field
+  assignedAt     DateTime @default(now()) @map("assigned_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  project      Project      @relation(fields: [projectId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, projectId, userId])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("project_members")
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  projectId      String   @map("project_id")
+  productNumber  String   @map("product_number")
+  name           String
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization    Organization     @relation(fields: [organizationId], references: [id])
+  project         Project          @relation(fields: [projectId], references: [id])
+  assemblies      Assembly[]
+  productionPlans ProductionPlan[]
+
+  @@unique([organizationId, productNumber])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("products")
+}
+
+model Assembly {
+  id               String   @id @default(uuid())
+  organizationId   String   @map("organization_id")
+  productId        String   @map("product_id")
+  assemblyNumber   String   @map("assembly_number")
+  name             String
+  description      String?
+  parentAssemblyId String?  @map("parent_assembly_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  version          Int      @default(1)
+
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  product         Product      @relation(fields: [productId], references: [id])
+  parentAssembly  Assembly?    @relation("AssemblyHierarchy", fields: [parentAssemblyId], references: [id])
+  childAssemblies Assembly[]   @relation("AssemblyHierarchy")
+
+  @@index([organizationId])
+  @@index([productId])
+  @@map("assemblies")
+}
+
+model Part {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  partNumber     String   @map("part_number")
+  name           String
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, partNumber])
+  @@index([organizationId])
+  @@map("parts")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Documents & Revisions (Phase 2)
+// ─────────────────────────────────────────────────────────────
+
+model Document {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  projectId      String   @map("project_id")
+  documentNumber String   @map("document_number")
+  title          String
+  category       String? // 'DRAWING', 'INSTRUCTION', 'SPECIFICATION', 'CHECKLIST', ...
+  department     String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization          @relation(fields: [organizationId], references: [id])
+  project      Project               @relation(fields: [projectId], references: [id])
+  revisions    DocumentRevision[]
+  stepBindings StepDocumentBinding[]
+
+  @@unique([organizationId, documentNumber])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("documents")
+}
+
+// Status machine: DRAFT → IN_REVIEW → APPROVED → RELEASED → SUPERSEDED |
+// WITHDRAWN → ARCHIVED. See docs/03_STATE_MACHINES.md "Document Revision
+// Status Machine" and src/domain/documents/document-status.ts. Once
+// RELEASED, a revision is immutable — see Geschäftsgrundsatz 5/6.
+model DocumentRevision {
+  id                String    @id @default(uuid())
+  organizationId    String    @map("organization_id")
+  documentId        String    @map("document_id")
+  revisionNumber    String    @map("revision_number") // '01', '02', ...
+  status            String    @default("DRAFT")
+  title             String
+  description       String?
+  changeReason      String?   @map("change_reason")
+  mimeType          String?   @map("mime_type")
+  fileSizeBytes     BigInt?   @map("file_size_bytes")
+  fileHashSha256    String?   @map("file_hash_sha256")
+  storageKey        String?   @map("storage_key")
+  malwareScanStatus String?   @map("malware_scan_status") // PENDING, CLEAN, INFECTED, ERROR
+  createdById       String    @map("created_by_id") // see Project.createdById comment re: not a relation
+  createdAt         DateTime  @default(now()) @map("created_at")
+  releasedById      String?   @map("released_by_id")
+  releasedAt        DateTime? @map("released_at")
+  validFrom         DateTime  @default(now()) @map("valid_from")
+  validUntil        DateTime? @map("valid_until")
+  priorRevisionId   String?   @map("prior_revision_id")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  version           Int       @default(1)
+
+  organization  Organization          @relation(fields: [organizationId], references: [id])
+  document      Document              @relation(fields: [documentId], references: [id])
+  priorRevision DocumentRevision?     @relation("DocumentRevisionHistory", fields: [priorRevisionId], references: [id])
+  supersededBy  DocumentRevision[]    @relation("DocumentRevisionHistory")
+  approvals     DocumentApproval[]
+  stepBindings  StepDocumentBinding[]
+
+  @@unique([organizationId, documentId, revisionNumber])
+  @@index([organizationId])
+  @@index([documentId, status])
+  @@map("document_revisions")
+}
+
+model DocumentApproval {
+  id                 String    @id @default(uuid())
+  organizationId     String    @map("organization_id")
+  documentRevisionId String    @map("document_revision_id")
+  approverId         String    @map("approver_id")
+  approvalStatus     String    @default("PENDING") @map("approval_status") // PENDING, APPROVED, REJECTED
+  reason             String?
+  approvedAt         DateTime? @map("approved_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  version            Int       @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  documentRevision DocumentRevision @relation(fields: [documentRevisionId], references: [id])
+  approver         User             @relation(fields: [approverId], references: [id])
+
+  @@index([organizationId])
+  @@index([documentRevisionId])
+  @@map("document_approvals")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Production Planning (Phase 2)
+// ─────────────────────────────────────────────────────────────
+
+model ProductionPlan {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  projectId      String   @map("project_id")
+  productId      String   @map("product_id")
+  planNumber     String   @map("plan_number")
+  name           String
+  description    String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization             @relation(fields: [organizationId], references: [id])
+  project      Project                  @relation(fields: [projectId], references: [id])
+  product      Product                  @relation(fields: [productId], references: [id])
+  revisions    ProductionPlanRevision[]
+
+  @@unique([organizationId, planNumber])
+  @@index([organizationId])
+  @@index([projectId])
+  @@map("production_plans")
+}
+
+// Status machine: DRAFT → IN_REVIEW → APPROVED → RELEASED → SUPERSEDED. Plan
+// graphs are validated for cycles before RELEASED — see
+// src/domain/production-plans/validate-plan-graph.ts and Negativtest #15.
+model ProductionPlanRevision {
+  id               String    @id @default(uuid())
+  organizationId   String    @map("organization_id")
+  productionPlanId String    @map("production_plan_id")
+  revisionNumber   String    @map("revision_number")
+  status           String    @default("DRAFT")
+  description      String?
+  changeReason     String?   @map("change_reason")
+  createdById      String    @map("created_by_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  releasedById     String?   @map("released_by_id")
+  releasedAt       DateTime? @map("released_at")
+  priorRevisionId  String?   @map("prior_revision_id")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  version          Int       @default(1)
+
+  organization   Organization             @relation(fields: [organizationId], references: [id])
+  productionPlan ProductionPlan           @relation(fields: [productionPlanId], references: [id])
+  priorRevision  ProductionPlanRevision?  @relation("PlanRevisionHistory", fields: [priorRevisionId], references: [id])
+  supersededBy   ProductionPlanRevision[] @relation("PlanRevisionHistory")
+  steps          PlanStep[]
+
+  @@unique([organizationId, productionPlanId, revisionNumber])
+  @@index([organizationId])
+  @@index([productionPlanId, status])
+  @@map("production_plan_revisions")
+}
+
+model PlanStep {
+  id                       String   @id @default(uuid())
+  organizationId           String   @map("organization_id")
+  productionPlanRevisionId String   @map("production_plan_revision_id")
+  stepNumber               Int      @map("step_number")
+  title                    String
+  description              String?
+  instruction              String?
+  departmentId             String?  @map("department_id")
+  workCenterId             String?  @map("work_center_id")
+  requiredRole             String?  @map("required_role")
+  estimatedDurationMinutes Int?     @map("estimated_duration_minutes")
+  photoRequired            Boolean  @default(false) @map("photo_required")
+  signatureRequired        Boolean  @default(true) @map("signature_required")
+  fourEyesRequired         Boolean  @default(false) @map("four_eyes_required")
+  fourEyesScope            String?  @map("four_eyes_scope") // EXECUTION_AND_REVIEW, REVIEW_ONLY
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+  version                  Int      @default(1)
+
+  organization           Organization           @relation(fields: [organizationId], references: [id])
+  productionPlanRevision ProductionPlanRevision @relation(fields: [productionPlanRevisionId], references: [id])
+  department             Department?            @relation(fields: [departmentId], references: [id])
+  workCenter             WorkCenter?            @relation(fields: [workCenterId], references: [id])
+
+  // Naming is deliberately explicit about direction, not "dependents"/
+  // "predecessors" (which reads ambiguously — is a "predecessors" array MY
+  // predecessors, or edges where I'm predecessor-to-someone-else? A real
+  // bug shipped from that ambiguity once already, see git history).
+  // predecessorLinks: edges where I am the dependent — read predecessorStepId
+  // off these to find what precedes me.
+  predecessorLinks PlanStepDependency[]  @relation("DependentStep")
+  // successorLinks: edges where I am the predecessor — read dependentStepId
+  // off these to find what comes after me.
+  successorLinks   PlanStepDependency[]  @relation("PredecessorStep")
+  documentBindings StepDocumentBinding[]
+  checklistItems   ChecklistItem[]
+
+  @@unique([organizationId, productionPlanRevisionId, stepNumber])
+  @@index([organizationId])
+  @@index([productionPlanRevisionId])
+  @@map("plan_steps")
+}
+
+model PlanStepDependency {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  dependentStepId   String   @map("dependent_step_id")
+  predecessorStepId String   @map("predecessor_step_id")
+  dependencyType    String   @default("FINISH_TO_START") @map("dependency_type")
+  lagMinutes        Int      @default(0) @map("lag_minutes")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  dependentStep   PlanStep     @relation("DependentStep", fields: [dependentStepId], references: [id])
+  predecessorStep PlanStep     @relation("PredecessorStep", fields: [predecessorStepId], references: [id])
+
+  @@unique([organizationId, dependentStepId, predecessorStepId])
+  @@index([organizationId])
+  @@map("plan_step_dependencies")
+}
+
+// Binds a plan step to a specific, pinned document revision (never "latest")
+// — see Geschäftsgrundsatz 6 and docs/07_WIREFLOWS_UX.md. Region/page are
+// optional pointers into the document for the viewer to highlight.
+model StepDocumentBinding {
+  id                 String   @id @default(uuid())
+  organizationId     String   @map("organization_id")
+  planStepId         String   @map("plan_step_id")
+  documentId         String   @map("document_id")
+  documentRevisionId String   @map("document_revision_id")
+  pageNumber         Int?     @map("page_number")
+  regionX            Float?   @map("region_x")
+  regionY            Float?   @map("region_y")
+  regionWidth        Float?   @map("region_width")
+  regionHeight       Float?   @map("region_height")
+  markerLabel        String?  @map("marker_label")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  planStep         PlanStep         @relation(fields: [planStepId], references: [id])
+  document         Document         @relation(fields: [documentId], references: [id])
+  documentRevision DocumentRevision @relation(fields: [documentRevisionId], references: [id])
+
+  @@index([organizationId])
+  @@index([planStepId])
+  @@map("step_document_bindings")
+}
+
+// Deliberately minimal for Phase 2 (freeform per-step checklist items).
+// Reusable checklist_templates, inspection_characteristics (measurement
+// tolerances) and photo_requirements (category/min/max counts) are richer,
+// reusable-template concepts that belong to Phase 3/4 (Execution/Quality) —
+// see docs/10_MVP_PLAN.md. Not silently dropped: tracked there.
+model ChecklistItem {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  planStepId     String   @map("plan_step_id")
+  itemNumber     Int      @map("item_number")
+  text           String
+  isRequired     Boolean  @default(true) @map("is_required")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  planStep     PlanStep     @relation(fields: [planStepId], references: [id])
+
+  @@unique([organizationId, planStepId, itemNumber])
+  @@index([organizationId])
+  @@map("checklist_items")
 }
