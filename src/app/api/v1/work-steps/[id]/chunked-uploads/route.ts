@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { resolveDeviceId } from '@/lib/api/device-context';
 import { beginChunkedPhotoUpload } from '@/domain/execution/photo-upload-chunks';
 
 // Opens a resumable upload (docs/06 "Resumable Upload"). The device declares
@@ -16,7 +17,7 @@ const beginSchema = z.object({
   photoCategory: z.string().max(100).optional(),
   description: z.string().max(2000).optional(),
   takenAt: z.coerce.date().optional(),
-  deviceId: z.string().max(255).optional(),
+  deviceId: z.string().optional(),
 });
 
 export async function POST(
@@ -31,6 +32,7 @@ export async function POST(
       actor,
       workStepInstanceId: params.id,
       ...body,
+      deviceId: await resolveDeviceId(actor, body.deviceId),
     });
     return NextResponse.json(state, { status: 201 });
   });

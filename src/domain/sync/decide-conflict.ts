@@ -8,8 +8,15 @@ import { ConfirmationFailedError, NotFoundError, ValidationError } from '@/lib/d
 import type { Actor } from '@/domain/shared/actor';
 import { validateSubmissionWithin } from '@/domain/execution/complete-work-step';
 import { releaseWorkStepInstance } from '@/domain/execution/release-work-step';
+import {
+  isValidWorkStepTransition,
+  type WorkStepStatus,
+} from '@/domain/execution/work-step-status';
 import { raiseNonConformanceWithin } from '@/domain/quality/raise-non-conformance';
-import { applyProductionHoldWithin } from '@/domain/quality/production-holds';
+import {
+  applyProductionHoldWithin,
+  hasOpenBlockingNonConformance,
+} from '@/domain/quality/production-holds';
 import {
   DECISION_LABEL,
   isDecisionAllowed,
@@ -322,11 +329,23 @@ async function repeatStep(
   // Released straight away: the predecessors were satisfied when the
   // original was released, and nothing about them changed. What changed is
   // the document set, which the new release token now pins.
-  const released = await releaseWorkStepInstance(tx, {
-    organizationId: command.actor.organizationId,
-    workStepInstanceId: repeat.id,
-    releasedById: command.actor.userId,
-  });
+  //
+  // Unless quality is holding the order. releaseEligibleSuccessors refuses to
+  // release into an open blocking NCR for a stated reason — "so that a
+  // successor is not even shown as READY while a blocking NCR is open" — and
+  // this path skipped that check, so a repeat could appear as READY on the
+  // tablet while every attempt to start it was refused by
+  // assertNotBlockedForStep. The invariant held; the screen lied. The repeat
+  // stays LOCKED instead and is released by the NCR workflow like any other
+  // step waiting on a disposition.
+  const blocked = await hasOpenBlockingNonConformance(tx, instance.productionOrderId);
+  const released = blocked
+    ? null
+    : await releaseWorkStepInstance(tx, {
+        organizationId: command.actor.organizationId,
+        workStepInstanceId: repeat.id,
+        releasedById: command.actor.userId,
+      });
 
   await writeAuditEvent(tx, {
     organizationId: command.actor.organizationId,
@@ -341,9 +360,11 @@ async function repeatStep(
   });
 
   return {
-    resultingAction: `Ausführung als überholt markiert; Wiederholung als Versuch ${repeat.attemptNumber} freigegeben.`,
+    resultingAction: blocked
+      ? `Ausführung als überholt markiert; Wiederholung als Versuch ${repeat.attemptNumber} angelegt, aber noch gesperrt — eine blockierende Abweichung ist offen.`
+      : `Ausführung als überholt markiert; Wiederholung als Versuch ${repeat.attemptNumber} freigegeben.`,
     workStepStatus: 'SUPERSEDED',
-    nextStepInstanceIds: [released.workStepInstanceId],
+    nextStepInstanceIds: released ? [released.workStepInstanceId] : [],
   };
 }
 
@@ -445,10 +466,23 @@ async function reopenStepForWork(
     select: { id: true, status: true },
   });
   if (!instance) return undefined;
-  // Only states that are "waiting on this decision" are reopened. A step
-  // that has meanwhile been completed or superseded by another path is left
-  // alone rather than dragged backwards.
-  if (!['BLOCKED', 'VALIDATING', 'COMPLETION_REJECTED'].includes(instance.status)) {
+  // Two conditions, and both are needed.
+  //
+  // The first is intent: only a step that is actually waiting on THIS
+  // decision is reopened. One that has meanwhile been completed or superseded
+  // by another path is left alone rather than dragged backwards.
+  //
+  // The second is the state machine. The list used to be the only check and
+  // it contained VALIDATING — a status with no VALIDATING → IN_PROGRESS edge,
+  // so the write went around the machine that work-step-status.ts exists to
+  // be the single authority for. (Unreachable in practice, since validation
+  // runs in the same transaction that sets VALIDATING; unreachable is not the
+  // same as guarded.) Asking isValidWorkStepTransition as well means the
+  // conflict centre cannot become a back door for a status added later.
+  const status = instance.status as WorkStepStatus;
+  const awaitingThisDecision =
+    status === 'BLOCKED' || status === 'VALIDATING' || status === 'COMPLETION_REJECTED';
+  if (!awaitingThisDecision || !isValidWorkStepTransition(status, 'IN_PROGRESS')) {
     return instance.status;
   }
 

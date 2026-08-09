@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { DeviceRevokedError, NotFoundError } from '@/lib/domain-errors';
+import { DeviceRevokedError, NotFoundError, ValidationError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 
 /**
@@ -30,8 +30,34 @@ export interface RegisteredDevice {
   registeredAt: Date;
 }
 
+/**
+ * Upper bound on simultaneously active devices per user.
+ *
+ * Not a comfort setting. `SYNC_COMMANDS` and `PHOTO_UPLOAD` are counted **per
+ * device** (docs/05), so without a ceiling here the limits are advisory: a
+ * client registers another device and buys itself another allowance, and one
+ * sync batch is up to 500 full server-side revalidations. The cap turns an
+ * unbounded amplification into a known factor.
+ *
+ * Ten is deliberately far above what a person needs (a tablet, a spare, a
+ * replacement after a loss) and far below what an amplification attempt
+ * needs. Revoked devices do not count — replacing a lost tablet must never
+ * be the thing that hits the ceiling.
+ */
+export const MAX_ACTIVE_DEVICES_PER_USER = 10;
+
 export async function registerDevice(command: RegisterDeviceCommand): Promise<RegisteredDevice> {
   return withOrgContext(command.actor.organizationId, async (tx) => {
+    const activeCount = await tx.device.count({
+      where: { userId: command.actor.userId, isRevoked: false },
+    });
+    if (activeCount >= MAX_ACTIVE_DEVICES_PER_USER) {
+      throw new ValidationError(
+        `Für dieses Konto sind bereits ${MAX_ACTIVE_DEVICES_PER_USER} Geräte registriert. ` +
+          'Bitte ein nicht mehr genutztes Gerät sperren lassen, bevor ein weiteres hinzukommt.',
+      );
+    }
+
     const device = await tx.device.create({
       data: {
         organizationId: command.actor.organizationId,

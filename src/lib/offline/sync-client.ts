@@ -233,12 +233,34 @@ async function markStepRejected(
   });
 }
 
+/**
+ * Pages per sync run. The loop used to be unbounded, which is fine until the
+ * server enforces its own baseline limit (docs/05 STANDARD_API, 100 req/min
+ * per user): a device rebuilding its projection from cursor 0 would then
+ * spend the whole minute budget on paging and get a 429 in the middle of it.
+ *
+ * A bound is the honest fix rather than a workaround, because the cursor is
+ * persisted per page — stopping early is not losing work, it is finishing on
+ * the next run. Twenty pages is up to 10 000 events, far past any realistic
+ * single sync.
+ */
+const MAX_PAGES_PER_SYNC = 20;
+
 async function pullAndApplyChanges(deps: SyncDeps): Promise<{ applied: number; cursor: string }> {
   let cursor = (await deps.db.getMeta<string>(CURSOR_META_KEY)) ?? '0';
   let applied = 0;
   let hasMore = true;
+  let pages = 0;
 
   while (hasMore) {
+    if (pages >= MAX_PAGES_PER_SYNC) {
+      deps.onLog?.(
+        `Änderungsstrom nach ${pages} Seiten unterbrochen — die Synchronisation setzt beim nächsten Lauf ab Cursor ${cursor} fort.`,
+      );
+      break;
+    }
+    pages++;
+
     const page = await deps.fetchJson<{
       cursor: string;
       hasMore: boolean;

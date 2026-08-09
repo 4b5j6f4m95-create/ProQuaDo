@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { resolveDeviceId } from '@/lib/api/device-context';
 import { completePhotoUpload } from '@/domain/execution/photo-evidence';
 import { serializeBigInt } from '@/lib/api/serialize';
 
 const completeSchema = z.object({
   expectedHashSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  deviceId: z.string().max(255).optional(),
+  deviceId: z.string().optional(),
 });
 
 export async function POST(
@@ -21,6 +22,7 @@ export async function POST(
       actor,
       photoEvidenceId: params.id,
       ...body,
+      deviceId: await resolveDeviceId(actor, body.deviceId),
     });
     return NextResponse.json(serializeBigInt(evidence));
   });

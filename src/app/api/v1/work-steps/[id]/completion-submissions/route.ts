@@ -2,12 +2,16 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { resolveDeviceId } from '@/lib/api/device-context';
 import { submitWorkStepCompletion } from '@/domain/execution/complete-work-step';
 
 const submissionSchema = z.object({
   idempotencyKey: z.string().uuid().optional(),
   clientCompletedAt: z.coerce.date().optional(),
-  deviceId: z.string().max(255).optional(),
+  // Verified, not just accepted — the value is written to
+  // completion_submissions.device_id and step_confirmations.device_id, which
+  // is an audit statement about who confirmed the step and from where.
+  deviceId: z.string().optional(),
   usedDocumentRevisionIds: z.array(z.string().uuid()).optional(),
   confirmation: z.object({
     signatureMethod: z.enum(['PIN', 'DIGITAL_SIGNATURE']),
@@ -49,7 +53,7 @@ export async function POST(
       idempotencyKey,
       confirmation: body.confirmation,
       clientCompletedAt: body.clientCompletedAt,
-      deviceId: body.deviceId,
+      deviceId: await resolveDeviceId(actor, body.deviceId),
       usedDocumentRevisionIds: body.usedDocumentRevisionIds,
     });
 

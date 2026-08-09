@@ -40,6 +40,9 @@ let transitionProductionOrderStatus: typeof import('@/domain/production-orders/c
 let releaseProductionOrder: typeof import('@/domain/production-orders/release-production-order').releaseProductionOrder;
 let assignProductionOrder: typeof import('@/domain/production-orders/assign-production-order').assignProductionOrder;
 let registerDevice: typeof import('@/domain/sync/device-registry').registerDevice;
+let revokeDevice: typeof import('@/domain/sync/device-registry').revokeDevice;
+let MAX_ACTIVE_DEVICES_PER_USER: typeof import('@/domain/sync/device-registry').MAX_ACTIVE_DEVICES_PER_USER;
+let resolveDeviceId: typeof import('@/lib/api/device-context').resolveDeviceId;
 let processSyncCommands: typeof import('@/domain/sync/sync-commands').processSyncCommands;
 let buildOfflineBundle: typeof import('@/domain/sync/offline-bundle').buildOfflineBundle;
 let startWorkStep: typeof import('@/domain/execution/start-work-step').startWorkStep;
@@ -82,7 +85,9 @@ beforeAll(async () => {
   ({ releaseProductionOrder } =
     await import('@/domain/production-orders/release-production-order'));
   ({ assignProductionOrder } = await import('@/domain/production-orders/assign-production-order'));
-  ({ registerDevice } = await import('@/domain/sync/device-registry'));
+  ({ registerDevice, revokeDevice, MAX_ACTIVE_DEVICES_PER_USER } =
+    await import('@/domain/sync/device-registry'));
+  ({ resolveDeviceId } = await import('@/lib/api/device-context'));
   ({ processSyncCommands } = await import('@/domain/sync/sync-commands'));
   ({ buildOfflineBundle } = await import('@/domain/sync/offline-bundle'));
   ({ startWorkStep } = await import('@/domain/execution/start-work-step'));
@@ -103,6 +108,7 @@ interface Fixtures {
   organizationId: string;
   worker: Actor;
   attacker: Actor;
+  admin: Actor;
   orderId: string;
   step1InstanceId: string;
   step2InstanceId: string;
@@ -130,6 +136,7 @@ async function seedTarget(name: string): Promise<Fixtures> {
     { email: `pl-${name}@t.local`, displayName: 'PL', roleCode: 'PROJECT_LEAD' },
     { email: `qm-${name}@t.local`, displayName: 'QM', roleCode: 'QUALITY_MANAGER' },
     { email: `pm-${name}@t.local`, displayName: 'PM', roleCode: 'PRODUCTION_MANAGER' },
+    { email: `ad-${name}@t.local`, displayName: 'Admin', roleCode: 'ADMIN' },
   ]);
   const actor = (prefix: string): Actor => ({
     userId: userIds[`${prefix}-${name}@t.local`]!,
@@ -241,6 +248,7 @@ async function seedTarget(name: string): Promise<Fixtures> {
     organizationId: seeded.organizationId,
     worker,
     attacker,
+    admin: actor('ad'),
     orderId: order.id,
     step1InstanceId: instances[0]!.id,
     step2InstanceId: instances[1]!.id,
@@ -620,5 +628,84 @@ describe('Angriff: Nachweise fälschen', () => {
       where: { workStepInstanceId: fx.step1InstanceId },
     });
     expect(photos).toBe(0);
+  }, 240_000);
+});
+
+/**
+ * Found by the manual security review that docs/10 requires alongside this
+ * suite — see docs/11_OFFLINE_INVARIANT_REVIEW.md. None of the attacks above
+ * could have caught them, because all of them go through the sync API, and
+ * the gap was that the ORDINARY API accepted the same device identity without
+ * ever checking it.
+ */
+describe('Angriff: Geräteidentität behaupten statt nachweisen', () => {
+  it('refuses a device id that was never registered', async () => {
+    const fx = await seedTarget('device-unknown');
+
+    await expect(resolveDeviceId(fx.worker, randomUUID())).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  }, 240_000);
+
+  it('refuses free text where a device id is expected', async () => {
+    const fx = await seedTarget('device-freetext');
+
+    // The online endpoints used to take `z.string().max(255)` here, so this
+    // value reached audit_events.device_id verbatim.
+    await expect(resolveDeviceId(fx.worker, 'Tablet von Kollege Meier')).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+  }, 240_000);
+
+  it("refuses another user's device, without saying it exists", async () => {
+    const fx = await seedTarget('device-foreign');
+
+    // Same error as an unknown id: distinguishing them would be a membership
+    // oracle (see assertDeviceActive).
+    await expect(resolveDeviceId(fx.attacker, fx.deviceId)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  }, 240_000);
+
+  it('extends the remote lock to the ordinary API, not just /sync', async () => {
+    const fx = await seedTarget('device-revoked-online');
+
+    // Accepted while the device is active.
+    await expect(resolveDeviceId(fx.worker, fx.deviceId)).resolves.toBe(fx.deviceId);
+
+    await revokeDevice({
+      actor: fx.admin,
+      deviceId: fx.deviceId,
+      reason: 'Tablet in der Halle liegengelassen',
+    });
+
+    // docs/06 "Geräteverlust und Sicherheit": a revoked device must not be
+    // able to keep working just because its session is still valid. Before
+    // this fix the revocation only closed /sync/*.
+    await expect(resolveDeviceId(fx.worker, fx.deviceId)).rejects.toMatchObject({
+      code: 'DEVICE_REVOKED',
+    });
+  }, 240_000);
+
+  it('bounds how many rate-limit buckets one user can mint', async () => {
+    const fx = await seedTarget('device-cap');
+
+    // One device already exists from the fixture.
+    for (let i = 1; i < MAX_ACTIVE_DEVICES_PER_USER; i++) {
+      await registerDevice({ actor: fx.worker, deviceLabel: `Tablet ${i}` });
+    }
+
+    // SYNC_COMMANDS and PHOTO_UPLOAD are counted per device (docs/05), so an
+    // unbounded registration is an unbounded allowance.
+    await expect(
+      registerDevice({ actor: fx.worker, deviceLabel: 'Eins zu viel' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    // Revoking frees a slot — replacing a lost tablet must never be the thing
+    // that hits the ceiling.
+    await revokeDevice({ actor: fx.admin, deviceId: fx.deviceId, reason: 'ersetzt' });
+    await expect(
+      registerDevice({ actor: fx.worker, deviceLabel: 'Ersatzgerät' }),
+    ).resolves.toMatchObject({ deviceLabel: 'Ersatzgerät' });
   }, 240_000);
 });

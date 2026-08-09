@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
 import { assertWithinRateLimit } from '@/lib/api/rate-limit';
+import { resolveDeviceId } from '@/lib/api/device-context';
 import { uploadPhotoChunk } from '@/domain/execution/photo-upload-chunks';
 
 /**
@@ -17,7 +18,7 @@ import { uploadPhotoChunk } from '@/domain/execution/photo-upload-chunks';
 const headerSchema = z.object({
   chunkIndex: z.coerce.number().int().nonnegative(),
   chunkHashSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  deviceId: z.string().max(255).optional(),
+  deviceId: z.string().optional(),
 });
 
 export async function POST(
@@ -32,12 +33,13 @@ export async function POST(
       deviceId: request.headers.get('x-device-id') ?? undefined,
     });
 
+    // Der Header wird verifiziert, bevor er als Zählschlüssel dient: sonst
+    // reicht ein neuer Zufallswert je Block, um am Limit vorbeizulaufen.
+    const deviceId = await resolveDeviceId(actor, headers.deviceId);
+
     // Blöcke zählen wie Fotouploads: ein Gerät, das eine Datei in 1-MiB-Blöcken
     // sendet, darf dabei nicht am Fotolimit vorbeilaufen.
-    assertWithinRateLimit('PHOTO_UPLOAD', {
-      userId: actor.userId,
-      deviceId: headers.deviceId,
-    });
+    assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId });
 
     const chunk = new Uint8Array(await request.arrayBuffer());
 
@@ -46,6 +48,7 @@ export async function POST(
       photoEvidenceId: params.id,
       chunk,
       ...headers,
+      deviceId,
     });
     return NextResponse.json(state);
   });

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { resolveDeviceId } from '@/lib/api/device-context';
 import { recordMeasurementResult } from '@/domain/execution/capture-evidence';
 
 const measurementSchema = z.object({
@@ -10,7 +11,7 @@ const measurementSchema = z.object({
   // without passing through binary floating point.
   measuredValue: z.string().min(1).max(40),
   measuringEquipmentRef: z.string().max(100).optional(),
-  deviceId: z.string().max(255).optional(),
+  deviceId: z.string().optional(),
   clientTimestamp: z.coerce.date().optional(),
 });
 
@@ -25,6 +26,7 @@ export async function POST(
       actor,
       workStepInstanceId: params.id,
       ...body,
+      deviceId: await resolveDeviceId(actor, body.deviceId),
     });
     return NextResponse.json(saved, { status: 201 });
   });

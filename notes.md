@@ -12,14 +12,14 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 - **Phase 4 (Qualität)**: abgeschlossen — NCR mit serverseitiger Blockier-Klassifikation, Produktionssperren, Nacharbeit/Nachprüfung als eigene Schrittinstanzen, Prüfmittel + Kalibrierungs-Gate, Vier-Augen-Entscheidung, Revisionsauswirkungsanalyse. Abnahmeszenarien D und E laufen end-to-end (Integrationstest).
 - **Phase 5 (Offline und Synchronisation)**: abgeschlossen — Geräteregistrierung mit Fernsperre, commit-geordneter Ereignis-Cursor, Sync-API (health/commands/changes/bundle), Release-Token-Auslieferung ans Gerät, verschlüsselte IndexedDB mit Outbox, chunk-basierter Foto-Upload mit Wiederaufnahme, alle sieben Konflikttypen im Konfliktcenter. Abnahmeszenarien B und C laufen end-to-end; **alle 15 Negativtests sind grün**.
 - **Phase 6 (Akte, Reporting, Integrationen)**: abgeschlossen — digitale Produktionsakte mit allen zehn Abschnitten aus Masterprompt Kap. 10, PDF-Erzeugung, ZIP-Export mit hashgeprüftem Manifest, Rückverfolgbarkeitssuche, Dashboard und ereignisgetriebene In-App-Benachrichtigungen. Abnahmeszenario F läuft end-to-end. **Nicht umgesetzt**: die ERP-/Webhook-Grundlage, die docs/10 für Phase 6 als „Implementierung optional für MVP" führt — es gibt bisher keinen Konsumenten, an dem sich ein Adapter-Interface bewähren könnte.
-- **Phase 7 (Pilot und Härtung)**: begonnen — Malware-Scan schließt in Produktion, Rate Limits aus docs/05 durchgesetzt, 12 Angriffstests gegen die Offline-Invariante. Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
-- **Vor dem Piloten weiterhin offen**: (a) die von docs/10 geforderte **manuelle** Sicherheitsüberprüfung der Offline-Invariante — `phase7-offline-invariant-attacks` ist die automatisierte Hälfte davon und probiert nur die Angriffe, die jemand bedacht hat; (b) ein erreichbarer echter Scanner (`MALWARE_SCANNER=clamav` + clamd-Container) in der Zielumgebung; (c) Lasttest nach docs/09 Ebene 8 und Restore-Probe; (d) die Rate Limits sind pro Prozess gezählt und bei mehreren Instanzen entsprechend schwächer.
+- **Phase 7 (Pilot und Härtung)**: begonnen — Malware-Scan schließt in Produktion, Rate Limits aus docs/05 durchgesetzt, 12 Angriffstests gegen die Offline-Invariante, **manuelle Sicherheitsüberprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11_OFFLINE_INVARIANT_REVIEW.md](docs/11_OFFLINE_INVARIANT_REVIEW.md)). Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
+- **Vor dem Piloten weiterhin offen**: (a) ein erreichbarer echter Scanner (`MALWARE_SCANNER=clamav` + clamd-Container) in der Zielumgebung; (b) Lasttest nach docs/09 Ebene 8 und Restore-Probe; (c) die Rate Limits sind pro Prozess gezählt und bei mehreren Instanzen entsprechend schwächer; (d) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt.
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
 **Weiterhin offen:** der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren). `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM — mit einer QM-Sitzung antwortet `/api/v1/sync/bundle` korrekt mit `403`. Für die Prüfung braucht es eine Anmeldung als `worker.test`.
 
-Alle 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden.
+Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
 **ADRs:** vorhanden sind 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 006 (Mandantenmodell) und 007 (Export-Jobs, in Phase 6 nachgeholt). **ADR-005 (Signaturverfahren) fehlt als Dokument**, obwohl Code-Kommentare darauf verweisen — etwa `buildSignatureDigest` in `complete-work-step.ts`. Inhaltlich ist die Entscheidung getroffen und umgesetzt (PIN + Audit-Trail, keine qualifizierte elektronische Signatur; docs/10 nennt sie in der Kandidatenliste), aber sie ist nirgends niedergeschrieben. Wer als Nächstes an Signaturen arbeitet, sollte das Dokument nachziehen.
 
@@ -131,6 +131,14 @@ Ein Unit-Test für „ClamAV nicht erreichbar → ERROR" lief gegen das echte lo
 
 **Regel:** Neue Server-Abhängigkeiten vor dem Einbau kurz gegen **beide** Läufe prüfen — `pnpm run build` und `pnpm run test:integration`. Ein `pnpm run typecheck` allein sagt darüber nichts: die Typen von `@types/archiver@8` waren einwandfrei, nur ließ sich das Paket nirgends laden.
 
+### Eine Kontrolle, die nur einen von zwei Pfaden kennt, deckt die Hälfte ab
+
+Die manuelle Überprüfung der Offline-Invariante (docs/11) fand drei Mängel, die alle dieselbe Bauart haben: `deviceId` wurde im **Sync**-Pfad seit Phase 5 sauber gegen `assertDeviceActive` geprüft — und in den **gewöhnlichen** Endpunkten (Schritt starten, Nachweis erfassen, Abschluss melden) als `z.string().max(255)` entgegengenommen und nie nachgeschlagen. Folgen: die Fernsperre eines verlorenen Tablets galt online nicht; der Zählschlüssel des gerätebezogenen Rate Limits war ein frei wählbarer String, also kein Limit; und der Wert landete unverändert in vier Audit-Spalten ohne Fremdschlüssel.
+
+Warum es keine Kontrolle sah: die zwölf Angriffstests aus `phase7-offline-invariant-attacks` gehen **alle** über `processSyncCommands`. Ein Angreifer, der die Sync-API gar nicht benutzt, war nie Gegenstand eines Tests. Die Invariante selbst hielt in jedem Fall — der Server glaubt dem Client nichts —, aber die flankierenden Kontrollen taten es nicht.
+
+**Regel:** Wenn eine Kontrolle für eine Eingabe eingeführt wird, einmal `grep` über alle Stellen laufen lassen, die dieselbe Eingabe annehmen. Der Fix ist `resolveDeviceId` in `src/lib/api/device-context.ts` — eine Funktion, an einer Stelle, in allen neun Endpunkten.
+
 ### Relationsnamen bei bidirektionalen Prisma-Beziehungen
 
 Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.dependents` waren so benannt, dass sie das Gegenteil dessen enthielten, was der Name suggeriert (Prisma-Rückrelationen benennen sich nach der Relation, nicht nach der eigenen Rolle). Umbenannt zu `predecessorLinks`/`successorLinks` mit erklärendem Kommentar direkt im Schema. **Lehre:** Bei selbstreferenzierenden n:m-artigen Relationen über ein Join-Modell (hier `PlanStepDependency`) immer explizit prüfen, welche Richtung eine Rückrelations-Array tatsächlich liefert — nicht vom Feldnamen ausgehen.
@@ -176,6 +184,9 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 - **Die Empfängerliste einer Benachrichtigung ist kurz gehalten.** Jedes Ereignis in `RULES` unterbricht jemanden, und ein Benachrichtigungscenter voller Routinefortschritt ist eines, das niemand liest — was genau die Konflikte und Sperren kostet, für die es existiert. Adressiert wird an **Benutzer**, nicht an Rollen: wer etwas wissen muss, hängt an Zuweisung und Berechtigung im Moment des Ereignisses, und das später aufzulösen ergäbe eine andere Antwort als die, die galt.
 - **Die Suche meldet nie, wie viele Treffer sie verborgen hat.** Eine Zahl unterdrückter Ergebnisse ist selbst eine Auskunft — „es gibt 3 Dokumente, die Sie nicht sehen dürfen" verrät, dass es sie gibt. Jeder Ergebnistyp hängt zusätzlich an der Berechtigung, die sein Lesen regelt: ein WORKER, der eine Seriennummer sucht, bekommt Aufträge, keine Dokumente.
 - **Der Malware-Scan-Stub ist in Produktion nicht mehr wählbar.** Bis Phase 7 lieferte `getMalwareScanner()` in _jeder_ Umgebung einen Scanner, der immer `CLEAN` meldete; zwischen dem und einem Produktivbetrieb stand ein Kommentar, das jemand lesen musste. Eine Kontrolle, die vom Erinnern abhängt, ist keine. Jetzt: `MALWARE_SCANNER=clamav` spricht echtes clamd (INSTREAM, ohne Client-Bibliothek — im Sicherheitspfad wäre das eine Abhängigkeit zu viel), `stub` wird bei `NODE_ENV=production` mit hartem Fehler abgelehnt. Ein nicht erreichbarer Scanner liefert `ERROR`, nie `CLEAN`: Aufrufer akzeptieren nur `CLEAN`, ein Ausfall blockiert also Uploads, statt sie durchzuwinken.
+- **Eine `deviceId` aus dem Request ist erst ein Gerät, wenn der Server sie nachgeschlagen hat.** `resolveDeviceId` (`src/lib/api/device-context.ts`) verlangt UUID, Existenz, Eigentümerschaft und Nicht-Sperrung — dieselbe Prüfung, mit der die Sync-Endpunkte seit Phase 5 öffnen, jetzt überall dort, wo das Feld angenommen wird. Ohne `deviceId` (der normale Browser) bleibt alles wie zuvor. Siehe „Eine Kontrolle, die nur einen von zwei Pfaden kennt" oben und docs/11 B-1 bis B-3.
+- **Ein Benutzer darf höchstens `MAX_ACTIVE_DEVICES_PER_USER` (10) aktive Geräte haben.** Keine Komfortgrenze: `SYNC_COMMANDS` und `PHOTO_UPLOAD` zählen je Gerät, eine unbegrenzte Registrierung ist also ein unbegrenztes Kontingent — und ein Sync-Batch löst bis zu 500 vollständige serverseitige Neuvalidierungen aus. Gesperrte Geräte zählen nicht mit, damit der Ersatz eines verlorenen Tablets nie an der Grenze scheitert.
+- **`STANDARD_API` wird in `requireAuthContext` gezählt, nicht je Route.** Das Limit stand seit Phase 1 in docs/05 und war bis zur Überprüfung nirgends durchgesetzt — unter anderem war `GET /sync/bundle` ungedrosselt, das für jeden READY-Schritt jedes zugewiesenen Auftrags ein neues Token prägt und ein Audit-Event schreibt. Zentral, weil jeder authentifizierte Einstiegspunkt seinen Actor darüber auflöst und deshalb keiner vergessen werden kann. Folge auf der Clientseite: `pullAndApplyChanges` hat eine Seitenobergrenze je Lauf (`MAX_PAGES_PER_SYNC`) — der Cursor wird je Seite gesichert, ein früher Abbruch ist also Fortsetzung, kein Verlust.
 - **Rate Limits sind pro Prozess gezählt.** Die Tabelle in docs/05 stand seit Phase 1 im Vertrag und war bis Phase 7 nirgends durchgesetzt — ADR-007 berief sich dabei bereits auf das Exportlimit als Schutzmechanismus. Der In-Memory-Zähler ist auf einer Instanz eine echte Grenze; hinter N Repliken erlaubt er das N-fache. Das ist eine echte Abschwächung, keine Rundung, und `RateLimitStore` existiert genau dafür, dass der Wechsel auf einen gemeinsamen Speicher **eine** Implementierung ist. Gegen unauthentifizierte Fluten hilft das nicht — das ist Sache des vorgelagerten Proxys (docs/08).
 - **Der Aktenfortschritt im Dashboard zählt nur serverbestätigte Schritte.** docs/07 B1 schreibt es vor, und es ist dieselbe Invariante wie überall sonst: lokal abgeschlossene Schritte erscheinen getrennt als `pendingSteps` und gehen nie in die Prozentzahl ein. Gezählt wird außerdem nur der jüngste Versuch je Planschritt — dieselbe Regel wie in `releaseEligibleSuccessors`, damit das Dashboard der Ausführung nicht widersprechen kann.
 - **Der Audit-Auszug der Akte ist auf die Ressourcen des Auftrags eingegrenzt.** Eine Akte, die organisationsweite Ereignisse mitliefert, wäre nicht gründlich, sondern ein Datenschutzproblem (docs/08).
@@ -193,7 +204,7 @@ pnpm run lint
 pnpm run format:check
 pnpm run test:unit          # 160 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
-pnpm run test:integration   # 80 Tests, echte Postgres+MinIO-Container (Testcontainers)
+pnpm run test:integration   # 85 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```
 
 Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks — siehe `docs/09_TEST_PYRAMID.md`.
@@ -224,6 +235,8 @@ Jede Zeile nennt die Testdatei ausdrücklich — kein „ebd."-Verweis, weil sic
 
 Die Offline-Invariante hat seit Phase 7 zusätzlich eine eigene **Angriffssuite**: `test/integration/phase7-offline-invariant-attacks.integration.test.ts` versucht in zwölf Varianten, `COMPLETED` clientseitig zu erzwingen oder einen gesperrten Folgeschritt zu öffnen — gefälschte Kommandotypen, in gültige Kommandos geschmuggelte Statusfelder, manipulierte und korrekt signierte Fremdtoken, umsortierte Batches, wiederholte Abschlüsse. Bemerkenswert dabei: ein auf den Folgeschritt umgebogenes Token scheitert an `WORK_STEP_NOT_READY`, nicht an der Tokenprüfung — die Statusprüfung liegt davor, die Ablehnung hängt also nicht daran, dass die Kryptografie funktioniert.
 
+Fünf weitere Fälle unter „Angriff: Geräteidentität behaupten statt nachweisen" sind aus der manuellen Überprüfung (docs/11) entstanden und prüfen genau das, was den zwölf fehlte: den Weg **an der Sync-API vorbei**.
+
 Sechs davon (#1, #2, #6, #8, #15 und die Client-Typsicherheit aus docs/06 — der Client kennt `COMPLETED` gar nicht) haben zusätzlich Unit-Tests, die ohne Infrastruktur laufen. Die Zuordnung lässt sich jederzeit nachprüfen, weil jeder Test den Marker im Klartext trägt:
 
 ```bash
@@ -234,23 +247,21 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Nach Reihenfolge des Nutzens, nicht der Mühe. Punkt 1 und 2 sind Gates vor dem Piloten, der Rest sind bekannte Lücken.
+Nach Reihenfolge des Nutzens, nicht der Mühe. Punkt 1 ist ein Gate vor dem Piloten, der Rest sind bekannte Lücken.
 
-1. **Manuelle Sicherheitsüberprüfung der Offline-Invariante.** docs/10 macht sie zur Bedingung für den Abschluss von Phase 5. `phase7-offline-invariant-attacks` deckt zwölf Angriffe ab, aber eine Suite probiert nur, was jemand bedacht hat — deshalb verlangt das Gate zusätzlich einen Menschen. Einstieg: `docs/06_OFFLINE_SYNC_CONFLICT.md` „Technischer Beweis der Invarianten-Einhaltung", dann `src/lib/offline/client-work-step-status.ts` und `src/domain/execution/start-work-step.ts`.
+1. **Echten Malware-Scanner in der Zielumgebung.** Der ClamAV-Adapter steht; es fehlt eine erreichbare clamd-Instanz (`MALWARE_SCANNER=clamav`, `CLAMAV_HOST`/`PORT`). Ohne sie verweigert die Anwendung in Produktion absichtlich den Start des Scans — Uploads werden dann nicht anerkannt.
 
-2. **Echten Malware-Scanner in der Zielumgebung.** Der ClamAV-Adapter steht; es fehlt eine erreichbare clamd-Instanz (`MALWARE_SCANNER=clamav`, `CLAMAV_HOST`/`PORT`). Ohne sie verweigert die Anwendung in Produktion absichtlich den Start des Scans — Uploads werden dann nicht anerkannt.
+2. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
 
-3. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
+3. **UI für die Schritt-Dokumentbindung.** `bindDocumentToPlanStep` existiert als Service und wird von den Tests benutzt, aber die Planbearbeitung bietet die Bindung nicht an — Abnahmeszenario C ist damit aus der Oberfläche heraus nicht herstellbar. Die letzte bekannte Lücke im Planungsbildschirm.
 
-4. **UI für die Schritt-Dokumentbindung.** `bindDocumentToPlanStep` existiert als Service und wird von den Tests benutzt, aber die Planbearbeitung bietet die Bindung nicht an — Abnahmeszenario C ist damit aus der Oberfläche heraus nicht herstellbar. Die letzte bekannte Lücke im Planungsbildschirm.
+4. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
 
-5. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
+5. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
 
-6. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
+6. **Rate Limits auf einen gemeinsamen Speicher umstellen**, sobald mehr als eine Instanz läuft. `RateLimitStore` ist dafür da; bis dahin gilt das Limit pro Prozess.
 
-7. **Rate Limits auf einen gemeinsamen Speicher umstellen**, sobald mehr als eine Instanz läuft. `RateLimitStore` ist dafür da; bis dahin gilt das Limit pro Prozess.
-
-8. **ERP-/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
+7. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
