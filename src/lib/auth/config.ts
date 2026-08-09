@@ -24,7 +24,29 @@ export const authConfig: NextAuthConfig = {
     // RBAC layer re-checking the database on every request, not by trusting
     // stale claims in the token — see src/lib/authz (task #16).
     strategy: 'jwt',
-    maxAge: 15 * 60, // 15 minutes, matches ADR-001's short-access-token decision
+    /**
+     * Eight hours: one shift.
+     *
+     * This is the SESSION lifetime, which is not the same thing as ADR-001's
+     * 15-minute access token — the two were conflated here until Phase 7, and
+     * the consequence showed up the first time the offline flow was played
+     * through: a tablet that works a shift without connectivity came back to
+     * an expired session and could not deliver what it had captured until
+     * somebody logged in again. The work survives (encrypted IndexedDB), but
+     * a worker being asked to authenticate before their evidence can leave
+     * the device is exactly the friction that gets a system worked around.
+     *
+     * What makes a long session acceptable is that session age buys almost
+     * nothing on its own: every act with consequences — completing a step,
+     * the four-eyes decision, a conflict decision, the product release —
+     * demands PIN re-authentication regardless of how old the session is
+     * (docs/04 "Re-Authentifizierung für kritische Aktionen", ADR-005). And
+     * since Phase 7 there is a sign-out, so a shared tablet can be handed on
+     * deliberately rather than by waiting.
+     *
+     * Recorded as an amendment in ADR-001 — the number lives there, not here.
+     */
+    maxAge: 8 * 60 * 60,
   },
   callbacks: {
     async signIn({ user, profile }) {

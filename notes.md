@@ -130,9 +130,11 @@ Ursache: die Geräte-ID lag in der IndexedDB **je Browser**, nicht je Anmeldung.
 
 `resolveHandover` in `use-offline-workspace.ts` entscheidet jetzt beim Start, was der Vorgänger hinterlassen hat: gleiche Anmeldung → weiter; andere Anmeldung ohne offene Vorgänge → lokale Daten löschen und neu registrieren (die Aufträge, Nachweise und der Cursor des Vorgängers gehen den Nächsten nichts an, docs/08); andere Anmeldung **mit** offenen Vorgängen → **verweigern und sagen warum**. Das Letzte ist der Punkt: nicht übertragene Arbeit stillschweigend zu löschen, weil sich jemand anders angemeldet hat, wäre genau das Gegenteil dessen, was docs/06 über offline erfasste Arbeit sagt.
 
-### Die Sitzung läuft nach 15 Minuten ab — auch mitten im Offline-Betrieb
+### Sitzungsdauer und Access-Token-Dauer sind nicht dasselbe
 
-Beobachtung aus demselben Durchlauf, nicht behoben: `session.maxAge` steht laut ADR-001 auf 15 Minuten. Für ein Hallentablet, das eine Schicht lang offline arbeitet, heißt das: nach dem Wiederverbinden ist die Sitzung weg und es braucht eine neue Anmeldung, bevor synchronisiert werden kann. **Die Warteschlange überlebt das** (verschlüsselte IndexedDB, hier mit 5 Vorgängen nachgeprüft) — verloren geht nichts, aber der Mitarbeiter muss sich anmelden, um Erfasstes abzuliefern. Ob 15 Minuten für die Sitzung (im Unterschied zum Access Token) das Richtige sind, gehört vor dem Piloten entschieden; es ist eine ADR-001-Frage, keine Kleinigkeit im Code.
+Im Offline-Durchlauf aufgefallen: `session.maxAge` stand auf 15 Minuten, mit dem Kommentar „matches ADR-001's short-access-token decision". ADR-001 sagt aber etwas über **Access Tokens**, nicht über die Sitzung — der Wert war aus der falschen Zeile übernommen. Folge in der Halle: ein Tablet, das eine Schicht offline arbeitet, kommt mit abgelaufener Sitzung zurück und muss sich neu anmelden, bevor es Erfasstes abliefern kann. Die Warteschlange überlebt das (verschlüsselte IndexedDB, mit fünf Vorgängen über zwei Serverneustarts hinweg nachgeprüft) — aber Reibung an genau dieser Stelle ist die Sorte, die dazu führt, dass ein System umgangen wird.
+
+Steht jetzt auf **8 Stunden**, eine Schicht, festgehalten als Nachtrag in [ADR-001](docs/adr/ADR-001-authentication.md). Tragfähig ist das nicht, weil das Risiko klein wäre, sondern weil das Sitzungsalter wenig kauft: jede folgenreiche Handlung verlangt ohnehin die PIN (docs/04, ADR-005), und seit Phase 7 gibt es eine Abmeldung. Was es kostet — acht Stunden Lesezugriff auf einem liegengelassenen Gerät — steht im Nachtrag ausdrücklich dabei; dagegen helfen Fernsperre und die Bildschirmsperre des Geräts, nicht dieser Wert.
 
 ### Es gab keine Abmeldung — und deshalb keinen Benutzerwechsel
 
@@ -369,7 +371,7 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind abgearbeitet, bis auf das, was keine Programmierarbeit ist (siehe „Stand" oben) — hier stehen die bekannten Lücken. Dazu gehört die Entscheidung über `session.maxAge` (siehe „Die Sitzung läuft nach 15 Minuten ab" unten), die ADR-001 betrifft und deshalb nicht nebenbei im Code getroffen wird.
+Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind abgearbeitet, bis auf das, was keine Programmierarbeit ist (siehe „Stand" oben) — hier stehen die bekannten Lücken.
 
 1. **PIN-Fehlversuchssperre.** Der erste Punkt, den ADR-005 selbst als offensichtlichste Lücke nennt: eine vierstellige PIN hinter einem Limit von 100 Anfragen pro Minute ist schwächer, als es aussieht. Ein Zähler je Benutzer mit wachsender Wartezeit — `rate_limit_windows` steht bereits als gemeinsamer Speicher zur Verfügung.
 
