@@ -15,7 +15,7 @@
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**", "test/e2e/**"],
       "rules": {
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-non-null-assertion": "off"
@@ -34,5 +34,13 @@
       }
     }
   ],
-  "ignorePatterns": ["node_modules/", ".next/", "dist/", "coverage/", "prisma/migrations/"]
+  "ignorePatterns": [
+    "node_modules/",
+    ".next/",
+    "dist/",
+    "coverage/",
+    "prisma/migrations/",
+    "playwright-report/",
+    "test-results/"
+  ]
 }

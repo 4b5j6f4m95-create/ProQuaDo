@@ -16,6 +16,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
   - _Sicherheit_: **manuelle Überprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11](docs/11_OFFLINE_INVARIANT_REVIEW.md)); Geräteidentität wird überall verifiziert statt nur angenommen; Obergrenze aktiver Geräte je Benutzer; `STANDARD_API` erstmals durchgesetzt; Rate Limits instanzübergreifend (`rate_limit_windows`); **PIN-Fehlversuchssperre** ([ADR-005](docs/adr/ADR-005-signature-method.md)-Nachtrag); echter ClamAV mit EICAR-Nachweis und Readiness-Meldung; 17 Angriffstests gegen die Invariante; **CSP auf Nonce umgestellt**, weil die bisherige in Production die Hydration verhinderte.
   - _Funktion_: **Produktfreigabe als eigener Vorgang** — Abschnitt 9 der Akte nennt jetzt eine Entscheidung mit Person, Zeitpunkt, Begründung und kopierter Grundlage, statt nur zusammenzurechnen, ob etwas offen ist; **UI für die Schritt-Dokumentbindung**; **Abmeldung** samt Benutzerwechsel auf geteilten Geräten.
   - _Integration_: **ERP-/Webhook-Anbindung** — Outbox-Ereignisse signiert an registrierte Endpunkte, mit SSRF-Schutz, Wiederholungen und sichtbarem Scheitern ([ADR-008](docs/adr/ADR-008-outbound-integrations.md)).
+  - _Prüfbarkeit_: **E2E-Tests nach docs/09 Ebene 6** — Playwright, und zwar gegen den **Production-Build**, nicht gegen `next dev`. Damit ist die Schicht, in der fast jeder Fehler dieser Phase saß (Server Action, Formularzustand, Hydration), erstmals automatisiert geprüft statt nur von Hand durchgespielt.
   - _Dokumentation_: ADR-005 nachgeholt, ADR-001 um die Sitzungsdauer ergänzt, ADR-008 neu.
   - Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
 
@@ -129,6 +130,7 @@ Wer die Umgebung übernimmt, findet die Daten darin **nicht** im Auslieferungszu
 - **Der Demo-Auftrag `AUF-2026-23991` ist vollständig `COMPLETED` und bereits freigegeben** — beide Schritte abgeschlossen mit Nachweisen aus dem Offline-Durchlauf, dazu zwei Freigabeentscheidungen (`REJECTED` → `RELEASED`) aus dem Test von Abschnitt 9. **Damit ist er als Vorlage für beide Abläufe verbraucht**: eine zweite Freigabe verweigert die Datenbank, und der Offline-Durchlauf braucht Schritt 1 wieder in `READY`. Für eine Wiederholung von einem der beiden zurücksetzen (unten) — das Skript räumt auch die Freigabeentscheidungen weg.
 - Zusätzlich liegen ein Fertigungsplan (`FP-…`, DRAFT) und eine freigegebene Zeichnung (`ZG-…`) im Demo-Projekt, angelegt für den Test der Dokumentbindung.
 - `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`. Der clamd-Container ist mit heruntergefahren worden; seine Signaturen liegen in `./.docker-data/clamav` und müssen nicht erneut geladen werden.
+- **Jeder E2E-Lauf hinterlässt ein eigenes Projekt** mit Plan, Auftrag und Nachweisen, alles unter dem Präfix `E2E-` (Projektnummer `E2E-PROJ-…`). Absichtlich nicht aufgeräumt: Ausführungsdaten hängen an einem append-only Audit-Trail, und ein Testaufräumen, das genau die Zeilen löscht, deren Unlöschbarkeit die Zusicherung ist, wäre die falsche Übung. Es ginge auch nicht nebenbei — die Fremdschlüssel auf `projects` stehen sämtlich auf `RESTRICT` (nachgesehen in `pg_constraint`), ein `DELETE FROM projects …` scheitert also an Plänen, Aufträgen und Dokumenten. Wenn die Liste wirklich stört, ist der Weg `prisma migrate reset` plus Seed, nicht ein Aufräum-SQL.
 - Der Seed ist zuletzt nach dem Hinzukommen von `integration.manage` gelaufen; das Atom ist in der Demo-Organisation vorhanden. **Webhook-Abonnements gibt es keine** — wer die Zustellung ausprobieren will, legt eines an und ruft den Dispatch-Endpunkt von Hand auf (oben unter „Für die ERP-/Webhook-Anbindung").
 
 **Offline-Durchlauf wiederholen** — Ausführungsdaten zurücksetzen, Audit-Trail bleibt (er ist append-only und soll es sein):
@@ -155,7 +157,7 @@ Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der al
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
 
-Inzwischen 25 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
+Inzwischen 26 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
 
 - **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
 - **Die Anmeldung schlägt fehl oder zeigt den falschen Benutzer**: „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen" (die Meldung lautet „Access Denied" und meint etwas anderes), „Es gab keine Abmeldung", „Der Seed legt nach dem ersten Login Doppelbenutzer an".
@@ -163,7 +165,7 @@ Inzwischen 25 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suc
 - **Eine Schaltfläche tut nichts oder die Seite bricht ab**: „Der Abschlussknopf war dauerhaft gesperrt", „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg".
 - **Ein Test ist grün und beweist trotzdem nichts**: „Jest entscheidet `skip` beim Einlesen", „Ein Test, der versehentlich echte Infrastruktur anspricht", „Eine Kontrolle, die nur einen von zwei Pfaden kennt".
 - **Datenbank und Schema**: „Eine bereits angewendete Migration nachträglich zu ändern", „Prisma-Client-Regenerierung erfordert Server-Neustart", „Relationsnamen bei bidirektionalen Prisma-Beziehungen", „Abgelehnte Vorgänge dürfen nicht in derselben Transaktion geworfen werden", „Berechtigung hängt manchmal von Daten ab".
-- **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften".
+- **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften", „`getByRole('alert')` trifft in Next.js auch den Routenansager".
 
 ### Portkonflikte mit anderen Projekten
 
@@ -369,6 +371,12 @@ Warum es keine Kontrolle sah: die zwölf Angriffstests aus `phase7-offline-invar
 
 **Regel:** Wenn eine Kontrolle für eine Eingabe eingeführt wird, einmal `grep` über alle Stellen laufen lassen, die dieselbe Eingabe annehmen. Der Fix ist `resolveDeviceId` in `src/lib/api/device-context.ts` — eine Funktion, an einer Stelle, in allen neun Endpunkten.
 
+### `getByRole('alert')` trifft in Next.js auch den Routenansager
+
+Beim Schreiben der E2E-Tests aufgetreten: die Zusicherung auf die Fehlermeldung des PIN-Formulars scheiterte an „strict mode violation: resolved to 2 elements". Das zweite Element ist `<div role="alert" aria-live="assertive" id="__next-route-announcer__">` — Next.js' Ansage des Seitentitels für Screenreader, dauerhaft im Dokument und meistens leer.
+
+Kein Anwendungsfehler, aber eine Falle für jede künftige Zusicherung auf `role="alert"`: entweder auf das Element der Anwendung zeigen (`#pin-error`) oder die Suche auf das Formular einschränken (`form.getByRole('alert')`). Beides steht so in `test/e2e/`.
+
 ### Relationsnamen bei bidirektionalen Prisma-Beziehungen
 
 Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.dependents` waren so benannt, dass sie das Gegenteil dessen enthielten, was der Name suggeriert (Prisma-Rückrelationen benennen sich nach der Relation, nicht nach der eigenen Rolle). Umbenannt zu `predecessorLinks`/`successorLinks` mit erklärendem Kommentar direkt im Schema. **Lehre:** Bei selbstreferenzierenden n:m-artigen Relationen über ein Join-Modell (hier `PlanStepDependency`) immer explizit prüfen, welche Richtung eine Rückrelations-Array tatsächlich liefert — nicht vom Feldnamen ausgehen.
@@ -467,7 +475,24 @@ CLAMAV_TESTS=1 pnpm run test:integration -- phase7-hardening
 
 Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks — siehe `docs/09_TEST_PYRAMID.md`.
 
-**Auch diese Kette ist nicht vollständig.** Zwei Fehler in Phase 6/7 waren erst im Browser sichtbar: die fehlenden pdfkit-Schriftmetriken (nur beim Bündeln, nicht beim Kompilieren) und die Doppelbenutzer des Seeds (nur mit einer echten, eingeloggten Sitzung). Wer an UI oder an Paketen arbeitet, die zur Laufzeit Dateien lesen, sollte die Seite einmal wirklich öffnen.
+### E2E-Tests (docs/09 Ebene 6)
+
+```bash
+docker compose up -d postgres minio minio-init keycloak
+pnpm exec prisma migrate deploy && pnpm exec tsx prisma/seed.ts   # einmalig
+pnpm run test:e2e                    # 9 Tests, ~2 Min inkl. Build
+pnpm run test:e2e work-step          # nur eine Datei
+pnpm exec playwright show-trace test-results/<…>/trace.zip        # nach einem Fehlschlag
+```
+
+Vier Eigenheiten, die man kennen sollte, bevor man daran arbeitet:
+
+- **Der Lauf baut und startet den Production-Build selbst** (`playwright.config.ts`, `webServer`) und belegt dafür Port **3002**. `next dev` darf daneben nicht laufen — `pnpm run build` schreibt in dasselbe `.next/` (siehe Stolperstein oben). Ein bereits laufender Server wird bewusst **nicht** wiederverwendet: er könnte ein Dev-Server sein, und der Lauf prüfte dann still die falsche Sache.
+- **Warum Production und nicht `next dev`:** die CSP ist in der Entwicklung abgeschaltet und verhinderte in Production jede Hydration, ohne dass die gesamte übrige Prüfkette etwas merkte. `production-csp.spec.ts` hält diese Voraussetzung selbst fest — er prüft, dass die ausgelieferte Antwort eine Nonce-CSP trägt **und** dass Next.js seine Skripte damit gestempelt hat. Zusätzlich lässt `test/e2e/support/test.ts` jeden Test rot werden, sobald im Browser ein CSP-Verstoß, ein React-Fehler oder eine unbehandelte Ausnahme auftaucht.
+- **Angemeldet wird über den echten Keycloak** (`auth.setup.ts`, einmal je Rolle, Ergebnis als `storageState` unter `test/e2e/.auth/`). Kein nachgebautes Sitzungscookie: die Kontoverknüpfung entsteht genau auf diesem Weg, und genau dieser Weg ist in Phase 7 zweimal gebrochen.
+- **Die Tests bauen ihre Fixtures selbst** (`test/e2e/support/scenario.ts`): eigener Plan, eigener Auftrag, eigene Zuweisung, alles mit dem Präfix `E2E-`, angelegt über die Domänendienste und angehängt an die Demo-Konten (die Anmeldung bindet an `users.email`). Der Demo-Auftrag wird dabei nicht angefasst — und ein Test, dessen Voraussetzung Handarbeit ist, wäre keiner.
+
+**Auch diese Kette ist nicht vollständig.** Zwei Fehler in Phase 6/7 waren erst im Browser sichtbar: die fehlenden pdfkit-Schriftmetriken (nur beim Bündeln, nicht beim Kompilieren) und die Doppelbenutzer des Seeds (nur mit einer echten, eingeloggten Sitzung). Ebene 6 deckt davon jetzt einen Teil ab, aber nur die drei Abläufe, die dort stehen — wer an UI oder an Paketen arbeitet, die zur Laufzeit Dateien lesen, sollte die betroffene Seite weiterhin einmal wirklich öffnen. Und die E2E-Tests laufen bisher **nur lokal**: in der CI-Pipeline fehlen Keycloak-Realm, Seed und Browser (siehe „Übergabe" unten).
 
 ### Abgedeckte Negativtests (alle 15 grün)
 
@@ -511,11 +536,15 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
 2. **Scheduler für `POST /api/v1/integrations/webhooks/dispatch` einrichten**, sobald ein Webhook produktiv genutzt wird. Ohne ihn sammeln sich Zustellungen als `PENDING` an, ohne dass jemand etwas merkt.
 
+3. **Die E2E-Tests in die CI holen.** Sie laufen bisher nur lokal, und ein Test, den niemand automatisch ausführt, verfällt. Nötig sind dort: Postgres und MinIO als Services, ein Keycloak mit importiertem Realm, `prisma migrate deploy` plus Seed, `pnpm exec playwright install --with-deps chromium` und die Umgebungsvariablen aus der lokalen `.env` (insbesondere `AUTH_URL` passend zum Port). Bewusst **nicht** blind in `.github/workflows/ci.yml` geschrieben: eine Pipeline-Stufe, die hier niemand ausführen kann, wäre genau die Sorte Betriebsanweisung, vor der der `--force-recreate`-Eintrag oben warnt. Wer sie ergänzt, sollte den ersten Lauf abwarten, bevor er sie als Gate scharf schaltet.
+
+   Ebenfalls offen und in derselben Ecke: **Ebene 9 (Accessibility, axe-core)**. Die Infrastruktur dafür steht jetzt — ein `@axe-core/playwright`-Lauf gegen dieselben Seiten wäre wenige Zeilen. Die „Definition of Done" in docs/09 verlangt ihn, erfüllt ist er nicht.
+
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
 - Vor jeder Phase die zugehörigen `docs/`-Kapitel lesen; sie sind vor dem Code entstanden und enthalten die Begründungen.
 - Abweichungen von `docs/` **hier** festhalten, nicht stillschweigend umsetzen — der Abschnitt „Architekturentscheidungen mit Nachwirkung" ist genau dafür da und hat mehrfach Widersprüche sichtbar gemacht.
-- Am Ende jeder Phase die vollständige Prüfkette laufen lassen **und** die betroffenen Seiten einmal im Browser öffnen.
+- Am Ende jeder Phase die vollständige Prüfkette laufen lassen, dazu `pnpm run test:e2e`, **und** die betroffenen Seiten einmal im Browser öffnen. Die E2E-Tests ersetzen das Durchspielen nicht — sie halten fest, was einmal durchgespielt wurde.
 - Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
 - **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
 - **Was nur in Production greift, muss auch einmal in Production laufen.** Die CSP war in der gesamten Prüfkette abgeschaltet und verhinderte dort, wo sie galt, jede Hydration — sieben Phasen lang unbemerkt, weil niemand `next start` ausgeführt hatte. Grün heißt nur „geprüft, was geprüft wurde".

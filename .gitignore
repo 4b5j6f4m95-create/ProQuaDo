@@ -12,6 +12,11 @@ dist/
 # Testing
 coverage/
 
+# Playwright (Ebene 6) — Artefakte und die im Setup erzeugten Sitzungen
+test-results/
+playwright-report/
+test/e2e/.auth/
+
 # Environment
 .env
 .env*.local

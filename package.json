@@ -19,6 +19,7 @@
     "test:unit": "jest --config jest.unit.config.js",
     "test:unit:watch": "jest --config jest.unit.config.js --watch",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "test:e2e": "playwright test",
     "test:coverage": "jest --config jest.unit.config.js --coverage",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -43,6 +44,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testcontainers/postgresql": "^10.13.2",
     "@types/archiver": "^6.0.4",
     "@types/jest": "^30.0.0",
