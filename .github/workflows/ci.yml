@@ -73,6 +73,104 @@ jobs:
       - run: pnpm exec prisma generate
       - run: pnpm run test:integration
 
+  # Ebene 6 und 9 aus docs/09_TEST_PYRAMID.md: Playwright gegen den
+  # Production-Build, dazu axe-core über dieselben Bildschirme.
+  #
+  # Drei Entscheidungen, die diese Stufe von den übrigen unterscheiden:
+  #
+  #   * **`docker compose` statt `services:`.** Die Infrastruktur steht schon in
+  #     docker-compose.yml, und MinIO braucht ein `command` (`server /data`),
+  #     das `services:` gar nicht kennt. Eine zweite Beschreibung derselben
+  #     Container wäre eine, die irgendwann von der ersten abweicht.
+  #   * **Keycloak wird abgewartet, nicht angenommen.** Gewartet wird auf die
+  #     Discovery-Antwort *des Realms* — die beweist zugleich, dass der Import
+  #     aus infra/keycloak/ durch ist. Der Containerstatus beweist das nicht.
+  #   * **Kein `.env` im Runner** (die Datei ist gitignoriert): sämtliche Werte
+  #     stehen hier. Sie sind Demo-Zugangsdaten aus docker-compose.yml und der
+  #     Realm-Datei, keine Geheimnisse — die Anwendung spricht hier mit nichts,
+  #     was es außerhalb dieses Jobs gibt.
+  #
+  # Die Kommandokette dieser Stufe wurde vor dem Aufschreiben einmal gegen eine
+  # frische Datenbank, ein frisches MinIO und ein frisch importiertes Keycloak
+  # ausgeführt (notes.md: eine Betriebsanweisung, die hier hineingeschrieben
+  # wird, sollte einmal ausgeführt worden sein).
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    env:
+      DATABASE_URL: 'postgresql://proquado_app:proquado_app_dev_only@localhost:5433/proquado?schema=public'
+      DIRECT_DATABASE_URL: 'postgresql://proquado:proquado_dev_only@localhost:5433/proquado?schema=public'
+      AUTH_SECRET: 'ci-e2e-secret-never-used-outside-this-job'
+      # Muss zum Port des Playwright-Servers passen UND als Redirect-URI im
+      # Realm stehen (infra/keycloak/proquado-realm.json kennt 3000 und 3002).
+      AUTH_URL: 'http://localhost:3002'
+      OIDC_ISSUER: 'http://localhost:8081/realms/proquado'
+      OIDC_CLIENT_ID: 'proquado-web'
+      OIDC_CLIENT_SECRET: 'proquado_dev_client_secret'
+      RELEASE_TOKEN_SECRET: 'ci-e2e-release-token-secret'
+      S3_ENDPOINT: 'http://localhost:9010'
+      S3_REGION: 'us-east-1'
+      S3_BUCKET: 'proquado-documents'
+      S3_ACCESS_KEY_ID: 'proquado'
+      S3_SECRET_ACCESS_KEY: 'proquado_dev_only'
+      S3_FORCE_PATH_STYLE: 'true'
+      # Der Testprozess selbst lädt eine Dokumentrevision hoch (Fixture) und
+      # läuft nicht als Production — der Stub ist hier also erlaubt und
+      # ausdrücklich gesetzt, damit getMalwareScanner() nicht warnt. Der
+      # geprüfte Server-Pfad braucht keine Uploads.
+      MALWARE_SCANNER: 'stub'
+      LOG_LEVEL: 'warn'
+      SERVER_NODE_ID: 'ci-e2e'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prisma generate
+
+      - name: Infrastruktur starten
+        run: docker compose up -d postgres minio minio-init keycloak
+
+      - name: Auf den importierten Keycloak-Realm warten
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -sf http://localhost:8081/realms/proquado/.well-known/openid-configuration >/dev/null; then
+              echo "Realm nach ${attempt} Versuch(en) bereit"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Keycloak-Realm nach 120s nicht erreichbar"
+          docker compose logs keycloak
+          exit 1
+
+      - name: Schema und Demo-Daten
+        run: |
+          pnpm exec prisma migrate deploy
+          pnpm exec tsx prisma/seed.ts
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      # Baut und startet den Production-Build selbst (playwright.config.ts).
+      - run: pnpm run test:e2e
+
+      - name: Containerprotokolle bei Fehlschlag
+        if: failure()
+        run: docker compose logs --tail 200 postgres minio keycloak
+
+      - name: Playwright-Bericht sichern
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   build:
     runs-on: ubuntu-latest
     needs: [unit-tests, integration-tests]
