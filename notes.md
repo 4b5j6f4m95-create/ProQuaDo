@@ -19,15 +19,18 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 **Ohne Anmeldung im Browser geprüft (Phase 7):** `/api/health/ready` in allen drei Zuständen — `ready` mit `scannerKind: "stub"`, `degraded` mit `uploadsBlocked: true` bei nicht erreichbarem clamd (HTTP **200**, nicht 503 — siehe Begründung unten), und `ready` mit `scannerKind: "clamav"` gegen ein laufendes clamd.
 
-**Im Browser geprüft (angemeldet als worker.test):** der Offline-Durchlauf bis zum lokalen Abschluss — Gerät registrieren, „Für Offline vorbereiten", Verbindung trennen (Dev-Server gestoppt **und** `navigator.onLine` false), Schritt starten, Checkliste, Messwert, PIN, lokal abschließen. Dabei bestätigt: Schritt 2 bleibt durchgehend 🔒 gesperrt, und **serverseitig ist nichts angekommen** — Schritt 1 weiterhin `READY`, keine Antworten, keine Messwerte, keine Abschlussmeldung. Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte die Synchronisation eines normalen Offline-Durchlaufs schlicht unmöglich.
+**Im Browser geprüft (angemeldet als worker.test): der vollständige Offline-Durchlauf.** Gerät registrieren, „Für Offline vorbereiten", Verbindung trennen (Dev-Server gestoppt **und** `navigator.onLine` false), Schritt starten, Checkliste, Messwert, PIN, lokal abschließen, wieder verbinden, synchronisieren.
+
+Bestätigt in der Offline-Phase: Schritt 2 bleibt durchgehend 🔒 gesperrt, und **serverseitig ist nichts angekommen** — Schritt 1 weiterhin `READY`, keine Antworten, keine Messwerte, keine Abschlussmeldung. Nach der Synchronisation: alle fünf Kommandos `ACCEPTED` (**alle mit demselben `base_version`**, Sequenznummern 1–5), null Konflikte, Schritt 1 `COMPLETED`, Schritt 2 vom **Server** auf `READY` freigegeben. Die Grenzwerte stehen auf dem Messergebnis (`1.8`/`2.2`, `is_within_tolerance = t`), die Abschlussmeldung ist `VALIDATED`/`OK` mit erhaltener Client-Erfassungszeit, die Bestätigung trägt Methode, Textversion, Digest und Gerät.
+
+Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte die Synchronisation eines normalen Offline-Durchlaufs schlicht unmöglich.
 
 **Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten. Außerdem Abschnitt 9 der Akte in der Lesefassung: die abgeleiteten Zahlen, „Abgeschlossen ist nicht freigegeben" — und **kein** Freigabeformular, weil PL nur `product_release.view` hat.
 
 **Weiterhin offen, beides braucht eine andere Anmeldung:**
 
-- der **letzte Schritt** des Offline-Durchlaufs als `worker.test`: vorbereiten, offline arbeiten und lokal abschließen sind geprüft (siehe unten), die abschließende Synchronisation nach der Korrektur noch nicht.
-- **Abschnitt 9** der Akte samt Freigabeformular als `qm.test` — `product_release.decide` liegt allein bei QM.
-- der Offline-Durchlauf im **Production-Build**: der Service Worker registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite ohne Verbindung ist damit ungeprüft. Der Sync-Pfad selbst hängt nicht am Service Worker.
+- **Abschnitt 9** der Akte samt Freigabeformular als `qm.test` — `product_release.decide` liegt allein bei QM. Die Lesefassung ist als PL geprüft, das Entscheiden selbst noch nicht.
+- der Offline-Durchlauf im **Production-Build**: der Service Worker registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite ohne Verbindung ist damit ungeprüft. Der Sync-Pfad selbst hängt nicht am Service Worker — er ist vollständig geprüft.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
@@ -366,17 +369,16 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind abgearbeitet, bis auf das, was keine Programmierarbeit ist (siehe „Stand" oben) — hier stehen die bekannten Lücken.
+Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind abgearbeitet, bis auf das, was keine Programmierarbeit ist (siehe „Stand" oben) — hier stehen die bekannten Lücken. Dazu gehört die Entscheidung über `session.maxAge` (siehe „Die Sitzung läuft nach 15 Minuten ab" unten), die ADR-001 betrifft und deshalb nicht nebenbei im Code getroffen wird.
 
-1. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
+1. **PIN-Fehlversuchssperre.** Der erste Punkt, den ADR-005 selbst als offensichtlichste Lücke nennt: eine vierstellige PIN hinter einem Limit von 100 Anfragen pro Minute ist schwächer, als es aussieht. Ein Zähler je Benutzer mit wachsender Wartezeit — `rate_limit_windows` steht bereits als gemeinsamer Speicher zur Verfügung.
 
-2. **PIN-Fehlversuchssperre.** Der erste Punkt, den ADR-005 selbst als offensichtlichste Lücke nennt: eine vierstellige PIN hinter einem Limit von 100 Anfragen pro Minute ist schwächer, als es aussieht. Ein Zähler je Benutzer mit wachsender Wartezeit — `rate_limit_windows` steht bereits als gemeinsamer Speicher zur Verfügung.
-
-3. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
+2. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
 - Vor jeder Phase die zugehörigen `docs/`-Kapitel lesen; sie sind vor dem Code entstanden und enthalten die Begründungen.
 - Abweichungen von `docs/` **hier** festhalten, nicht stillschweigend umsetzen — der Abschnitt „Architekturentscheidungen mit Nachwirkung" ist genau dafür da und hat mehrfach Widersprüche sichtbar gemacht.
 - Am Ende jeder Phase die vollständige Prüfkette laufen lassen **und** die betroffenen Seiten einmal im Browser öffnen.
-- Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die drei lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
+- Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
+- **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
