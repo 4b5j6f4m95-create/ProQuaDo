@@ -235,6 +235,11 @@ button:disabled {
   font-weight: 600;
 }
 
+.success-text {
+  color: #12662b;
+  font-weight: 600;
+}
+
 .muted {
   color: #555;
 }

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { requireAuthContext } from '@/lib/authz/require-permission';
 import { exportProductionDossier, type ExportFormat } from '@/domain/dossier/export-dossier';
+import { decideProductRelease } from '@/domain/quality/product-release';
 import {
   markAllNotificationsRead,
   markNotificationRead,
@@ -46,6 +47,47 @@ export async function exportDossierAction(
   } catch (error) {
     if (error instanceof DomainError || error instanceof AuthzError) {
       return { error: error.message, downloadUrl: null, summary: null };
+    }
+    throw error;
+  }
+}
+
+export interface ProductReleaseFormState {
+  error: string | null;
+  result: string | null;
+}
+
+/**
+ * The product release decision — Masterprompt Kap. 10 section 9. Returns
+ * errors rather than throwing for the same reason the export does: "not
+ * releasable, three blocking NCRs are open" is an answer with a next action,
+ * not a crash.
+ */
+export async function decideProductReleaseAction(
+  _prevState: ProductReleaseFormState,
+  formData: FormData,
+): Promise<ProductReleaseFormState> {
+  const productionOrderId = String(formData.get('productionOrderId'));
+  try {
+    const actor = await requireAuthContext();
+    const result = await decideProductRelease({
+      actor,
+      productionOrderId,
+      decision: String(formData.get('decision')) as 'RELEASED' | 'REJECTED',
+      reason: String(formData.get('reason') ?? ''),
+      pin: String(formData.get('pin')),
+    });
+    revalidatePath(`/production-orders/${productionOrderId}/dossier`);
+    return {
+      error: null,
+      result:
+        result.decision === 'RELEASED'
+          ? 'Produkt freigegeben. Die Entscheidung steht in Abschnitt 9 der Akte.'
+          : 'Freigabe abgelehnt. Die Entscheidung und ihre Begründung stehen in Abschnitt 9 der Akte.',
+    };
+  } catch (error) {
+    if (error instanceof DomainError || error instanceof AuthzError) {
+      return { error: error.message, result: null };
     }
     throw error;
   }

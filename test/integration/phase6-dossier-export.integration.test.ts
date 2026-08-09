@@ -54,6 +54,8 @@ let submitWorkStepCompletion: typeof import('@/domain/execution/complete-work-st
 let raiseNonConformance: typeof import('@/domain/quality/raise-non-conformance').raiseNonConformance;
 
 let assembleProductionDossier: typeof import('@/domain/dossier/assemble-dossier').assembleProductionDossier;
+let decideProductRelease: typeof import('@/domain/quality/product-release').decideProductRelease;
+let getProductRelease: typeof import('@/domain/quality/product-release').getProductRelease;
 let exportProductionDossier: typeof import('@/domain/dossier/export-dossier').exportProductionDossier;
 let searchTraceability: typeof import('@/domain/dossier/search').searchTraceability;
 let findOrdersBySerialNumber: typeof import('@/domain/dossier/search').findOrdersBySerialNumber;
@@ -136,6 +138,7 @@ beforeAll(async () => {
   ({ raiseNonConformance } = await import('@/domain/quality/raise-non-conformance'));
 
   ({ assembleProductionDossier } = await import('@/domain/dossier/assemble-dossier'));
+  ({ decideProductRelease, getProductRelease } = await import('@/domain/quality/product-release'));
   ({ exportProductionDossier } = await import('@/domain/dossier/export-dossier'));
   ({ searchTraceability, findOrdersBySerialNumber } = await import('@/domain/dossier/search'));
   ({ getDashboard } = await import('@/domain/dashboard/dashboard-queries'));
@@ -709,5 +712,218 @@ describe('Dashboard und Benachrichtigungen', () => {
       where: { organizationId: fx.organizationId },
     });
     expect(after).toBe(before);
+  }, 240_000);
+});
+
+/**
+ * Produktfreigabe — Masterprompt Kap. 10 section 9.
+ *
+ * Until Phase 7 the dossier only added up whether anything was open and said
+ * in as many words that the release itself was not recorded. These tests
+ * cover the decision that now exists, and above all the two things it must
+ * never become: derived from the data, and repeatable.
+ */
+describe('Produktfreigabe', () => {
+  /** Finishes the second (requirement-free) step so the order reaches COMPLETED. */
+  async function completeOrder(fx: Awaited<ReturnType<typeof seedExecutedOrder>>) {
+    await startWorkStep({ actor: fx.worker, workStepInstanceId: fx.step2InstanceId });
+    await submitWorkStepCompletion({
+      actor: fx.worker,
+      workStepInstanceId: fx.step2InstanceId,
+      idempotencyKey: randomUUID(),
+      confirmation: { signatureMethod: 'PIN', pin: PIN },
+      usedDocumentRevisionIds: [],
+    });
+  }
+
+  it('refuses a release while the order is unfinished, and names why', async () => {
+    const fx = await seedExecutedOrder('release-blocked');
+
+    // Step 2 is still open, so the order is not COMPLETED.
+    await expect(
+      decideProductRelease({
+        actor: fx.qualityManager,
+        productionOrderId: fx.orderId,
+        decision: 'RELEASED',
+        reason: 'Sieht gut aus',
+        pin: PIN,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    // A rejection stays available — refusing a product is exactly what one
+    // does while something is wrong with it.
+    const rejected = await decideProductRelease({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      decision: 'REJECTED',
+      reason: 'Endprüfung nicht durchgeführt, Auftrag unvollständig.',
+      pin: PIN,
+    });
+    expect(rejected.decision).toBe('REJECTED');
+    expect(rejected.basis.orderStatus).not.toBe('COMPLETED');
+  }, 240_000);
+
+  it('records who released, when, why, and on what basis', async () => {
+    const fx = await seedExecutedOrder('release-granted');
+    await completeOrder(fx);
+
+    const result = await decideProductRelease({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      decision: 'RELEASED',
+      reason: 'Akte vollständig geprüft, alle Merkmale in Toleranz.',
+      pin: PIN,
+    });
+    expect(result.decision).toBe('RELEASED');
+    expect(result.basis.orderStatus).toBe('COMPLETED');
+    expect(result.basis.openBlockingNonConformances).toBe(0);
+
+    const dossier = await assembleProductionDossier(fx.auditor, fx.orderId);
+    const decision = dossier.finalRelease.decision!;
+    expect(decision.decision).toBe('RELEASED');
+    expect(decision.decidedBy).toBe('Quirin Mayr');
+    expect(decision.reason).toContain('Akte vollständig geprüft');
+    expect(decision.signatureData).toMatch(/^[0-9a-f]{64}$/);
+    // The dossier can now answer the question rather than explain why it
+    // cannot.
+    expect(dossier.finalRelease.releasable).toBe(true);
+
+    const events = await ownerClient.auditEvent.findMany({
+      where: { resourceId: fx.orderId, eventType: 'product_release.granted' },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.reason).toContain('Akte vollständig geprüft');
+  }, 240_000);
+
+  it('keeps the basis as it stood, even after the data moves on', async () => {
+    const fx = await seedExecutedOrder('release-basis');
+    await completeOrder(fx);
+
+    await decideProductRelease({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      decision: 'RELEASED',
+      reason: 'Freigegeben ohne offene Punkte.',
+      pin: PIN,
+    });
+
+    // Something happens afterwards that changes the live numbers.
+    await raiseNonConformance({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      description: 'Nachträglich im Feld aufgefallen',
+      priority: 'CRITICAL',
+      reporterSuggestsBlocking: true,
+    });
+
+    const dossier = await assembleProductionDossier(fx.auditor, fx.orderId);
+    // The live figure moved…
+    expect(dossier.finalRelease.openBlockingNonConformances).toBeGreaterThan(0);
+    // …the recorded grounds of the decision did not. Same reasoning as
+    // copying tolerances onto a measurement result.
+    expect(dossier.finalRelease.decision!.basis.openBlockingNonConformances).toBe(0);
+  }, 240_000);
+
+  it('refuses a second release, because withdrawing one is a recall', async () => {
+    const fx = await seedExecutedOrder('release-once');
+    await completeOrder(fx);
+
+    const release = () =>
+      decideProductRelease({
+        actor: fx.qualityManager,
+        productionOrderId: fx.orderId,
+        decision: 'RELEASED',
+        reason: 'Freigabe nach vollständiger Prüfung.',
+        pin: PIN,
+      });
+
+    await release();
+    await expect(release()).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    // And a rejection cannot quietly overturn a release either.
+    await expect(
+      decideProductRelease({
+        actor: fx.qualityManager,
+        productionOrderId: fx.orderId,
+        decision: 'REJECTED',
+        reason: 'Doch nicht.',
+        pin: PIN,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    const rows = await ownerClient.productRelease.count({
+      where: { productionOrderId: fx.orderId },
+    });
+    expect(rows).toBe(1);
+  }, 240_000);
+
+  it('lets a rejection be followed by a release once the cause is gone', async () => {
+    const fx = await seedExecutedOrder('release-after-reject');
+
+    await decideProductRelease({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      decision: 'REJECTED',
+      reason: 'Endprüfung fehlt.',
+      pin: PIN,
+    });
+    await completeOrder(fx);
+    const granted = await decideProductRelease({
+      actor: fx.qualityManager,
+      productionOrderId: fx.orderId,
+      decision: 'RELEASED',
+      reason: 'Endprüfung nachgeholt und bestanden.',
+      pin: PIN,
+    });
+    expect(granted.decision).toBe('RELEASED');
+
+    // The rejection stays readable — the history is not rewritten. The
+    // decision in force is the latest one.
+    const rows = await ownerClient.productRelease.findMany({
+      where: { productionOrderId: fx.orderId },
+      orderBy: { decidedAt: 'asc' },
+    });
+    expect(rows.map((r) => r.decision)).toEqual(['REJECTED', 'RELEASED']);
+    const current = await getProductRelease(fx.qualityManager, fx.orderId);
+    expect(current!.decision).toBe('RELEASED');
+  }, 240_000);
+
+  it('is not open to a worker, and not open without the right PIN', async () => {
+    const fx = await seedExecutedOrder('release-authz');
+    await completeOrder(fx);
+
+    await expect(
+      decideProductRelease({
+        actor: fx.worker,
+        productionOrderId: fx.orderId,
+        decision: 'RELEASED',
+        reason: 'Ich bin fertig.',
+        pin: PIN,
+      }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+
+    await expect(
+      decideProductRelease({
+        actor: fx.qualityManager,
+        productionOrderId: fx.orderId,
+        decision: 'RELEASED',
+        reason: 'Freigabe.',
+        pin: '0000',
+      }),
+    ).rejects.toMatchObject({ code: 'CONFIRMATION_FAILED' });
+
+    // A reason is not optional — a decision without one is a signature on a
+    // blank page.
+    await expect(
+      decideProductRelease({
+        actor: fx.qualityManager,
+        productionOrderId: fx.orderId,
+        decision: 'RELEASED',
+        reason: '   ',
+        pin: PIN,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    expect(await getProductRelease(fx.qualityManager, fx.orderId)).toBeNull();
   }, 240_000);
 });

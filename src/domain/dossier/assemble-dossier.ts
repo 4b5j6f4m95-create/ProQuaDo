@@ -3,6 +3,7 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { assertPermission } from '@/lib/authz/assert-permission';
 import { NotFoundError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
+import { getProductReleaseWithin } from '@/domain/quality/product-release';
 
 /**
  * The digital production dossier — MASTERPROMPT.md Kap. 10, all ten sections
@@ -207,8 +208,33 @@ export interface ProductionDossierContent {
     activeHolds: number;
     /** True only when nothing is open AND the order reached COMPLETED. The
      *  dossier states this rather than implying it: an order can be
-     *  COMPLETED while a non-blocking NCR is still being processed. */
+     *  COMPLETED while a non-blocking NCR is still being processed.
+     *
+     *  Note what this is NOT: it says the preconditions for a release are
+     *  met, never that one was given. That is `decision` below. */
     releasable: boolean;
+    /** The recorded product release decision, or null if nobody has made one.
+     *  Since Phase 7 the dossier can answer "who released this product" with
+     *  a person and a date instead of an explanation of why it cannot
+     *  (Masterprompt Kap. 10, docs/adr/ADR-005 for the confirmation). */
+    decision: {
+      decision: string;
+      decidedBy: string | null;
+      decidedAt: Date;
+      reason: string;
+      confirmationText: string;
+      confirmationTextVersion: string;
+      signatureData: string;
+      /** The facts as they stood when the decision was made — copied at that
+       *  moment, so a later change cannot rewrite its grounds. */
+      basis: {
+        orderStatus: string;
+        openBlockingNonConformances: number;
+        activeHolds: number;
+        completedSteps: number;
+        totalSteps: number;
+      };
+    } | null;
   };
   // 10. relevanter Audit-Auszug und Erzeugungsmetadaten
   auditTrail: Array<{
@@ -366,7 +392,18 @@ export async function assembleProductionDossier(
     const steps = instances.map((instance) => buildStep(instance, name));
     const documents = buildDocumentList(instances);
     const participants = await buildParticipants(tx, instances, names);
-    const finalRelease = buildFinalRelease(order, instances, nonConformances, holds, name);
+    // Read in the same transaction as everything else, so the release
+    // decision belongs to the same `data_as_of` instant as the facts it is
+    // shown beside.
+    const productRelease = await getProductReleaseWithin(tx, order.id);
+    const finalRelease = buildFinalRelease(
+      order,
+      instances,
+      nonConformances,
+      holds,
+      name,
+      productRelease,
+    );
 
     return {
       identification: {
@@ -631,12 +668,28 @@ function buildDocumentList(instances: InstanceRow[]): ProductionDossierContent['
   );
 }
 
+type ProductReleaseRow = {
+  decision: string;
+  decidedById: string;
+  decidedAt: Date;
+  reason: string;
+  confirmationText: string;
+  confirmationTextVersion: string;
+  signatureData: string;
+  basisOrderStatus: string;
+  basisOpenBlockingNcrs: number;
+  basisActiveHolds: number;
+  basisCompletedSteps: number;
+  basisTotalSteps: number;
+};
+
 function buildFinalRelease(
   order: { status: string; actualEndAt: Date | null },
   instances: InstanceRow[],
   nonConformances: NcrRow[],
   holds: Array<{ isActive: boolean }>,
   name: (id: string | null) => string | null,
+  productRelease: ProductReleaseRow | null,
 ): ProductionDossierContent['finalRelease'] {
   // The last step that actually completed — not simply the highest number,
   // because a superseded attempt keeps its number.
@@ -661,6 +714,24 @@ function buildFinalRelease(
     openBlockingNonConformances: openBlocking,
     activeHolds,
     releasable: orderCompleted && openBlocking === 0 && activeHolds === 0,
+    decision: productRelease
+      ? {
+          decision: productRelease.decision,
+          decidedBy: name(productRelease.decidedById),
+          decidedAt: productRelease.decidedAt,
+          reason: productRelease.reason,
+          confirmationText: productRelease.confirmationText,
+          confirmationTextVersion: productRelease.confirmationTextVersion,
+          signatureData: productRelease.signatureData,
+          basis: {
+            orderStatus: productRelease.basisOrderStatus,
+            openBlockingNonConformances: productRelease.basisOpenBlockingNcrs,
+            activeHolds: productRelease.basisActiveHolds,
+            completedSteps: productRelease.basisCompletedSteps,
+            totalSteps: productRelease.basisTotalSteps,
+          },
+        }
+      : null,
   };
 }
 

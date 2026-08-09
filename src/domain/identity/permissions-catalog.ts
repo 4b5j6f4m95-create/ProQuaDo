@@ -82,6 +82,17 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   perm('sync_conflict', 'decide', 'Synchronisationskonflikt entscheiden'),
   perm('device', 'manage', 'Geräte verwalten'),
 
+  // Produktfreigabe (Phase 7). docs/04 does not enumerate this atom either:
+  // Masterprompt Kap. 10 names "Endprüfung und Produktfreigabe" as a section
+  // of the dossier, but the matrix never says who decides it, because until
+  // now nothing decided it — section 9 only added up whether anything was
+  // still open. Given to QUALITY_MANAGER alone, on the same reasoning docs/04
+  // uses for documents: where quality is the unambiguous instance, it is the
+  // only one. Same kind of deviation as `sync.execute` above — recorded, not
+  // silently assumed.
+  perm('product_release', 'decide', 'Produktfreigabe entscheiden'),
+  perm('product_release', 'view', 'Produktfreigabe ansehen'),
+
   // Audit & Reporting
   perm('audit', 'view', 'Audit Trail ansehen'),
   perm('report', 'generate', 'Bericht erzeugen'),

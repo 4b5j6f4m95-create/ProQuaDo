@@ -325,12 +325,45 @@ function finalReleaseSection(doc: Doc, dossier: ProductionDossierContent): void 
       : 'Diese Akte weist offene Punkte aus — eine Produktfreigabe ist auf ihrer Grundlage nicht belegt.',
     { width: contentWidth(doc) },
   );
-  doc.font('Helvetica-Oblique');
-  doc.text(
-    'Die Produktfreigabe selbst ist eine Entscheidung einer berechtigten Person und wird von ' +
-      'diesem System noch nicht als eigener Vorgang geführt.',
-    { width: contentWidth(doc) },
-  );
+
+  doc.moveDown(0.4);
+  const decision = release.decision;
+  if (!decision) {
+    // Still the honest answer, and still worth printing: an empty section
+    // would read as "nothing to report" rather than "nobody has decided".
+    doc.font('Helvetica-Oblique');
+    doc.text(
+      'Für diesen Auftrag liegt keine Produktfreigabe-Entscheidung vor. Abgeschlossen ist nicht ' +
+        'freigegeben — die Freigabe ist eine Entscheidung einer berechtigten Person.',
+      { width: contentWidth(doc) },
+    );
+    return;
+  }
+
+  doc
+    .font('Helvetica-Bold')
+    .text(
+      decision.decision === 'RELEASED' ? 'Produkt freigegeben.' : 'Produktfreigabe abgelehnt.',
+      { width: contentWidth(doc) },
+    );
+  keyValues(doc, [
+    ['Entschieden von', decision.decidedBy ?? '—'],
+    ['Entschieden am', formatDateTime(decision.decidedAt)],
+    ['Begründung', decision.reason],
+    [
+      'Grundlage zum Entscheidungszeitpunkt',
+      `Auftragsstatus ${decision.basis.orderStatus}, ` +
+        `${decision.basis.completedSteps}/${decision.basis.totalSteps} Schritte abgeschlossen, ` +
+        `${decision.basis.openBlockingNonConformances} offene blockierende Abweichung(en), ` +
+        `${decision.basis.activeHolds} aktive Sperre(n)`,
+    ],
+    [
+      'Bestätigung',
+      `Text v${decision.confirmationTextVersion}, Digest ${decision.signatureData.slice(0, 16)}…`,
+    ],
+  ]);
+  doc.font('Helvetica-Oblique').fontSize(BODY_SIZE);
+  doc.text(decision.confirmationText, { width: contentWidth(doc) });
 }
 
 // 10. relevanter Audit-Auszug und Erzeugungsmetadaten

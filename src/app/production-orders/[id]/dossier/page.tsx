@@ -2,8 +2,11 @@ import Link from 'next/link';
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import { assembleProductionDossier } from '@/domain/dossier/assemble-dossier';
 import { listDossierExports } from '@/domain/dossier/export-dossier';
+import { describeBlockers } from '@/domain/quality/product-release';
+import { can } from '@/lib/authz/can';
 import { StatusChip } from '@/components/StatusChip';
 import { DossierExportForm } from '@/components/DossierExportForm';
+import { ProductReleaseForm } from '@/components/ProductReleaseForm';
 
 /**
  * Die digitale Produktionsakte auf dem Bildschirm — dieselben zehn Abschnitte
@@ -14,6 +17,15 @@ export default async function DossierPage({ params }: { params: { id: string } }
   const actor = await requirePageAuth();
   const dossier = await assembleProductionDossier(actor, params.id);
   const exports = await listDossierExports(actor, params.id);
+  const decision = dossier.finalRelease.decision;
+  // Whether to OFFER the decision. The server decides whether to accept one.
+  const mayDecide = (
+    await can({
+      userId: actor.userId,
+      organizationId: actor.organizationId,
+      action: 'product_release.decide',
+    })
+  ).allowed;
 
   return (
     <main>
@@ -190,7 +202,15 @@ export default async function DossierPage({ params }: { params: { id: string } }
       </section>
 
       <section
-        className={`card${dossier.finalRelease.releasable ? ' done-card' : ' blocked-card'}`}
+        className={`card${
+          decision
+            ? decision.decision === 'RELEASED'
+              ? ' done-card'
+              : ' blocked-card'
+            : dossier.finalRelease.releasable
+              ? ' done-card'
+              : ' blocked-card'
+        }`}
       >
         <h2>9. Endprüfung und Produktfreigabe</h2>
         <p>
@@ -205,10 +225,57 @@ export default async function DossierPage({ params }: { params: { id: string } }
               : 'Diese Akte weist offene Punkte aus — eine Produktfreigabe ist auf ihrer Grundlage nicht belegt.'}
           </strong>
         </p>
-        <p className="muted">
-          Die Produktfreigabe selbst ist eine Entscheidung einer berechtigten Person und wird von
-          diesem System noch nicht als eigener Vorgang geführt.
-        </p>
+
+        {decision ? (
+          <>
+            <p>
+              <strong>
+                {decision.decision === 'RELEASED'
+                  ? 'Produkt freigegeben'
+                  : 'Produktfreigabe abgelehnt'}
+              </strong>{' '}
+              von {decision.decidedBy ?? '—'} am {decision.decidedAt.toLocaleString('de-DE')}
+            </p>
+            <dl className="key-values">
+              <Row k="Begründung" v={decision.reason} />
+              <Row
+                k="Grundlage zum Entscheidungszeitpunkt"
+                v={
+                  `Auftragsstatus ${decision.basis.orderStatus} · ` +
+                  `${decision.basis.completedSteps}/${decision.basis.totalSteps} Schritte · ` +
+                  `${decision.basis.openBlockingNonConformances} offene blockierende Abweichung(en) · ` +
+                  `${decision.basis.activeHolds} aktive Sperre(n)`
+                }
+              />
+              <Row
+                k="Bestätigung"
+                v={`Text v${decision.confirmationTextVersion}, Digest ${decision.signatureData.slice(0, 16)}…`}
+              />
+            </dl>
+            <p className="muted">{decision.confirmationText}</p>
+          </>
+        ) : (
+          <p className="muted">
+            Für diesen Auftrag liegt keine Produktfreigabe-Entscheidung vor. Abgeschlossen ist nicht
+            freigegeben.
+          </p>
+        )}
+
+        {/* Offered only where a decision is still open and the viewer may
+            make one. Both conditions are re-checked server-side — this is
+            what to show, not what is allowed. */}
+        {mayDecide && decision?.decision !== 'RELEASED' && (
+          <ProductReleaseForm
+            productionOrderId={params.id}
+            blockers={describeBlockers({
+              orderStatus: dossier.context.orderStatus,
+              openBlockingNonConformances: dossier.finalRelease.openBlockingNonConformances,
+              activeHolds: dossier.finalRelease.activeHolds,
+              completedSteps: 0,
+              totalSteps: 0,
+            })}
+          />
+        )}
       </section>
 
       <section className="card">

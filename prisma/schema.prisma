@@ -85,6 +85,7 @@ model Organization {
   productionDossiers ProductionDossier[]
   dossierExports     DossierExport[]
   notifications      Notification[]
+  productReleases    ProductRelease[]
   syncSequence       SyncSequence?
   syncCursors        SyncCursor[]
   syncCommands       SyncCommand[]
@@ -1006,6 +1007,7 @@ model ProductionOrder {
   productionHolds   ProductionHold[]
   syncConflicts     SyncConflict[]
   dossiers          ProductionDossier[]
+  productReleases   ProductRelease[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId])
@@ -1796,4 +1798,55 @@ model RateLimitWindow {
 
   @@index([resetAt])
   @@map("rate_limit_windows")
+}
+
+/// Produktfreigabe — the decision Masterprompt Kap. 10 names in section 9 of
+/// the dossier ("Endprüfung und Produktfreigabe") and that, until Phase 7,
+/// nothing in the system actually made. Section 9 only added up whether
+/// anything was still open, and said so explicitly rather than passing
+/// "completed" off as "released".
+///
+/// Append-only by intent: several rows per order are allowed, because
+/// "rejected → rework → released" is the ordinary course of events and a
+/// rejection that could be edited away is not a record. Which decision is in
+/// force is the latest one. A partial unique index (see the migration) permits
+/// at most ONE `RELEASED` row per order, so a product cannot be released twice
+/// and a release cannot be quietly superseded.
+///
+/// `basis*` fields are the facts as they stood at the moment of the decision.
+/// They are copied, not derived on read, for the same reason a measurement
+/// copies its tolerances: the dossier must be able to say what the deciding
+/// person actually saw, even after the data has moved on.
+model ProductRelease {
+  id                String   @id @default(uuid())
+  organizationId    String   @map("organization_id")
+  productionOrderId String   @map("production_order_id")
+  decision          String // RELEASED, REJECTED
+  decidedById       String   @map("decided_by_id")
+  decidedAt         DateTime @map("decided_at")
+  reason            String
+
+  basisOrderStatus      String @map("basis_order_status")
+  basisOpenBlockingNcrs Int    @map("basis_open_blocking_ncrs")
+  basisActiveHolds      Int    @map("basis_active_holds")
+  basisCompletedSteps   Int    @map("basis_completed_steps")
+  basisTotalSteps       Int    @map("basis_total_steps")
+
+  /// Wording and version of what was confirmed, kept verbatim — the same
+  /// reasoning as StepConfirmation (ADR-005).
+  confirmationText        String @map("confirmation_text")
+  confirmationTextVersion String @map("confirmation_text_version")
+  /// SHA-256 over (user, order, decision, text version, timestamp). Not a
+  /// signature — see ADR-005 on what the digest is and is not.
+  signatureData           String @map("signature_data")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  version   Int      @default(1)
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  productionOrder ProductionOrder @relation(fields: [productionOrderId], references: [id])
+
+  @@index([organizationId])
+  @@index([productionOrderId, decidedAt])
+  @@map("product_releases")
 }
