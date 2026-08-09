@@ -371,7 +371,7 @@ Warum es keine Kontrolle sah: die zwölf Angriffstests aus `phase7-offline-invar
 
 **Regel:** Wenn eine Kontrolle für eine Eingabe eingeführt wird, einmal `grep` über alle Stellen laufen lassen, die dieselbe Eingabe annehmen. Der Fix ist `resolveDeviceId` in `src/lib/api/device-context.ts` — eine Funktion, an einer Stelle, in allen neun Endpunkten.
 
-### Die CI war sieben Phasen lang nie gelaufen — und scheiterte im ersten Versuch an Node 20
+### Die CI war sieben Phasen lang nie gelaufen — und scheiterte zweimal, bevor der erste Test lief
 
 `.github/workflows/ci.yml` steht seit Phase 1 im Repository, mit fünf Jobs und einem Kommentar darüber, welche Stufe was findet. Ausgeführt wurde die Datei nie: das Projekt hatte bis zum Ende von Phase 7 **kein Remote**. Der allererste Push löste den allerersten Lauf aus, und der starb nach 13 Sekunden — nicht in einem Test, sondern in `actions/setup-node`:
 
@@ -382,7 +382,18 @@ Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite
 
 `packageManager` steht auf `pnpm@11.20.0`, und dieses pnpm lädt `node:sqlite` — ein Builtin ab Node 22.13. Der Workflow pinnte `node-version: 20`. Damit scheiterte **jeder** Job noch vor seinem ersten Kommando, `lint-and-typecheck` zuerst; die vier abhängigen Jobs wurden gar nicht erst gestartet. Behoben durch `node-version: 22` in allen Jobs; `engines.node` steht jetzt ebenfalls auf `>=22.13.0`, weil das die tatsächliche Anforderung der Werkzeugkette ist und ein `>=20.0.0` daneben schlicht unwahr war.
 
-**Lehre — dieselbe wie beim CSP-Eintrag oben, eine Ebene höher:** eine Pipeline, die nie gelaufen ist, ist kein Sicherheitsnetz, sondern eine Vermutung mit YAML-Syntax. Bemerkenswert ist dabei, was sie _nicht_ geprüft hat: dass die Datei plausibel aussah, hat sieben Phasen lang niemanden misstrauisch gemacht.
+**Der zweite Anlauf scheiterte an derselben Sorte Karteileiche.** Mit Node 22 kam `setup-node` durch, und dafür brach `pnpm install --frozen-lockfile` ab:
+
+```
+[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: @prisma/client, @prisma/engines,
+cpu-features, esbuild, prisma, protobufjs, ssh2, unrs-resolver
+```
+
+pnpm führt Installationsskripte nur nach ausdrücklicher Entscheidung aus und bricht ab, solange ein Paket weder erlaubt noch abgelehnt ist — ohne TTY ein harter Stopp. In `pnpm-workspace.yaml` stand dafür seit Phase 1 eine Liste unter **`onlyBuiltDependencies`**, und das ist die pnpm-**10**-Schreibweise: pnpm 11 wertet sie nicht aus. Der geltende Schlüssel heißt `allowBuilds` und ist eine Zuordnung Paket → true/false; `pnpm config list` zeigt die offenen Entscheidungen im Klartext („set this to true or false").
+
+Warum das lokal nie auffiel: ein vorhandenes `node_modules` fragt nicht erneut. Der Fehler tritt ausschließlich bei einer **frischen** Installation auf — nachgestellt in einem Wegwerfverzeichnis mit denselben vier Dateien, wo er sich zeigte, sich beheben ließ und die Korrektur nachweisbar wurde (`prisma generate` und `tsx` laufen darin).
+
+**Lehre — dieselbe wie beim CSP-Eintrag oben, eine Ebene höher:** eine Pipeline, die nie gelaufen ist, ist kein Sicherheitsnetz, sondern eine Vermutung mit YAML-Syntax. Beide Fehler standen jahrelang plausibel aussehend da, keiner wäre durch Lesen aufgefallen, und beide brauchten zur Korrektur keine zehn Zeilen. Wer hier etwas ändert, sollte es einmal gegen einen **leeren** Zustand ausführen: frisches `node_modules`, frische Datenbank, frischer Runner. Die Entwicklungsmaschine ist der Ort, an dem solche Fehler sich verstecken, nicht der, an dem sie auffallen.
 
 ### `getByRole('alert')` trifft in Next.js auch den Routenansager
 
