@@ -19,10 +19,12 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 **Ohne Anmeldung im Browser geprüft (Phase 7):** `/api/health/ready` in allen drei Zuständen — `ready` mit `scannerKind: "stub"`, `degraded` mit `uploadsBlocked: true` bei nicht erreichbarem clamd (HTTP **200**, nicht 503 — siehe Begründung unten), und `ready` mit `scannerKind: "clamav"` gegen ein laufendes clamd.
 
-**Weiterhin offen, beides braucht eine Anmeldung:**
+**Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten.
 
-- der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren) als `worker.test`. `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM — mit einer QM-Sitzung antwortet `/api/v1/sync/bundle` korrekt mit `403`.
-- der Blick auf die beiden neuen Bildschirme: **Verbindliche Dokumente** im Planungsbildschirm (als PL, Plan im Status DRAFT) und **Abschnitt 9** der Akte samt Freigabeformular (als QM). Beide sind durch Integrationstests abgedeckt und der Dev-Server kompiliert sie fehlerfrei — aber die zwei Fehler, die Phase 6/7 nur im Browser zeigten (pdfkit-Schriftmetriken, Seed-Doppelbenutzer), waren genau von der Sorte, die keine der anderen Kontrollen sieht.
+**Weiterhin offen, beides braucht eine andere Anmeldung:**
+
+- der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren) als `worker.test`, im Production-Build (der Service Worker registriert sich in `next dev` absichtlich nicht). `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM oder PL.
+- **Abschnitt 9** der Akte samt Freigabeformular als `qm.test` — `product_release.decide` liegt allein bei QM.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
@@ -151,6 +153,16 @@ Ein Unit-Test für „ClamAV nicht erreichbar → ERROR" lief gegen das echte lo
 `archiver@8` ist ESM-only. Beides scheiterte sofort: Jest (CJS) mit „Cannot use import statement outside a module", der Next-Build mit einem Webpack-Fehler im selben Paket. Der Rückweg auf `archiver@7` (CJS, `module.exports = archiver`) löste beides und brachte nebenbei die klassische Factory-API `archiver('zip', …)` zurück, die v8 durch Klassen ersetzt hatte.
 
 **Regel:** Neue Server-Abhängigkeiten vor dem Einbau kurz gegen **beide** Läufe prüfen — `pnpm run build` und `pnpm run test:integration`. Ein `pnpm run typecheck` allein sagt darüber nichts: die Typen von `@types/archiver@8` waren einwandfrei, nur ließ sich das Paket nirgends laden.
+
+### Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg
+
+Beim Browser-Test der Dokumentbindung als PL gefunden, und nur dort zu finden: `bindDocumentToStepAction` war eine gewöhnliche Server Action, die den `ValidationError` durchreichte. Ein Doppelklick auf **+ Dokumentbindung** landete damit in `src/app/error.tsx` — „Ein Fehler ist aufgetreten", Planungsbildschirm weg, Arbeitsstand weg. Der Text war korrekt („Revision 01 ist bereits verknüpft"), die Reaktion nicht: das ist eine normale Antwort mit einer offensichtlichen nächsten Handlung, kein Seitenabbruch.
+
+Bemerkenswert, **was das nicht gefunden hat**: Typecheck nicht, Integrationstests nicht (die rufen den Service, nicht die Action), `next build` nicht. Der Service verhielt sich in jeder Prüfung korrekt — nur die Schicht darüber machte aus seiner Antwort einen Absturz.
+
+Behoben wie bei Export und Vier-Augen-Prüfung: `useFormState`, Aktion gibt `{ error }` zurück statt zu werfen (`src/components/StepDocumentBindingForms.tsx`). **Regel:** Eine Server Action, deren Dienst eine `DomainError` werfen kann, gehört hinter `useFormState` — geworfen wird nur, was wirklich ein Serverfehler ist.
+
+Direkt danach der zweite Fund derselben Sitzung: nach dem **Entfernen** der Bindung blieb die alte Meldung stehen und behauptete, die Revision sei „bereits verknüpft" — sie war es nicht mehr. `useFormState` behält seinen Zustand bis zum nächsten Absenden desselben Formulars. Gelöst mit `key={step.documentBindings.length}` auf dem Formular: ändert sich die Liste, über die die Meldung spricht, wird das Formular neu montiert und die Meldung verschwindet.
 
 ### Jest entscheidet `skip` beim Einlesen, nicht beim Laufen
 

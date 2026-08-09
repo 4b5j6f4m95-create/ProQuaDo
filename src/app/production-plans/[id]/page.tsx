@@ -7,14 +7,13 @@ import {
   isPlanStructureEditable,
   type PlanRevisionStatus,
 } from '@/domain/production-plans/plan-revision-status';
+import { BindDocumentForm, UnbindDocumentButton } from '@/components/StepDocumentBindingForms';
 import {
   addChecklistItemAction,
   addInspectionCharacteristicAction,
   addPhotoRequirementAction,
   addPlanStepAction,
   addPlanStepDependencyAction,
-  bindDocumentToStepAction,
-  unbindDocumentFromStepAction,
   submitPlanForReviewAction,
   approvePlanAction,
   rejectPlanAction,
@@ -133,14 +132,11 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
                 {binding.pageNumber ? `, S. ${binding.pageNumber}` : ''}
                 {binding.markerLabel ? ` (${binding.markerLabel})` : ''}
                 {editable && (
-                  <form action={unbindDocumentFromStepAction} className="inline-form">
-                    <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
-                    <input type="hidden" name="planStepId" value={step.id} />
-                    <input type="hidden" name="bindingId" value={binding.id} />
-                    <button type="submit" className="link-button">
-                      entfernen
-                    </button>
-                  </form>
+                  <UnbindDocumentButton
+                    productionPlanRevisionId={revision.id}
+                    planStepId={step.id}
+                    bindingId={binding.id}
+                  />
                 )}
               </li>
             ))}
@@ -210,30 +206,17 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
               </form>
 
               {bindableRevisions.length > 0 ? (
-                <form action={bindDocumentToStepAction}>
-                  <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
-                  <input type="hidden" name="planStepId" value={step.id} />
-                  <label>
-                    Dokumentrevision
-                    <select name="documentRevisionId" required>
-                      {bindableRevisions.map((candidate) => (
-                        <option key={candidate.id} value={candidate.id}>
-                          {candidate.document.documentNumber} Rev. {candidate.revisionNumber} —{' '}
-                          {candidate.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Seite (optional)
-                    <input name="pageNumber" type="number" min={1} />
-                  </label>
-                  <label>
-                    Markierung (optional)
-                    <input name="markerLabel" maxLength={100} placeholder="Detail B" />
-                  </label>
-                  <button type="submit">+ Dokumentbindung</button>
-                </form>
+                // Keyed on the number of bindings so the form remounts — and
+                // its message resets — whenever the list it talks about
+                // changes. Without this, "Revision 01 ist bereits verknüpft"
+                // survives the removal of that very binding and then states
+                // something untrue.
+                <BindDocumentForm
+                  key={step.documentBindings.length}
+                  productionPlanRevisionId={revision.id}
+                  planStepId={step.id}
+                  revisions={bindableRevisions}
+                />
               ) : (
                 // Said plainly rather than shown as an empty dropdown: the
                 // usual reason is that the project's drawings exist but have

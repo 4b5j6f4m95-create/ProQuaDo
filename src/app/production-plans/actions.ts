@@ -3,6 +3,8 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireAuthContext } from '@/lib/authz/require-permission';
+import { AuthzError } from '@/lib/authz/errors';
+import { DomainError } from '@/lib/domain-errors';
 import { createProductionPlan } from '@/domain/production-plans/create-production-plan';
 import { addPlanStep, addPlanStepDependency } from '@/domain/production-plans/plan-steps';
 import {
@@ -102,6 +104,10 @@ export async function addInspectionCharacteristicAction(formData: FormData): Pro
   revalidatePath(`/production-plans/${productionPlanRevisionId}`);
 }
 
+export interface BindingFormState {
+  error: string | null;
+}
+
 /**
  * Binds a released document revision to a plan step — docs/10 Phase 2
  * "Schritt-Dokumentbindung", and the last piece Abnahmeszenario C needed to
@@ -110,35 +116,66 @@ export async function addInspectionCharacteristicAction(formData: FormData): Pro
  * `pageNumber` and `markerLabel` are optional in the model and stay optional
  * here: a binding without a page still says which drawing is binding, which
  * is the part production correctness depends on.
+ *
+ * Returns the error instead of throwing. The first version threw, like the
+ * other plan-editing actions — and binding the same revision twice, which a
+ * double click produces, then replaced the whole planning screen with the
+ * error boundary. "Revision 01 ist bereits verknüpft" is a normal answer with
+ * an obvious next action, not a page-destroying event. Same treatment the
+ * export and the four-eyes decision already get.
  */
-export async function bindDocumentToStepAction(formData: FormData): Promise<void> {
-  const actor = await requireAuthContext();
+export async function bindDocumentToStepAction(
+  _prevState: BindingFormState,
+  formData: FormData,
+): Promise<BindingFormState> {
   const productionPlanRevisionId = String(formData.get('productionPlanRevisionId'));
   const pageNumber = Number(formData.get('pageNumber'));
   const markerLabel = String(formData.get('markerLabel') ?? '').trim();
 
-  await bindDocumentToPlanStep({
-    actor,
-    productionPlanRevisionId,
-    planStepId: String(formData.get('planStepId')),
-    documentRevisionId: String(formData.get('documentRevisionId')),
-    pageNumber: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined,
-    markerLabel: markerLabel || undefined,
-  });
+  try {
+    const actor = await requireAuthContext();
+    await bindDocumentToPlanStep({
+      actor,
+      productionPlanRevisionId,
+      planStepId: String(formData.get('planStepId')),
+      documentRevisionId: String(formData.get('documentRevisionId')),
+      pageNumber: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined,
+      markerLabel: markerLabel || undefined,
+    });
+  } catch (error) {
+    if (error instanceof DomainError || error instanceof AuthzError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
   revalidatePath(`/production-plans/${productionPlanRevisionId}`);
+  return { error: null };
 }
 
-export async function unbindDocumentFromStepAction(formData: FormData): Promise<void> {
-  const actor = await requireAuthContext();
+/** Same reasoning as above: a removal refused because the plan has meanwhile
+ *  left DRAFT is an answer, not a crash. */
+export async function unbindDocumentFromStepAction(
+  _prevState: BindingFormState,
+  formData: FormData,
+): Promise<BindingFormState> {
   const productionPlanRevisionId = String(formData.get('productionPlanRevisionId'));
 
-  await unbindDocumentFromPlanStep({
-    actor,
-    productionPlanRevisionId,
-    planStepId: String(formData.get('planStepId')),
-    bindingId: String(formData.get('bindingId')),
-  });
+  try {
+    const actor = await requireAuthContext();
+    await unbindDocumentFromPlanStep({
+      actor,
+      productionPlanRevisionId,
+      planStepId: String(formData.get('planStepId')),
+      bindingId: String(formData.get('bindingId')),
+    });
+  } catch (error) {
+    if (error instanceof DomainError || error instanceof AuthzError) {
+      return { error: error.message };
+    }
+    throw error;
+  }
   revalidatePath(`/production-plans/${productionPlanRevisionId}`);
+  return { error: null };
 }
 
 export async function submitPlanForReviewAction(formData: FormData): Promise<void> {
