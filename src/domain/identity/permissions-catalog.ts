@@ -93,6 +93,13 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   perm('product_release', 'decide', 'Produktfreigabe entscheiden'),
   perm('product_release', 'view', 'Produktfreigabe ansehen'),
 
+  // Ausgehende Integrationen (Phase 7). docs/04 kennt das Atom nicht — die
+  // ERP-/Webhook-Anbindung führt docs/10 unter Phase 6 als „optional für
+  // MVP", ohne zu sagen, wer sie einrichtet. Allein an ADMIN: ein Webhook
+  // bestimmt, wohin Produktionsdaten dieses Mandanten das Haus verlassen,
+  // und das ist eine Administrations-, keine Fachentscheidung.
+  perm('integration', 'manage', 'Ausgehende Integrationen verwalten'),
+
   // Audit & Reporting
   perm('audit', 'view', 'Audit Trail ansehen'),
   perm('report', 'generate', 'Bericht erzeugen'),

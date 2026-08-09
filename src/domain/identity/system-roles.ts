@@ -30,6 +30,7 @@ export const SYSTEM_ROLES = {
       'work_step.view',
       'ncr.view',
       'device.manage',
+      'integration.manage',
       'sync_conflict.view',
       'product_release.view',
       'audit.view',

@@ -81,17 +81,19 @@ model Organization {
   measuringEquipment     MeasuringEquipment[]
   calibrations           Calibration[]
 
-  devices            Device[]
-  productionDossiers ProductionDossier[]
-  dossierExports     DossierExport[]
-  notifications      Notification[]
-  productReleases    ProductRelease[]
-  syncSequence       SyncSequence?
-  syncCursors        SyncCursor[]
-  syncCommands       SyncCommand[]
-  syncConflicts      SyncConflict[]
-  conflictDecisions  ConflictDecision[]
-  photoUploadChunks  PhotoUploadChunk[]
+  devices              Device[]
+  productionDossiers   ProductionDossier[]
+  dossierExports       DossierExport[]
+  notifications        Notification[]
+  productReleases      ProductRelease[]
+  webhookSubscriptions WebhookSubscription[]
+  webhookDeliveries    WebhookDelivery[]
+  syncSequence         SyncSequence?
+  syncCursors          SyncCursor[]
+  syncCommands         SyncCommand[]
+  syncConflicts        SyncConflict[]
+  conflictDecisions    ConflictDecision[]
+  photoUploadChunks    PhotoUploadChunk[]
 
   @@map("organizations")
 }
@@ -1857,4 +1859,77 @@ model ProductRelease {
   @@index([organizationId])
   @@index([productionOrderId, decidedAt])
   @@map("product_releases")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Integrationen (Phase 7)
+// ─────────────────────────────────────────────────────────────
+
+/// A registered outbound endpoint — docs/10 Phase 6 "ERP/Webhook", which the
+/// plan itself marks "Implementierung optional für MVP".
+///
+/// Deliveries are driven off the transactional outbox, the stream
+/// write-outbox-event.ts has named as the source for "future webhooks" since
+/// Phase 1. What it does NOT reuse is the `processed` flag: that is the
+/// notification dispatcher's watermark, and a second consumer sharing it
+/// would rob the first of events it had not seen yet. Each subscription
+/// carries its own cursor instead.
+model WebhookSubscription {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  name           String
+  url            String
+  /// HMAC key the receiver verifies the signature with. Stored, because
+  /// signing needs it — see ADR-008 on what that means and what protects it.
+  secret         String
+  /// Which event types to send. Empty means every type the outbox carries,
+  /// which is a choice the operator has to make deliberately.
+  eventTypes     String[] @map("event_types")
+  isActive       Boolean  @default(true) @map("is_active")
+  /// Highest outbox sequence already ENUMERATED for this subscription —
+  /// not delivered. Events filtered out still advance it, or a subscription
+  /// narrowed to one event type would re-scan the same rows forever.
+  cursor         BigInt   @default(0)
+  createdById    String   @map("created_by_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  version        Int      @default(1)
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  deliveries   WebhookDelivery[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isActive])
+  @@map("webhook_subscriptions")
+}
+
+/// One attempt record per (subscription, event). The unique key is what makes
+/// a repeated dispatch run harmless — the same event is never sent twice to
+/// the same endpoint because of a retry of the enumeration.
+///
+/// A delivery that keeps failing ends as FAILED and stays visible. Silently
+/// dropping it would leave the receiving system quietly out of step with
+/// production reality, which is the failure mode an integration exists to
+/// avoid.
+model WebhookDelivery {
+  id             String    @id @default(uuid())
+  organizationId String    @map("organization_id")
+  subscriptionId String    @map("subscription_id")
+  outboxEventId  String    @map("outbox_event_id")
+  eventType      String    @map("event_type")
+  status         String    @default("PENDING") // PENDING, DELIVERED, FAILED
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now()) @map("next_attempt_at")
+  lastAttemptAt  DateTime? @map("last_attempt_at")
+  responseStatus Int?      @map("response_status")
+  failureReason  String?   @map("failure_reason")
+  deliveredAt    DateTime? @map("delivered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  organization Organization        @relation(fields: [organizationId], references: [id])
+  subscription WebhookSubscription @relation(fields: [subscriptionId], references: [id])
+
+  @@unique([subscriptionId, outboxEventId])
+  @@index([organizationId, status, nextAttemptAt])
+  @@map("webhook_deliveries")
 }
