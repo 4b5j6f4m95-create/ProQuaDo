@@ -252,7 +252,7 @@ export interface ExecutionScenario {
  * für Tests, deren Gegenstand erst danach beginnt (Produktfreigabe).
  */
 export async function createExecutionScenario(
-  options: { completeAllSteps?: boolean } = {},
+  options: { completeAllSteps?: boolean; startFirstStep?: boolean } = {},
 ): Promise<ExecutionScenario> {
   const context = await getDemoContext();
   const { projectId, productId } = await createProject(context);
@@ -352,6 +352,12 @@ export async function createExecutionScenario(
   });
   const step1InstanceId = instances[0]!.id;
   const step2InstanceId = instances[1]!.id;
+
+  // Der Schritt in Arbeit ist der Bildschirm mit den Formularen — für die
+  // Accessibility-Prüfung der interessante Zustand, nicht die Startseite.
+  if (options.startFirstStep && !options.completeAllSteps) {
+    await startWorkStep({ actor: worker, workStepInstanceId: step1InstanceId });
+  }
 
   if (options.completeAllSteps) {
     await startWorkStep({ actor: worker, workStepInstanceId: step1InstanceId });

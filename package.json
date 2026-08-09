@@ -44,6 +44,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@playwright/test": "^1.62.1",
     "@testcontainers/postgresql": "^10.13.2",
     "@types/archiver": "^6.0.4",
