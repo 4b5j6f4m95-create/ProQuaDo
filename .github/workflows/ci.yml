@@ -25,6 +25,13 @@ env:
   OIDC_CLIENT_SECRET: 'ci-placeholder'
   RELEASE_TOKEN_SECRET: 'ci-placeholder-secret-never-used-at-runtime'
 
+# Node 22, nicht 20: `packageManager` in package.json steht auf pnpm@11.20.0,
+# und dieses pnpm lädt `node:sqlite` — ein Builtin, das es erst ab Node 22.13
+# gibt. Mit `node-version: 20` stirbt bereits `actions/setup-node` beim
+# Einrichten des pnpm-Caches, also jeder Job, noch vor dem ersten Test
+# (`ERR_UNKNOWN_BUILTIN_MODULE: No such built-in module: node:sqlite`).
+# Aufgefallen ist das erst beim allerersten CI-Lauf dieses Projekts — bis dahin
+# hatte das Repository kein Remote, die Pipeline war also nie ausgeführt worden.
 jobs:
   lint-and-typecheck:
     runs-on: ubuntu-latest
@@ -33,7 +40,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate
@@ -49,7 +56,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate
@@ -67,7 +74,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate
@@ -126,7 +133,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate
@@ -179,7 +186,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma generate

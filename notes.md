@@ -157,7 +157,7 @@ Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der al
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
 
-Inzwischen 26 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
+Inzwischen 27 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
 
 - **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
 - **Die Anmeldung schlägt fehl oder zeigt den falschen Benutzer**: „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen" (die Meldung lautet „Access Denied" und meint etwas anderes), „Es gab keine Abmeldung", „Der Seed legt nach dem ersten Login Doppelbenutzer an".
@@ -165,7 +165,7 @@ Inzwischen 26 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suc
 - **Eine Schaltfläche tut nichts oder die Seite bricht ab**: „Der Abschlussknopf war dauerhaft gesperrt", „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg".
 - **Ein Test ist grün und beweist trotzdem nichts**: „Jest entscheidet `skip` beim Einlesen", „Ein Test, der versehentlich echte Infrastruktur anspricht", „Eine Kontrolle, die nur einen von zwei Pfaden kennt".
 - **Datenbank und Schema**: „Eine bereits angewendete Migration nachträglich zu ändern", „Prisma-Client-Regenerierung erfordert Server-Neustart", „Relationsnamen bei bidirektionalen Prisma-Beziehungen", „Abgelehnte Vorgänge dürfen nicht in derselben Transaktion geworfen werden", „Berechtigung hängt manchmal von Daten ab".
-- **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften", „`getByRole('alert')` trifft in Next.js auch den Routenansager".
+- **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften", „`getByRole('alert')` trifft in Next.js auch den Routenansager", „Die CI war sieben Phasen lang nie gelaufen".
 
 ### Portkonflikte mit anderen Projekten
 
@@ -371,6 +371,19 @@ Warum es keine Kontrolle sah: die zwölf Angriffstests aus `phase7-offline-invar
 
 **Regel:** Wenn eine Kontrolle für eine Eingabe eingeführt wird, einmal `grep` über alle Stellen laufen lassen, die dieselbe Eingabe annehmen. Der Fix ist `resolveDeviceId` in `src/lib/api/device-context.ts` — eine Funktion, an einer Stelle, in allen neun Endpunkten.
 
+### Die CI war sieben Phasen lang nie gelaufen — und scheiterte im ersten Versuch an Node 20
+
+`.github/workflows/ci.yml` steht seit Phase 1 im Repository, mit fünf Jobs und einem Kommentar darüber, welche Stufe was findet. Ausgeführt wurde die Datei nie: das Projekt hatte bis zum Ende von Phase 7 **kein Remote**. Der allererste Push löste den allerersten Lauf aus, und der starb nach 13 Sekunden — nicht in einem Test, sondern in `actions/setup-node`:
+
+```
+warn: This version of pnpm requires at least Node.js v22.13
+Error [ERR_UNKNOWN_BUILTIN_MODULE]: No such built-in module: node:sqlite
+```
+
+`packageManager` steht auf `pnpm@11.20.0`, und dieses pnpm lädt `node:sqlite` — ein Builtin ab Node 22.13. Der Workflow pinnte `node-version: 20`. Damit scheiterte **jeder** Job noch vor seinem ersten Kommando, `lint-and-typecheck` zuerst; die vier abhängigen Jobs wurden gar nicht erst gestartet. Behoben durch `node-version: 22` in allen Jobs; `engines.node` steht jetzt ebenfalls auf `>=22.13.0`, weil das die tatsächliche Anforderung der Werkzeugkette ist und ein `>=20.0.0` daneben schlicht unwahr war.
+
+**Lehre — dieselbe wie beim CSP-Eintrag oben, eine Ebene höher:** eine Pipeline, die nie gelaufen ist, ist kein Sicherheitsnetz, sondern eine Vermutung mit YAML-Syntax. Bemerkenswert ist dabei, was sie _nicht_ geprüft hat: dass die Datei plausibel aussah, hat sieben Phasen lang niemanden misstrauisch gemacht.
+
 ### `getByRole('alert')` trifft in Next.js auch den Routenansager
 
 Beim Schreiben der E2E-Tests aufgetreten: die Zusicherung auf die Fehlermeldung des PIN-Formulars scheiterte an „strict mode violation: resolved to 2 elements". Das zweite Element ist `<div role="alert" aria-live="assertive" id="__next-route-announcer__">` — Next.js' Ansage des Seitentitels für Screenreader, dauerhaft im Dokument und meistens leer.
@@ -540,7 +553,7 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
 2. **Scheduler für `POST /api/v1/integrations/webhooks/dispatch` einrichten**, sobald ein Webhook produktiv genutzt wird. Ohne ihn sammeln sich Zustellungen als `PENDING` an, ohne dass jemand etwas merkt.
 
-3. **Den ersten echten Lauf der CI-Stufe `e2e-tests` ansehen.** Sie steht in `.github/workflows/ci.yml` und deckt Ebene 6 und 9 zusammen ab (dasselbe Kommando). Ihre Kommandokette ist vor dem Aufschreiben einmal gegen eine **frische** Umgebung ausgeführt worden — leere Datenbank, leeres MinIO, frisch importierter Realm, `migrate deploy`, Seed, 13 Tests grün —, aber auf einem GitHub-Runner ist sie noch nie gelaufen. Was dort erfahrungsgemäß anders sein kann: Startzeiten der Container (die Warteschleife auf den Realm gibt 120 s), `playwright install --with-deps` und die Laufzeit insgesamt. Erst danach als verbindliches Gate behandeln.
+3. **Den ersten echten Lauf der CI-Stufe `e2e-tests` ansehen.** Sie steht in `.github/workflows/ci.yml` und deckt Ebene 6 und 9 zusammen ab (dasselbe Kommando). Ihre Kommandokette ist vor dem Aufschreiben einmal gegen eine **frische** Umgebung ausgeführt worden — leere Datenbank, leeres MinIO, frisch importierter Realm, `migrate deploy`, Seed, 13 Tests grün —, aber auf einem GitHub-Runner ist sie **noch immer nicht** gelaufen: der erste Lauf überhaupt (Push von `ec1653f`) starb in `lint-and-typecheck` an der Node-20-Bindung, und die vier abhängigen Jobs wurden nie gestartet — siehe „Die CI war sieben Phasen lang nie gelaufen". Was auf einem Runner erfahrungsgemäß anders sein kann als lokal: Startzeiten der Container (die Warteschleife auf den Realm gibt 120 s), `playwright install --with-deps` und die Laufzeit insgesamt. Erst nach einem grünen Lauf als verbindliches Gate behandeln.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
