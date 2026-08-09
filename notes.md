@@ -395,6 +395,8 @@ Warum das lokal nie auffiel: ein vorhandenes `node_modules` fragt nicht erneut. 
 
 **Lehre — dieselbe wie beim CSP-Eintrag oben, eine Ebene höher:** eine Pipeline, die nie gelaufen ist, ist kein Sicherheitsnetz, sondern eine Vermutung mit YAML-Syntax. Beide Fehler standen jahrelang plausibel aussehend da, keiner wäre durch Lesen aufgefallen, und beide brauchten zur Korrektur keine zehn Zeilen. Wer hier etwas ändert, sollte es einmal gegen einen **leeren** Zustand ausführen: frisches `node_modules`, frische Datenbank, frischer Runner. Die Entwicklungsmaschine ist der Ort, an dem solche Fehler sich verstecken, nicht der, an dem sie auffallen.
 
+Seit der zweiten Korrektur ist die Pipeline grün, alle fünf Jobs (PR #1). Was sie dabei über sich selbst verraten hat, steht in der Übergabe unter Punkt 3.
+
 ### `getByRole('alert')` trifft in Next.js auch den Routenansager
 
 Beim Schreiben der E2E-Tests aufgetreten: die Zusicherung auf die Fehlermeldung des PIN-Formulars scheiterte an „strict mode violation: resolved to 2 elements". Das zweite Element ist `<div role="alert" aria-live="assertive" id="__next-route-announcer__">` — Next.js' Ansage des Seitentitels für Screenreader, dauerhaft im Dokument und meistens leer.
@@ -564,7 +566,11 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
 2. **Scheduler für `POST /api/v1/integrations/webhooks/dispatch` einrichten**, sobald ein Webhook produktiv genutzt wird. Ohne ihn sammeln sich Zustellungen als `PENDING` an, ohne dass jemand etwas merkt.
 
-3. **Den ersten echten Lauf der CI-Stufe `e2e-tests` ansehen.** Sie steht in `.github/workflows/ci.yml` und deckt Ebene 6 und 9 zusammen ab (dasselbe Kommando). Ihre Kommandokette ist vor dem Aufschreiben einmal gegen eine **frische** Umgebung ausgeführt worden — leere Datenbank, leeres MinIO, frisch importierter Realm, `migrate deploy`, Seed, 13 Tests grün —, aber auf einem GitHub-Runner ist sie **noch immer nicht** gelaufen: der erste Lauf überhaupt (Push von `ec1653f`) starb in `lint-and-typecheck` an der Node-20-Bindung, und die vier abhängigen Jobs wurden nie gestartet — siehe „Die CI war sieben Phasen lang nie gelaufen". Was auf einem Runner erfahrungsgemäß anders sein kann als lokal: Startzeiten der Container (die Warteschleife auf den Realm gibt 120 s), `playwright install --with-deps` und die Laufzeit insgesamt. Erst nach einem grünen Lauf als verbindliches Gate behandeln.
+3. **Die CI-Stufe `e2e-tests` läuft — mit einer Reserve, die man im Auge behalten sollte.** Sie steht in `.github/workflows/ci.yml`, deckt Ebene 6 und 9 mit demselben Kommando ab und war in PR #1 erstmals grün: alle fünf Jobs, `e2e-tests` in 3 min 25 s, darin 13 Tests in 1,6 min. Zwei Zahlen daraus sind es wert, gemerkt zu werden, weil sie lokal ganz anders aussehen:
+   - **Keycloak brauchte 14 Versuche** (rund 28 s), bis der Realm antwortete; lokal ist er nach dem ersten da. Die Warteschleife gibt 60 Versuche à 2 s. Reserve ist also reichlich, aber es ist die Stelle, die bei einem langsameren Runner zuerst kippt — und wenn sie kippt, sagt die Meldung samt angehängtem `docker compose logs keycloak` genau das.
+   - **Der Testlauf dauert auf dem Runner das Fünffache** (1,6 min gegen 17 s lokal), im Wesentlichen der Production-Build. Wer Tests ergänzt, sollte das einrechnen, bevor er sich über die Wartezeit wundert.
+
+   Bis dahin war die Stufe zweimal gescheitert, beide Male vor dem ersten Test — siehe „Die CI war sieben Phasen lang nie gelaufen".
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
