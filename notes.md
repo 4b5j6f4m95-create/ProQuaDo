@@ -21,6 +21,8 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 Alle 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden.
 
+**ADRs:** vorhanden sind 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 006 (Mandantenmodell) und 007 (Export-Jobs, in Phase 6 nachgeholt). **ADR-005 (Signaturverfahren) fehlt als Dokument**, obwohl Code-Kommentare darauf verweisen — etwa `buildSignatureDigest` in `complete-work-step.ts`. Inhaltlich ist die Entscheidung getroffen und umgesetzt (PIN + Audit-Trail, keine qualifizierte elektronische Signatur; docs/10 nennt sie in der Kandidatenliste), aber sie ist nirgends niedergeschrieben. Wer als Nächstes an Signaturen arbeitet, sollte das Dokument nachziehen.
+
 ---
 
 ## Lokale Umgebung starten
@@ -45,7 +47,7 @@ pnpm run dev
 | `qm.test@proquado.local`     | QUALITY_MANAGER    |
 | `pm.test@proquado.local`     | PRODUCTION_MANAGER |
 
-Seed legt zusätzlich ein Demo-Projekt (`PROJ-2026-0001`) mit Site, Customer und Product an.
+Seed legt zusätzlich ein Demo-Projekt (`PROJ-2026-0001`) mit Site, Customer und Product an. Er ist wiederholbar und darf jederzeit erneut laufen — **muss** er sogar, sobald ein Berechtigungsatom in `permissions-catalog.ts` dazukommt, denn nur `seedOrganizationRbac` trägt es in bestehende Organisationen ein (siehe „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten).
 
 **Bestätigungs-PIN der Demo-User: `1234`** (Seed setzt einen scrypt-Hash in `users.confirmation_pin_hash`). Ohne PIN kann ein Arbeitsschritt nicht bestätigt/abgeschlossen werden — echte Benutzer setzen ihre PIN selbst, geseedet wird sie nur für Demo/Test.
 
@@ -139,7 +141,7 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 
 - **`production_plan.release` ist Standard-Berechtigung von PROJECT_LEAD**, nicht nur konfigurierbar (`*` in der Matrix). Ohne diese Korrektur konnte niemand einen Plan freigeben — siehe `src/domain/identity/system-roles.ts` Kommentar für die Begründung (Masterprompt Kap. 3 weist Planerstellung/-freigabe der Projektleitung zu, anders als bei Dokumenten, wo QM die eindeutige Instanz ist).
 - **Domain-Services prüfen ihre eigene Berechtigung**, nicht nur die aufrufende API-Route. Das macht sie gegen zukünftige Aufrufer (Tests, Skripte, andere Services) selbstverteidigend. Regelfall ist `assertPermission` als erste Zeile des Service; wo das benötigte Atom erst aus den Daten hervorgeht (Ausführung/Erfassung/Abschluss eines Arbeitsschritts), prüft `assertPermissionWithin` innerhalb der Transaktion — siehe „Berechtigung hängt manchmal von Daten ab" oben. Ungeprüft bleibt nichts.
-- **Malware-Scan ist ein Stub** (`src/lib/storage/malware-scan.ts`) — meldet immer `CLEAN`. Vor jedem Piloten/Produktivbetrieb durch echten Scanner ersetzen (siehe Kommentar dort, MASTERPROMPT Kap. 16 und [docs/10_MVP_PLAN.md](docs/10_MVP_PLAN.md) Phase 7 „Pilot und Härtung").
+- **Der Malware-Scan hat seit Phase 7 eine echte Implementierung** (`src/lib/storage/malware-scan.ts`) — Details unter „Der Malware-Scan-Stub ist in Produktion nicht mehr wählbar" weiter unten. In der lokalen Entwicklung läuft weiterhin der Stub (`MALWARE_SCANNER=stub`), der jede Datei durchwinkt; er ist nur dort erlaubt. Für den Piloten muss eine erreichbare clamd-Instanz konfiguriert sein (MASTERPROMPT Kap. 16, [docs/10_MVP_PLAN.md](docs/10_MVP_PLAN.md) Phase 7).
 - **Produktionsaufträge sind erst in Phase 3 entstanden**, obwohl `docs/10_MVP_PLAN.md` sie unter Phase 2 („Projekte, Produkte, Aufträge") listet. Phase 2 hat sie nicht implementiert; Phase 3 braucht sie als Träger der Arbeitsschrittinstanzen und holt das nach. Kein Scope-Verlust, nur eine verschobene Grenze.
 - **Der Release Token ist beim Online-Flow optional.** `POST /work-steps/{id}/start` akzeptiert ihn, verlangt ihn aber nicht: Ein Online-Client hat keinen (die Freigabe geschah serverseitig beim Abschluss des Vorgängers), und der Server prüft stattdessen direkt seinen `work_step_releases`-Datensatz — was strikt stärker ist als jede Token-Prüfung. Der Token existiert für den Offline-Fall und wird, wenn mitgesendet, gegen denselben Datensatz verifiziert (Signatur, Schritt-ID, Nonce, Hash). Der Server speichert nur den Hash der Signatur, nie den Token selbst. Im Klartext verlässt er den Server an genau drei Stellen: bei der Freigabe (`releaseWorkStepInstance`, also über `releaseProductionOrder` und die Nachfolgerfreigabe), im Offline-Bundle und über `POST /work-steps/{id}/release-token`. Die letzten beiden prägen jeweils ein **neues** Token — siehe „Ein Release-Token wird pro Schritt genau einmal gültig gehalten" weiter unten.
 - **`validateAndCompleteWorkStep` prüft keine Berechtigung.** Es ist eine Serveraktion, keine Benutzeraktion — der Server validiert seinen eigenen Posteingang, direkt nach der Abschlussmeldung des Mitarbeiters. Das Berechtigungsatom `completion_submission.validate` (QM/PL) gilt für die **manuelle** Re-Validierung über `POST /completion-submissions/{id}/validate`. Hätte man die Prüfung in den Automatikpfad gelegt, könnte kein WORKER je einen Schritt abschließen.
@@ -183,15 +185,22 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 
 ## Test-Kommandos
 
+Die vollständige Kette, in dieser Reihenfolge — jede Stufe findet etwas, das die vorherige nicht sieht:
+
 ```bash
-pnpm run test:unit          # schnell, keine Infrastruktur nötig
-pnpm run test:integration   # startet echte Postgres+MinIO-Container (Testcontainers)
-pnpm run build               # Production Build als Kompilier-/Bundling-Check
+pnpm run typecheck          # Sekunden
+pnpm run lint
+pnpm run format:check
+pnpm run test:unit          # 160 Tests, keine Infrastruktur nötig
+pnpm run build              # Kompilier- UND Bündelungsprüfung
+pnpm run test:integration   # 80 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```
 
 Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks — siehe `docs/09_TEST_PYRAMID.md`.
 
-### Abgedeckte Negativtests (Stand Phase 5 — alle 15)
+**Auch diese Kette ist nicht vollständig.** Zwei Fehler in Phase 6/7 waren erst im Browser sichtbar: die fehlenden pdfkit-Schriftmetriken (nur beim Bündeln, nicht beim Kompilieren) und die Doppelbenutzer des Seeds (nur mit einer echten, eingeloggten Sitzung). Wer an UI oder an Paketen arbeitet, die zur Laufzeit Dateien lesen, sollte die Seite einmal wirklich öffnen.
+
+### Abgedeckte Negativtests (alle 15 grün)
 
 Jede Zeile nennt die Testdatei ausdrücklich — kein „ebd."-Verweis, weil sich beim Ergänzen von Phase 5 die Bezugszeilen verschoben haben und ein solcher Verweis dann still auf die falsche Datei zeigt.
 
@@ -220,3 +229,32 @@ Sechs davon (#1, #2, #6, #8, #15 und die Client-Typsicherheit aus docs/06 — de
 ```bash
 grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 ```
+
+---
+
+## Übergabe: woran man als Nächstes arbeiten kann
+
+Nach Reihenfolge des Nutzens, nicht der Mühe. Punkt 1 und 2 sind Gates vor dem Piloten, der Rest sind bekannte Lücken.
+
+1. **Manuelle Sicherheitsüberprüfung der Offline-Invariante.** docs/10 macht sie zur Bedingung für den Abschluss von Phase 5. `phase7-offline-invariant-attacks` deckt zwölf Angriffe ab, aber eine Suite probiert nur, was jemand bedacht hat — deshalb verlangt das Gate zusätzlich einen Menschen. Einstieg: `docs/06_OFFLINE_SYNC_CONFLICT.md` „Technischer Beweis der Invarianten-Einhaltung", dann `src/lib/offline/client-work-step-status.ts` und `src/domain/execution/start-work-step.ts`.
+
+2. **Echten Malware-Scanner in der Zielumgebung.** Der ClamAV-Adapter steht; es fehlt eine erreichbare clamd-Instanz (`MALWARE_SCANNER=clamav`, `CLAMAV_HOST`/`PORT`). Ohne sie verweigert die Anwendung in Produktion absichtlich den Start des Scans — Uploads werden dann nicht anerkannt.
+
+3. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
+
+4. **UI für die Schritt-Dokumentbindung.** `bindDocumentToPlanStep` existiert als Service und wird von den Tests benutzt, aber die Planbearbeitung bietet die Bindung nicht an — Abnahmeszenario C ist damit aus der Oberfläche heraus nicht herstellbar. Die letzte bekannte Lücke im Planungsbildschirm.
+
+5. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
+
+6. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
+
+7. **Rate Limits auf einen gemeinsamen Speicher umstellen**, sobald mehr als eine Instanz läuft. `RateLimitStore` ist dafür da; bis dahin gilt das Limit pro Prozess.
+
+8. **ERP-/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
+
+### Arbeitsweise, die sich in diesem Projekt bewährt hat
+
+- Vor jeder Phase die zugehörigen `docs/`-Kapitel lesen; sie sind vor dem Code entstanden und enthalten die Begründungen.
+- Abweichungen von `docs/` **hier** festhalten, nicht stillschweigend umsetzen — der Abschnitt „Architekturentscheidungen mit Nachwirkung" ist genau dafür da und hat mehrfach Widersprüche sichtbar gemacht.
+- Am Ende jeder Phase die vollständige Prüfkette laufen lassen **und** die betroffenen Seiten einmal im Browser öffnen.
+- Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die drei lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
