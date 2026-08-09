@@ -22,7 +22,7 @@ export async function POST(
     const { format } = exportSchema.parse(await request.json());
     // docs/05: 5 Exporte pro Stunde und Benutzer. ADR-007 beruft sich darauf,
     // dass ein synchroner Export begrenzt bleibt — hier ist die Grenze.
-    assertWithinRateLimit('EXPORT', { userId: actor.userId });
+    await assertWithinRateLimit('EXPORT', { userId: actor.userId });
 
     const result = await exportProductionDossier({
       actor,

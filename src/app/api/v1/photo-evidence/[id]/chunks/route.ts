@@ -39,7 +39,7 @@ export async function POST(
 
     // Blöcke zählen wie Fotouploads: ein Gerät, das eine Datei in 1-MiB-Blöcken
     // sendet, darf dabei nicht am Fotolimit vorbeilaufen.
-    assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId });
+    await assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId });
 
     const chunk = new Uint8Array(await request.arrayBuffer());
 

@@ -1768,3 +1768,28 @@ model Notification {
   @@index([organizationId, userId, readAt])
   @@map("notifications")
 }
+
+// ─────────────────────────────────────────────────────────────
+// Infrastructure (Phase 7)
+// ─────────────────────────────────────────────────────────────
+
+/// Shared fixed-window counter for the docs/05 rate limits.
+///
+/// Deliberately NOT tenant-scoped and deliberately outside RLS: a rate limit
+/// is a property of a caller, not of a tenant's data, and the counter must be
+/// readable before any organization context exists (it is consulted in
+/// requireAuthContext, which is what establishes that context in the first
+/// place). It holds no business data.
+///
+/// `key` is a SHA-256 hash of "<category>:<user or device id>", not the
+/// identifiers themselves. The table would otherwise be a list of who is
+/// currently active, readable across tenants — a small thing to give away for
+/// no benefit, since the application only ever looks up keys it already knows.
+model RateLimitWindow {
+  key     String   @id
+  count   Int
+  resetAt DateTime @map("reset_at")
+
+  @@index([resetAt])
+  @@map("rate_limit_windows")
+}

@@ -13,7 +13,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 - **Phase 5 (Offline und Synchronisation)**: abgeschlossen — Geräteregistrierung mit Fernsperre, commit-geordneter Ereignis-Cursor, Sync-API (health/commands/changes/bundle), Release-Token-Auslieferung ans Gerät, verschlüsselte IndexedDB mit Outbox, chunk-basierter Foto-Upload mit Wiederaufnahme, alle sieben Konflikttypen im Konfliktcenter. Abnahmeszenarien B und C laufen end-to-end; **alle 15 Negativtests sind grün**.
 - **Phase 6 (Akte, Reporting, Integrationen)**: abgeschlossen — digitale Produktionsakte mit allen zehn Abschnitten aus Masterprompt Kap. 10, PDF-Erzeugung, ZIP-Export mit hashgeprüftem Manifest, Rückverfolgbarkeitssuche, Dashboard und ereignisgetriebene In-App-Benachrichtigungen. Abnahmeszenario F läuft end-to-end. **Nicht umgesetzt**: die ERP-/Webhook-Grundlage, die docs/10 für Phase 6 als „Implementierung optional für MVP" führt — es gibt bisher keinen Konsumenten, an dem sich ein Adapter-Interface bewähren könnte.
 - **Phase 7 (Pilot und Härtung)**: begonnen — Malware-Scan schließt in Produktion, Rate Limits aus docs/05 durchgesetzt, 12 Angriffstests gegen die Offline-Invariante, **manuelle Sicherheitsüberprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11_OFFLINE_INVARIANT_REVIEW.md](docs/11_OFFLINE_INVARIANT_REVIEW.md)). Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
-- **Vor dem Piloten weiterhin offen**: (a) ein erreichbarer echter Scanner (`MALWARE_SCANNER=clamav` + clamd-Container) in der Zielumgebung; (b) Lasttest nach docs/09 Ebene 8 und Restore-Probe; (c) die Rate Limits sind pro Prozess gezählt und bei mehreren Instanzen entsprechend schwächer; (d) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt.
+- **Vor dem Piloten weiterhin offen, und nichts davon ist Programmierarbeit**: (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** setzen — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft; (c) Lasttest nach docs/09 Ebene 8 und Restore-Probe; (d) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt.
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
@@ -35,7 +35,19 @@ pnpm exec tsx prisma/seed.ts
 pnpm run dev
 ```
 
-**Ports:** Postgres `5433`, MinIO `9010`/`9011` (Console), Keycloak `8081`, App `3000` (Standard) — siehe unten zu Portkonflikten.
+**Ports:** Postgres `5433`, MinIO `9010`/`9011` (Console), Keycloak `8081`, clamd `3310`, App `3000` (Standard) — siehe unten zu Portkonflikten.
+
+`clamav` startet bewusst **nicht** mit — der erste Start lädt ~250 MB Signaturen und braucht Minuten. Wer am Upload-Pfad arbeitet oder den echten Scan sehen will:
+
+```bash
+docker compose up -d clamav
+# warten, bis "healthy" (nicht "running" — clamd nimmt Verbindungen an,
+# bevor seine Signaturen geladen sind):
+docker compose ps clamav
+# dann in der lokalen .env: MALWARE_SCANNER="clamav"
+```
+
+Ob der Scanner wirklich antwortet, sagt `GET /api/health/ready` unter `checks.malwareScanner` — nicht der Containerstatus.
 
 **Demo-User** (Keycloak-Passwort für alle: `devpassword`), verknüpft über den `pending:<email>`-Mechanismus beim ersten Login (siehe `src/lib/auth/resolve-login.ts`):
 
@@ -131,6 +143,12 @@ Ein Unit-Test für „ClamAV nicht erreichbar → ERROR" lief gegen das echte lo
 
 **Regel:** Neue Server-Abhängigkeiten vor dem Einbau kurz gegen **beide** Läufe prüfen — `pnpm run build` und `pnpm run test:integration`. Ein `pnpm run typecheck` allein sagt darüber nichts: die Typen von `@types/archiver@8` waren einwandfrei, nur ließ sich das Paket nirgends laden.
 
+### Jest entscheidet `skip` beim Einlesen, nicht beim Laufen
+
+Der erste Anlauf der Scanner-Integrationstests wählte `it` oder `it.skip` anhand einer Erreichbarkeitsprüfung aus `beforeAll`. Ergebnis: alles übersprungen, obwohl clamd lief — Jest sammelt die Testliste beim Einlesen der Datei, `beforeAll` läuft danach. Die Variable war zum Entscheidungszeitpunkt noch `false`.
+
+Die Korrektur ist aber nicht „früher prüfen", sondern **gar nicht prüfen**: `CLAMAV_TESTS=1` schaltet die Tests ein, und ist clamd dann nicht erreichbar, gehen sie **rot**. Ein probenbasiertes Überspringen macht „Abhängigkeit fehlt" und „Abhängigkeit ist kaputt" zum selben Zweig — der eine Lauf, der hätte rot werden müssen, wird still grün. Dieselbe Familie wie „Ein Test, der versehentlich echte Infrastruktur anspricht" weiter unten.
+
 ### Eine Kontrolle, die nur einen von zwei Pfaden kennt, deckt die Hälfte ab
 
 Die manuelle Überprüfung der Offline-Invariante (docs/11) fand drei Mängel, die alle dieselbe Bauart haben: `deviceId` wurde im **Sync**-Pfad seit Phase 5 sauber gegen `assertDeviceActive` geprüft — und in den **gewöhnlichen** Endpunkten (Schritt starten, Nachweis erfassen, Abschluss melden) als `z.string().max(255)` entgegengenommen und nie nachgeschlagen. Folgen: die Fernsperre eines verlorenen Tablets galt online nicht; der Zählschlüssel des gerätebezogenen Rate Limits war ein frei wählbarer String, also kein Limit; und der Wert landete unverändert in vier Audit-Spalten ohne Fremdschlüssel.
@@ -149,7 +167,8 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 
 - **`production_plan.release` ist Standard-Berechtigung von PROJECT_LEAD**, nicht nur konfigurierbar (`*` in der Matrix). Ohne diese Korrektur konnte niemand einen Plan freigeben — siehe `src/domain/identity/system-roles.ts` Kommentar für die Begründung (Masterprompt Kap. 3 weist Planerstellung/-freigabe der Projektleitung zu, anders als bei Dokumenten, wo QM die eindeutige Instanz ist).
 - **Domain-Services prüfen ihre eigene Berechtigung**, nicht nur die aufrufende API-Route. Das macht sie gegen zukünftige Aufrufer (Tests, Skripte, andere Services) selbstverteidigend. Regelfall ist `assertPermission` als erste Zeile des Service; wo das benötigte Atom erst aus den Daten hervorgeht (Ausführung/Erfassung/Abschluss eines Arbeitsschritts), prüft `assertPermissionWithin` innerhalb der Transaktion — siehe „Berechtigung hängt manchmal von Daten ab" oben. Ungeprüft bleibt nichts.
-- **Der Malware-Scan hat seit Phase 7 eine echte Implementierung** (`src/lib/storage/malware-scan.ts`) — Details unter „Der Malware-Scan-Stub ist in Produktion nicht mehr wählbar" weiter unten. In der lokalen Entwicklung läuft weiterhin der Stub (`MALWARE_SCANNER=stub`), der jede Datei durchwinkt; er ist nur dort erlaubt. Für den Piloten muss eine erreichbare clamd-Instanz konfiguriert sein (MASTERPROMPT Kap. 16, [docs/10_MVP_PLAN.md](docs/10_MVP_PLAN.md) Phase 7).
+- **Der Malware-Scan hat seit Phase 7 eine echte Implementierung** (`src/lib/storage/malware-scan.ts`) — Details unter „Der Malware-Scan-Stub ist in Produktion nicht mehr wählbar" weiter unten. In der lokalen Entwicklung läuft weiterhin der Stub (`MALWARE_SCANNER=stub`), der jede Datei durchwinkt; er ist nur dort erlaubt. Ein clamd-Dienst steht in `docker-compose.yml` (nicht im Standardstart, weil der erste Lauf Signaturen lädt); dass der Adapter mit einem echten clamd spricht, ist mit EICAR belegt — `CLAMAV_TESTS=1 pnpm run test:integration -- phase7-hardening`.
+- **`/api/health/ready` meldet den Scanner, lässt ihn aber die Bereitschaft nicht kippen.** Der Scan schließt bei Ausfall (ERROR statt CLEAN), das ist richtig — aber still, bis jemand in der Halle ein Foto macht und abgewiesen wird. Deshalb fragt die Readiness `scanner.ping()`. Sie antwortet trotzdem mit **200 und `status: "degraded"`, nicht 503**: clamd ist für alle Instanzen gleichzeitig weg, ein 503 nähme also die ganze Anwendung aus der Rotation und machte aus „Nachweis-Uploads werden abgelehnt" ein „niemand kann mehr arbeiten". Alarmiert wird auf `checks.malwareScanner`, nicht auf dem HTTP-Status. `scannerKind` steht daneben, damit ein `"ok"` vom Stub nie als „ein Virenscanner läuft" gelesen wird.
 - **Produktionsaufträge sind erst in Phase 3 entstanden**, obwohl `docs/10_MVP_PLAN.md` sie unter Phase 2 („Projekte, Produkte, Aufträge") listet. Phase 2 hat sie nicht implementiert; Phase 3 braucht sie als Träger der Arbeitsschrittinstanzen und holt das nach. Kein Scope-Verlust, nur eine verschobene Grenze.
 - **Der Release Token ist beim Online-Flow optional.** `POST /work-steps/{id}/start` akzeptiert ihn, verlangt ihn aber nicht: Ein Online-Client hat keinen (die Freigabe geschah serverseitig beim Abschluss des Vorgängers), und der Server prüft stattdessen direkt seinen `work_step_releases`-Datensatz — was strikt stärker ist als jede Token-Prüfung. Der Token existiert für den Offline-Fall und wird, wenn mitgesendet, gegen denselben Datensatz verifiziert (Signatur, Schritt-ID, Nonce, Hash). Der Server speichert nur den Hash der Signatur, nie den Token selbst. Im Klartext verlässt er den Server an genau drei Stellen: bei der Freigabe (`releaseWorkStepInstance`, also über `releaseProductionOrder` und die Nachfolgerfreigabe), im Offline-Bundle und über `POST /work-steps/{id}/release-token`. Die letzten beiden prägen jeweils ein **neues** Token — siehe „Ein Release-Token wird pro Schritt genau einmal gültig gehalten" weiter unten.
 - **`validateAndCompleteWorkStep` prüft keine Berechtigung.** Es ist eine Serveraktion, keine Benutzeraktion — der Server validiert seinen eigenen Posteingang, direkt nach der Abschlussmeldung des Mitarbeiters. Das Berechtigungsatom `completion_submission.validate` (QM/PL) gilt für die **manuelle** Re-Validierung über `POST /completion-submissions/{id}/validate`. Hätte man die Prüfung in den Automatikpfad gelegt, könnte kein WORKER je einen Schritt abschließen.
@@ -187,7 +206,9 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 - **Eine `deviceId` aus dem Request ist erst ein Gerät, wenn der Server sie nachgeschlagen hat.** `resolveDeviceId` (`src/lib/api/device-context.ts`) verlangt UUID, Existenz, Eigentümerschaft und Nicht-Sperrung — dieselbe Prüfung, mit der die Sync-Endpunkte seit Phase 5 öffnen, jetzt überall dort, wo das Feld angenommen wird. Ohne `deviceId` (der normale Browser) bleibt alles wie zuvor. Siehe „Eine Kontrolle, die nur einen von zwei Pfaden kennt" oben und docs/11 B-1 bis B-3.
 - **Ein Benutzer darf höchstens `MAX_ACTIVE_DEVICES_PER_USER` (10) aktive Geräte haben.** Keine Komfortgrenze: `SYNC_COMMANDS` und `PHOTO_UPLOAD` zählen je Gerät, eine unbegrenzte Registrierung ist also ein unbegrenztes Kontingent — und ein Sync-Batch löst bis zu 500 vollständige serverseitige Neuvalidierungen aus. Gesperrte Geräte zählen nicht mit, damit der Ersatz eines verlorenen Tablets nie an der Grenze scheitert.
 - **`STANDARD_API` wird in `requireAuthContext` gezählt, nicht je Route.** Das Limit stand seit Phase 1 in docs/05 und war bis zur Überprüfung nirgends durchgesetzt — unter anderem war `GET /sync/bundle` ungedrosselt, das für jeden READY-Schritt jedes zugewiesenen Auftrags ein neues Token prägt und ein Audit-Event schreibt. Zentral, weil jeder authentifizierte Einstiegspunkt seinen Actor darüber auflöst und deshalb keiner vergessen werden kann. Folge auf der Clientseite: `pullAndApplyChanges` hat eine Seitenobergrenze je Lauf (`MAX_PAGES_PER_SYNC`) — der Cursor wird je Seite gesichert, ein früher Abbruch ist also Fortsetzung, kein Verlust.
-- **Rate Limits sind pro Prozess gezählt.** Die Tabelle in docs/05 stand seit Phase 1 im Vertrag und war bis Phase 7 nirgends durchgesetzt — ADR-007 berief sich dabei bereits auf das Exportlimit als Schutzmechanismus. Der In-Memory-Zähler ist auf einer Instanz eine echte Grenze; hinter N Repliken erlaubt er das N-fache. Das ist eine echte Abschwächung, keine Rundung, und `RateLimitStore` existiert genau dafür, dass der Wechsel auf einen gemeinsamen Speicher **eine** Implementierung ist. Gegen unauthentifizierte Fluten hilft das nicht — das ist Sache des vorgelagerten Proxys (docs/08).
+- **Rate Limits zählen in Produktion in einer gemeinsamen Tabelle, sonst im Prozess.** Der In-Memory-Zähler ist auf einer Instanz eine echte Grenze; hinter N Repliken erlaubt er das N-fache — eine echte Abschwächung, keine Rundung. `PostgresRateLimitStore` (`rate_limit_windows`) zählt instanzübergreifend; die Entscheidung fällt über `RATE_LIMIT_STORE`, Standard ist `postgres` in Produktion und `memory` sonst. Die Voreinstellung liegt auf dieser Seite, weil die Fehlerfolgen ungleich sind: ein geteilter Speicher in der Entwicklung kostet eine Abfrage, die niemand merkt — prozesslokale Zähler in einer skalierten Produktion vervielfachen still jedes Limit aus dem Vertrag. Postgres statt Redis, weil ADR-007 Redis aus dem MVP heraushält und die Datenbank ohnehin die Verfügbarkeitsuntergrenze der ganzen Anwendung ist. Gegen unauthentifizierte Fluten hilft das nicht — das ist Sache des vorgelagerten Proxys (docs/08).
+- **`RateLimitStore.hit` ist asynchron, und das war der eigentliche Punkt.** Die Schnittstelle war synchron, und der Kommentar daneben behauptete, ein gemeinsamer Speicher sei „**eine** Implementierung, kein Umbau" — was nicht stimmte: kein Speicher, der über Netz oder Datenbank geht, erfüllt einen synchronen Vertrag. Die Abstraktion verhinderte genau den Austausch, für den sie da war. Folge: `assertWithinRateLimit` muss überall awaited werden.
+- **`rate_limit_windows` steht bewusst außerhalb von RLS und trägt keine `organization_id`.** Ein Limit ist eine Eigenschaft des Aufrufers, nicht der Daten eines Mandanten, und die Tabelle wird in `requireAuthContext` gelesen — also in der Funktion, die den Organisationskontext überhaupt erst herstellt. Ein Kontextzwang wäre zirkulär. Damit sie trotzdem keine mandantenübergreifende Liste gerade aktiver Benutzer ist, wird als Schlüssel der SHA-256 von `<Kategorie>:<Subjekt-ID>` gespeichert, nicht die ID: die Anwendung schlägt ausschließlich Schlüssel nach, die sie selbst berechnet hat, das Hashen kostet also nichts.
 - **Der Aktenfortschritt im Dashboard zählt nur serverbestätigte Schritte.** docs/07 B1 schreibt es vor, und es ist dieselbe Invariante wie überall sonst: lokal abgeschlossene Schritte erscheinen getrennt als `pendingSteps` und gehen nie in die Prozentzahl ein. Gezählt wird außerdem nur der jüngste Versuch je Planschritt — dieselbe Regel wie in `releaseEligibleSuccessors`, damit das Dashboard der Ausführung nicht widersprechen kann.
 - **Der Audit-Auszug der Akte ist auf die Ressourcen des Auftrags eingegrenzt.** Eine Akte, die organisationsweite Ereignisse mitliefert, wäre nicht gründlich, sondern ein Datenschutzproblem (docs/08).
 - **„Endprüfung und Produktfreigabe" (Abschnitt 9) ist abgeleitet, kein eigener Vorgang.** Die Akte rechnet zusammen, ob der Auftrag abgeschlossen ist und ob offene blockierende Abweichungen oder aktive Sperren existieren, und sagt das Ergebnis ausdrücklich hin. Eine **Produktfreigabe als eigene, von einer berechtigten Person getroffene Entscheidung** gibt es im Datenmodell noch nicht; PDF und UI schreiben das ausdrücklich dazu, statt Abgeschlossenheit als Freigabe auszugeben. Das ist die nächste offensichtliche Modellerweiterung.
@@ -202,9 +223,16 @@ Die vollständige Kette, in dieser Reihenfolge — jede Stufe findet etwas, das 
 pnpm run typecheck          # Sekunden
 pnpm run lint
 pnpm run format:check
-pnpm run test:unit          # 160 Tests, keine Infrastruktur nötig
+pnpm run test:unit          # 165 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
-pnpm run test:integration   # 85 Tests, echte Postgres+MinIO-Container (Testcontainers)
+pnpm run test:integration   # 91 Tests, echte Postgres+MinIO-Container (Testcontainers)
+```
+
+Drei Tests laufen zusätzlich gegen ein echtes clamd und sind deshalb ausdrücklich einzuschalten — sie gehen **rot**, wenn keins antwortet (siehe „Jest entscheidet `skip` beim Einlesen" oben):
+
+```bash
+docker compose up -d clamav   # warten bis "healthy"
+CLAMAV_TESTS=1 pnpm run test:integration -- phase7-hardening
 ```
 
 Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks — siehe `docs/09_TEST_PYRAMID.md`.
@@ -247,21 +275,17 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Nach Reihenfolge des Nutzens, nicht der Mühe. Punkt 1 ist ein Gate vor dem Piloten, der Rest sind bekannte Lücken.
+Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind abgearbeitet, bis auf das, was keine Programmierarbeit ist (siehe „Stand" oben) — hier stehen die bekannten Lücken.
 
-1. **Echten Malware-Scanner in der Zielumgebung.** Der ClamAV-Adapter steht; es fehlt eine erreichbare clamd-Instanz (`MALWARE_SCANNER=clamav`, `CLAMAV_HOST`/`PORT`). Ohne sie verweigert die Anwendung in Produktion absichtlich den Start des Scans — Uploads werden dann nicht anerkannt.
+1. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
 
-2. **Offline-Durchlauf im Browser prüfen.** Als `worker.test` anmelden, „Für Offline vorbereiten", Netzwerk trennen, Schritt lokal abschließen, wieder verbinden, synchronisieren. Nie vollständig durchgespielt worden; die Serverseite ist durch `phase5-offline-sync` abgedeckt, die Client-Schleife nur durch Unit-Tests.
+2. **UI für die Schritt-Dokumentbindung.** `bindDocumentToPlanStep` existiert als Service und wird von den Tests benutzt, aber die Planbearbeitung bietet die Bindung nicht an — Abnahmeszenario C ist damit aus der Oberfläche heraus nicht herstellbar. Die letzte bekannte Lücke im Planungsbildschirm.
 
-3. **UI für die Schritt-Dokumentbindung.** `bindDocumentToPlanStep` existiert als Service und wird von den Tests benutzt, aber die Planbearbeitung bietet die Bindung nicht an — Abnahmeszenario C ist damit aus der Oberfläche heraus nicht herstellbar. Die letzte bekannte Lücke im Planungsbildschirm.
+3. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
 
-4. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
+4. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
 
-5. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
-
-6. **Rate Limits auf einen gemeinsamen Speicher umstellen**, sobald mehr als eine Instanz läuft. `RateLimitStore` ist dafür da; bis dahin gilt das Limit pro Prozess.
-
-7. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
+5. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 

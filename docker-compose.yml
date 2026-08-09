@@ -49,6 +49,43 @@ services:
       mc mb --ignore-existing local/proquado-documents
       "
 
+  # The real virus scanner. Not started by the usual dev command (see notes.md
+  # "Lokale Umgebung starten") because it downloads ~250 MB of signatures on
+  # first boot and takes a minute or two to become ready — for everyday work
+  # MALWARE_SCANNER=stub is the right setting.
+  #
+  # Start it explicitly when working on the upload path, and in every
+  # environment that is not a developer laptop:
+  #
+  #   docker compose up -d clamav
+  #   MALWARE_SCANNER=clamav pnpm run dev
+  #
+  # Readiness is a real health check here, not a formality: clamd accepts TCP
+  # connections before its signature database is loaded, and a scan in that
+  # window fails. `depends_on: condition: service_healthy` is what makes the
+  # difference between "the container is up" and "the scanner works".
+  clamav:
+    image: clamav/clamav:1.4
+    # ClamAV publishes amd64 images only — there is no arm64 manifest for any
+    # tag. On an Apple-Silicon developer machine this runs under emulation
+    # (slow, but it works and it is the same binary the pilot will run). Pinned
+    # explicitly so the failure on ARM is "emulated" rather than the rather
+    # unhelpful "no matching manifest for linux/arm64/v8".
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - '3310:3310'
+    volumes:
+      # Signatures survive a restart — re-downloading them every time is both
+      # slow and unfriendly to the ClamAV mirrors.
+      - ./.docker-data/clamav:/var/lib/clamav
+    healthcheck:
+      test: ['CMD', 'clamdcheck.sh']
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
     restart: unless-stopped

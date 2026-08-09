@@ -27,7 +27,7 @@ export async function POST(
     // resolveDeviceId.
     const deviceId = await resolveDeviceId(actor, body.deviceId);
     // docs/05: 20 Fotouploads pro Minute und Gerät.
-    assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId });
+    await assertWithinRateLimit('PHOTO_UPLOAD', { userId: actor.userId, deviceId });
     const result = await requestPhotoUploadUrl({
       actor,
       workStepInstanceId: params.id,

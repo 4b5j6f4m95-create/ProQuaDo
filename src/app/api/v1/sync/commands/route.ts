@@ -22,7 +22,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     // docs/05: 10 Batches pro Minute und Gerät. Ein Batch löst bis zu 500
     // vollständige serverseitige Neuvalidierungen aus — das ist die teuerste
     // Operation, die ein Gerät auslösen kann.
-    assertWithinRateLimit('SYNC_COMMANDS', { userId: actor.userId, deviceId: body.deviceId });
+    await assertWithinRateLimit('SYNC_COMMANDS', { userId: actor.userId, deviceId: body.deviceId });
 
     const results = await processSyncCommands({
       actor,

@@ -35,7 +35,7 @@ export async function requireAuthContext(): Promise<AuthContext> {
   if (!session?.user?.id || !session.user.organizationId) {
     throw new AuthzError('UNAUTHENTICATED', 'Bitte melden Sie sich an.');
   }
-  assertWithinRateLimit('STANDARD_API', { userId: session.user.id });
+  await assertWithinRateLimit('STANDARD_API', { userId: session.user.id });
   return { userId: session.user.id, organizationId: session.user.organizationId };
 }
 

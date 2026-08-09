@@ -16,7 +16,7 @@ export async function POST(
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     // docs/05: 5 Dokumentuploads pro Minute und Benutzer.
-    assertWithinRateLimit('DOCUMENT_UPLOAD', { userId: actor.userId });
+    await assertWithinRateLimit('DOCUMENT_UPLOAD', { userId: actor.userId });
     const body = requestUploadSchema.parse(await request.json());
     const result = await requestDocumentUploadUrl({
       actor,

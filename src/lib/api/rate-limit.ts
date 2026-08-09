@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { prisma } from '@/lib/db/client';
+import { logger } from '@/lib/logger';
 import { DomainError } from '@/lib/domain-errors';
 
 /**
@@ -14,13 +17,20 @@ import { DomainError } from '@/lib/domain-errors';
  *
  * ## Scope, stated plainly
  *
- * The default store is per **process** and in memory. On a single instance
- * that is a real limit. Behind several instances it is a limit per instance,
- * so N replicas allow N× the configured rate — that is a genuine weakening,
- * not a rounding error, and the fix is a shared store (Redis) at the point
- * where the deployment actually becomes multi-instance. Since ADR-007 keeps
- * Redis out of the MVP, `RateLimitStore` exists so that swapping it in later
- * is one implementation, not a rewrite.
+ * Two stores. `memory` counts per **process**: on a single instance a real
+ * limit, behind N replicas a limit per instance and therefore N× the
+ * configured rate. `postgres` counts in a shared table and holds regardless of
+ * how many instances run.
+ *
+ * Production defaults to `postgres`, everything else to `memory`, and
+ * `RATE_LIMIT_STORE` overrides both. The default is that way round because the
+ * failure mode of the wrong choice is asymmetric: a shared store in
+ * development costs a query nobody notices, while process-local counters in a
+ * scaled production silently multiply every limit in the contract.
+ *
+ * Postgres rather than Redis: ADR-007 keeps Redis out of the MVP, and the
+ * database is already here, already the availability floor of the whole
+ * application, and already the thing every request touches.
  *
  * It is also not a DoS defence. An unauthenticated flood is a job for the
  * reverse proxy or WAF in front of this application (docs/08); these limits
@@ -74,8 +84,17 @@ export interface RateLimitDecision {
 }
 
 export interface RateLimitStore {
-  /** Records one hit and reports whether it was within the limit. */
-  hit(key: string, rule: RateLimitRule, now: number): RateLimitDecision;
+  /**
+   * Records one hit and reports whether it was within the limit.
+   *
+   * Asynchronous even though the in-memory implementation has nothing to
+   * await. This used to be a synchronous signature, and the comment beside it
+   * claimed a shared store would be "one implementation, not a rewrite" —
+   * which was not true: no store that talks to a network or a database can
+   * satisfy a synchronous contract, so the swap the interface existed to
+   * enable was the one thing it prevented.
+   */
+  hit(key: string, rule: RateLimitRule, now: number): Promise<RateLimitDecision>;
 }
 
 /**
@@ -90,7 +109,7 @@ export class InMemoryRateLimitStore implements RateLimitStore {
    *  requests does not need to be doing work. */
   private lastSweep = 0;
 
-  hit(key: string, rule: RateLimitRule, now: number): RateLimitDecision {
+  async hit(key: string, rule: RateLimitRule, now: number): Promise<RateLimitDecision> {
     this.sweep(now);
 
     const existing = this.windows.get(key);
@@ -121,15 +140,95 @@ export class InMemoryRateLimitStore implements RateLimitStore {
   }
 }
 
-let store: RateLimitStore = new InMemoryRateLimitStore();
+/**
+ * Shared fixed-window counter in `rate_limit_windows`.
+ *
+ * The whole decision is one statement. That is the point: read-then-write
+ * would race between instances and let two requests both see "99 so far" and
+ * both proceed, which is exactly the failure the shared store exists to
+ * prevent. `ON CONFLICT DO UPDATE` makes the increment and the window roll-over
+ * a single atomic act, and the RETURNING clause reports the state the caller
+ * actually landed on.
+ *
+ * The key is hashed before it leaves the process — see the schema comment on
+ * RateLimitWindow.
+ */
+export class PostgresRateLimitStore implements RateLimitStore {
+  private lastSweep = 0;
 
-/** Swap in a shared store when the deployment becomes multi-instance — see
- *  the scope note at the top of this file. */
-export function setRateLimitStore(next: RateLimitStore): void {
+  async hit(key: string, rule: RateLimitRule, now: number): Promise<RateLimitDecision> {
+    const hashed = createHash('sha256').update(key).digest('hex');
+    const nowDate = new Date(now);
+    const resetAt = new Date(now + rule.windowMs);
+
+    const rows = await prisma.$queryRaw<Array<{ count: number; reset_at: Date }>>`
+      INSERT INTO rate_limit_windows (key, count, reset_at)
+      VALUES (${hashed}, 1, ${resetAt})
+      ON CONFLICT (key) DO UPDATE SET
+        count = CASE
+          WHEN rate_limit_windows.reset_at <= ${nowDate} THEN 1
+          ELSE rate_limit_windows.count + 1
+        END,
+        reset_at = CASE
+          WHEN rate_limit_windows.reset_at <= ${nowDate} THEN EXCLUDED.reset_at
+          ELSE rate_limit_windows.reset_at
+        END
+      RETURNING count, reset_at
+    `;
+
+    const row = rows[0];
+    // A missing row cannot happen — RETURNING on an upsert always yields one.
+    // If it somehow does, allowing the request is the wrong direction for a
+    // limit that guards expensive work, so this fails closed.
+    if (!row) return { allowed: false, remaining: 0, retryAfterSeconds: 1 };
+
+    void this.sweep(now);
+
+    const retryAfterSeconds = Math.max(1, Math.ceil((row.reset_at.getTime() - now) / 1000));
+    if (row.count > rule.limit) {
+      return { allowed: false, remaining: 0, retryAfterSeconds };
+    }
+    return { allowed: true, remaining: rule.limit - row.count, retryAfterSeconds };
+  }
+
+  /** Expired windows are dead weight, not state — deleted opportunistically,
+   *  at most once a minute per process, and never on the request's critical
+   *  path (the caller does not await this). */
+  private async sweep(now: number): Promise<void> {
+    if (now - this.lastSweep < MINUTE) return;
+    this.lastSweep = now;
+    try {
+      await prisma.$executeRaw`DELETE FROM rate_limit_windows WHERE reset_at <= ${new Date(now)}`;
+    } catch (error) {
+      logger.warn({ err: error }, 'rate limit sweep failed');
+    }
+  }
+}
+
+let store: RateLimitStore | undefined;
+
+/**
+ * Production counts in the shared table, everything else in memory, and
+ * `RATE_LIMIT_STORE` overrides either way. See the scope note at the top for
+ * why the default falls on that side.
+ */
+function defaultStore(): RateLimitStore {
+  const configured = process.env.RATE_LIMIT_STORE?.trim().toLowerCase();
+  if (configured === 'postgres') return new PostgresRateLimitStore();
+  if (configured === 'memory') return new InMemoryRateLimitStore();
+  return process.env.NODE_ENV === 'production'
+    ? new PostgresRateLimitStore()
+    : new InMemoryRateLimitStore();
+}
+
+/** Pass `undefined` to fall back to the environment default — which is how a
+ *  test can assert what that default actually is. */
+export function setRateLimitStore(next: RateLimitStore | undefined): void {
   store = next;
 }
 
 export function getRateLimitStore(): RateLimitStore {
+  store ??= defaultStore();
   return store;
 }
 
@@ -145,15 +244,15 @@ export interface RateLimitSubject {
  * an unregistered client must not get an unlimited allowance simply by
  * omitting a field it controls.
  */
-export function assertWithinRateLimit(
+export async function assertWithinRateLimit(
   category: RateLimitCategory,
   subject: RateLimitSubject,
   now: number = Date.now(),
-): RateLimitDecision {
+): Promise<RateLimitDecision> {
   const rule = RATE_LIMITS[category];
   const scope =
     rule.subject === 'device' ? (subject.deviceId ?? `user:${subject.userId}`) : subject.userId;
-  const decision = store.hit(`${category}:${scope}`, rule, now);
+  const decision = await getRateLimitStore().hit(`${category}:${scope}`, rule, now);
 
   if (!decision.allowed) {
     throw new RateLimitExceededError(category, decision.retryAfterSeconds);
