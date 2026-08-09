@@ -1,9 +1,28 @@
 packages:
   - '.'
 
-onlyBuiltDependencies:
-  - '@prisma/client'
-  - '@prisma/engines'
-  - esbuild
-  - prisma
-  - protobufjs
+# Which dependencies may run their install scripts. pnpm blocks all of them by
+# default and fails the install while any package is neither allowed nor
+# refused — with no TTY that is a hard stop, which is exactly what happened on
+# the first CI run of this project.
+#
+# The key is `allowBuilds`. It replaces pnpm 10's `onlyBuiltDependencies`,
+# which pnpm 11 silently ignores: the list stood here since Phase 1 and had no
+# effect, visible only in a fresh install (an existing node_modules never
+# re-asks). `pnpm config list` shows the packages awaiting a decision.
+#
+# true  — the toolchain needs the script: Prisma fetches its query engines,
+#         esbuild and protobufjs place their binaries.
+# false — transitive native optionals of testcontainers (ssh2, cpu-features)
+#         and of the ESLint resolver (unrs-resolver). All three ship prebuilt
+#         platform packages and work without their build step; the full check
+#         chain runs green with them refused.
+allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  esbuild: true
+  protobufjs: true
+  cpu-features: false
+  ssh2: false
+  unrs-resolver: false
