@@ -196,8 +196,42 @@ export function evaluateStepRequirements(
   };
 }
 
-/** Count of outstanding obligations — what the tablet shows next to the
- *  disabled completion button ("Abschließen (2 fehlend)", docs/07 A2). */
+/** Count of outstanding obligations — what the tablet lists under "Offene
+ *  Anforderungen". Everything the server would currently reject, including
+ *  the confirmation and any out-of-tolerance value: the worker should see all
+ *  of it. What may *block the button* is a narrower question — see below. */
 export function openRequirementCount(evaluation: RequirementEvaluation): number {
   return evaluation.gaps.length + evaluation.toleranceViolations.length;
+}
+
+/**
+ * What must still be supplied before the completion button is worth pressing
+ * — deliberately narrower than `openRequirementCount`.
+ *
+ * Two exclusions, both of which broke something real while the button was
+ * gated on the full count:
+ *
+ *  - **`CONFIRMATION_MISSING`.** It is the gap the confirmation dialog itself
+ *    closes; the PIN field is standing right there. Counting it meant the
+ *    button was disabled at "(1 fehlend)" for every step with
+ *    `signatureRequired` — which is every step — so **no step could be
+ *    completed from the online screen at all**. The service was fine
+ *    throughout: `submitWorkStepCompletion` writes the StepConfirmation and
+ *    only then validates, so by the time the server looks, the gap is gone.
+ *
+ *  - **Tolerance violations.** A missing photo is incompleteness the worker
+ *    can resolve. A measurement outside its limits is a verdict, and the
+ *    server's response to it is to reject the completion *and raise a
+ *    blocking NCR* (Abnahmeszenario D). Blocking the button meant the
+ *    attempt never reached the server, so the NCR was never raised and the
+ *    scenario was unreachable from the interface — quality would simply
+ *    never hear about the deviation.
+ *
+ * docs/07 A2's "Abschließen (2 fehlend) [deaktiviert]" is about missing
+ * evidence, which is exactly what is left here.
+ */
+export function requirementsBlockingCompletion(
+  evaluation: RequirementEvaluation,
+): RequirementGap[] {
+  return evaluation.gaps.filter((gap) => gap.code !== 'CONFIRMATION_MISSING');
 }

@@ -1,6 +1,7 @@
 import {
   evaluateStepRequirements,
   openRequirementCount,
+  requirementsBlockingCompletion,
   type CapturedEvidence,
   type StepRequirementDefinition,
 } from '../step-requirements';
@@ -211,5 +212,77 @@ describe('evaluateStepRequirements', () => {
     };
     const result = evaluateStepRequirements(definition, NO_EVIDENCE);
     expect(openRequirementCount(result)).toBe(4);
+  });
+});
+
+/**
+ * Found by trying to complete a step in the browser: the button read
+ * "Abschließen (1 fehlend)" and stayed disabled forever. The gap it counted
+ * was the confirmation — which the form supplies — and `signatureRequired` is
+ * set on every plan step, so nothing could be completed from the online
+ * screen at all. The server was right throughout; the gate above it was not.
+ */
+describe('requirementsBlockingCompletion', () => {
+  const definition = {
+    photoRequired: false,
+    signatureRequired: true,
+    fourEyesRequired: false,
+    checklistItems: [],
+    photoRequirements: [{ id: 'p1', category: 'TYPENSCHILD', minCount: 1, maxCount: null }],
+    inspectionCharacteristics: [
+      { id: 'c1', characteristicNumber: 1, name: 'Spaltmaß', isRequired: true, unit: 'mm' },
+    ],
+  };
+
+  const evidence = {
+    checklistResponses: [],
+    photos: [{ photoRequirementId: 'p1', photoCategory: 'TYPENSCHILD', uploadStatus: 'COMPLETED' }],
+    measurements: [
+      { inspectionCharacteristicId: 'c1', isWithinTolerance: true, measuredValue: '2' },
+    ],
+    hasConfirmation: false,
+  };
+
+  it('does not count the confirmation the form is about to supply', () => {
+    const evaluation = evaluateStepRequirements(definition, evidence);
+
+    // The server still considers the step incomplete — correctly, until the
+    // confirmation exists…
+    expect(evaluation.satisfied).toBe(false);
+    expect(evaluation.gaps.map((g) => g.code)).toContain('CONFIRMATION_MISSING');
+    expect(openRequirementCount(evaluation)).toBe(1);
+
+    // …but nothing is left for the worker to do before pressing the button.
+    expect(requirementsBlockingCompletion(evaluation)).toHaveLength(0);
+  });
+
+  it('still counts evidence the worker has to supply first', () => {
+    const evaluation = evaluateStepRequirements(definition, {
+      ...evidence,
+      photos: [],
+      measurements: [],
+    });
+
+    expect(
+      requirementsBlockingCompletion(evaluation)
+        .map((g) => g.code)
+        .sort(),
+    ).toEqual(['MEASUREMENT_MISSING', 'PHOTO_REQUIREMENT_UNMET']);
+  });
+
+  it('lets an out-of-tolerance measurement reach the server', () => {
+    // Abnahmeszenario D: the server rejects the completion AND raises a
+    // blocking NCR. Blocking the button here meant the attempt never
+    // arrived, so quality never heard about the deviation at all.
+    const evaluation = evaluateStepRequirements(definition, {
+      ...evidence,
+      measurements: [
+        { inspectionCharacteristicId: 'c1', isWithinTolerance: false, measuredValue: '9' },
+      ],
+    });
+
+    expect(evaluation.toleranceViolations).toHaveLength(1);
+    expect(evaluation.satisfied).toBe(false);
+    expect(requirementsBlockingCompletion(evaluation)).toHaveLength(0);
   });
 });

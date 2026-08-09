@@ -29,6 +29,8 @@ Der **Audit-Trail trennt sauber, wer was getan hat**: `work_step.started`, `work
 
 Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte die Synchronisation eines normalen Offline-Durchlaufs schlicht unmöglich. Nach den Korrekturen wurde er auf **vollständig zurückgesetztem Zustand wiederholt** (Auftrag, Nachweise, Sync-Tabellen und lokale IndexedDB geleert) und lief da fehlerfrei durch — die Korrekturen sind also nicht am Zustand des ersten Laufs vorbeigeglückt. Dabei ebenfalls nachgemessen: eine frische Sitzung läuft nach **8,00 h** ab.
 
+**Im Browser geprüft (angemeldet als worker.test, PIN-Sperre):** fünf Fehlversuche am Abschlussformular — der Countdown zählt herunter („Noch 4/3/2/1 Versuch(e)"), der fünfte sperrt, und die **richtige** PIN wird währenddessen ebenso abgewiesen. Der Audit-Trail zeigt vier `confirmation_pin.failed` und ein `confirmation_pin.locked`, jeweils mit Zweck und Versuchsnummer; der Schritt blieb `IN_PROGRESS`. Nach Ablauf der Minute lief der Abschluss mit der richtigen PIN durch und der Zähler stand wieder auf 0. Dabei fiel ein Fehler auf, der schwerer wog als die Sperre selbst — siehe „Der Abschlussknopf war dauerhaft gesperrt" unten.
+
 **Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten. Außerdem Abschnitt 9 der Akte in der Lesefassung: die abgeleiteten Zahlen, „Abgeschlossen ist nicht freigegeben" — und **kein** Freigabeformular, weil PL nur `product_release.view` hat.
 
 **Weiterhin offen, beides braucht eine andere Anmeldung:**
@@ -226,6 +228,18 @@ Ein Unit-Test für „ClamAV nicht erreichbar → ERROR" lief gegen das echte lo
 
 **Regel:** Neue Server-Abhängigkeiten vor dem Einbau kurz gegen **beide** Läufe prüfen — `pnpm run build` und `pnpm run test:integration`. Ein `pnpm run typecheck` allein sagt darüber nichts: die Typen von `@types/archiver@8` waren einwandfrei, nur ließ sich das Paket nirgends laden.
 
+### Der Abschlussknopf war dauerhaft gesperrt — durch die Bestätigung, die er selbst erzeugt
+
+Beim Browser-Test der PIN-Sperre aufgefallen, und der schwerste UI-Fehler bisher: **kein Arbeitsschritt ließ sich vom Online-Bildschirm abschließen.** Der Knopf stand auf „Abschließen (1 fehlend)" und war deaktiviert, auch nachdem alle Nachweise erfasst waren.
+
+Die eine fehlende Anforderung war `CONFIRMATION_MISSING` — die Bestätigung, die das Formular mit dem PIN-Feld gerade erzeugen will. `openRequirementCount` zählt sie mit, `signature_required` steht auf **jedem** Planschritt, also war der Knopf immer gesperrt. Serverseitig war nichts falsch: `submitWorkStepCompletion` schreibt die `StepConfirmation` und validiert erst danach, die Lücke ist zum Prüfzeitpunkt also geschlossen.
+
+Zweiter Fund derselben Zeile: der Knopf sperrte auch bei **Toleranzverletzungen**. Damit erreichte ein Messwert außerhalb der Toleranz den Server nie — und weil die NCR erst beim Abschluss entsteht (Abnahmeszenario D), erfuhr die Qualitätssicherung von der Abweichung überhaupt nichts. Eine Sperre, die verhindert, dass ein Fehler gemeldet wird.
+
+Getrennt in zwei Fragen, die vorher eine waren: `openRequirementCount` bleibt, was die Liste „Offene Anforderungen" zeigt — alles, was der Server gerade ablehnen würde, inklusive Bestätigung und Toleranzverletzung, denn der Mitarbeiter soll das sehen. `requirementsBlockingCompletion` ist das, was den Knopf sperren darf: fehlende Nachweise, die der Mitarbeiter noch liefern kann. Nur Letzteres steckt jetzt im Knopf.
+
+**Warum keine andere Kontrolle das sah:** Integrationstests rufen `submitWorkStepCompletion` direkt, der Knopf kommt darin nicht vor. Die Unit-Tests prüften `evaluateStepRequirements`, das korrekt ist. Und der Offline-Weg hat sein eigenes Formular. Es gab keinen Test, der die Frage „darf der Knopf gedrückt werden" überhaupt stellte — jetzt gibt es drei.
+
 ### Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg
 
 Beim Browser-Test der Dokumentbindung als PL gefunden, und nur dort zu finden: `bindDocumentToStepAction` war eine gewöhnliche Server Action, die den `ValidationError` durchreichte. Ein Doppelklick auf **+ Dokumentbindung** landete damit in `src/app/error.tsx` — „Ein Fehler ist aufgetreten", Planungsbildschirm weg, Arbeitsstand weg. Der Text war korrekt („Revision 01 ist bereits verknüpft"), die Reaktion nicht: das ist eine normale Antwort mit einer offensichtlichen nächsten Handlung, kein Seitenabbruch.
@@ -327,7 +341,7 @@ Die vollständige Kette, in dieser Reihenfolge — jede Stufe findet etwas, das 
 pnpm run typecheck          # Sekunden
 pnpm run lint
 pnpm run format:check
-pnpm run test:unit          # 169 Tests, keine Infrastruktur nötig
+pnpm run test:unit          # 172 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
 pnpm run test:integration   # 108 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```

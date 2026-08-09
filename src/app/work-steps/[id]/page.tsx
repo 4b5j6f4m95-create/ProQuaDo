@@ -2,7 +2,10 @@ import Link from 'next/link';
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import { getWorkStepInstance, listWorkStepsOfOrder } from '@/domain/execution/execution-queries';
 import { STEP_CONFIRMATION_TEXT } from '@/domain/execution/complete-work-step';
-import { openRequirementCount } from '@/domain/execution/step-requirements';
+import {
+  openRequirementCount,
+  requirementsBlockingCompletion,
+} from '@/domain/execution/step-requirements';
 import { listMeasuringEquipment } from '@/domain/quality/measuring-equipment';
 import { StatusChip } from '@/components/StatusChip';
 import { CompleteStepForm } from '@/components/CompleteStepForm';
@@ -39,6 +42,11 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
   const usableEquipment = equipment.filter((item) => item.isUsable);
 
   const openCount = openRequirementCount(step.evaluation);
+  // What the list shows and what disables the button are different questions:
+  // the confirmation is supplied by the form itself, and an out-of-tolerance
+  // value has to reach the server so it can raise the NCR. See
+  // requirementsBlockingCompletion.
+  const blockingCount = requirementsBlockingCompletion(step.evaluation).length;
   const canWork = step.isAssignedToOrder;
   const responseByItemId = new Map(step.checklistResponses.map((r) => [r.checklistItemId, r]));
   const measurementByCharacteristicId = new Map(
@@ -478,7 +486,7 @@ export default async function WorkStepPage({ params }: { params: { id: string } 
           <CompleteStepForm
             workStepInstanceId={step.id}
             confirmationText={STEP_CONFIRMATION_TEXT}
-            openRequirements={openCount}
+            openRequirements={blockingCount}
             usedDocumentRevisionIds={step.planStep.documentBindings.map(
               (binding) => binding.documentRevision.id,
             )}
