@@ -40,10 +40,11 @@ Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte
 
 **Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten. Außerdem Abschnitt 9 der Akte in der Lesefassung: die abgeleiteten Zahlen, „Abgeschlossen ist nicht freigegeben" — und **kein** Freigabeformular, weil PL nur `product_release.view` hat.
 
-**Im Browser weiterhin ungeprüft:**
+**Im Browser geprüft (angemeldet als qm.test): Abschnitt 9 der Akte, vollständig.** Das Freigabeformular erscheint hier — bei PL nicht, der hat nur `product_release.view`. Leere Begründung blockt der Browser, reine Leerzeichen weist der Server **inline** ab. Eine falsche PIN antwortet mit „Noch 4 Versuch(e)…", die Sperre wirkt also auch auf diesem Pfad: sie sitzt in `confirmWithPin`, nicht in einem einzelnen Dienst. Ablehnung und anschließende Freigabe wurden beide mit Person, Zeitpunkt, Begründung, kopierter Grundlage, Textversion und Digest erfasst; die Ablehnung bleibt lesbar, die Freigabe ist die geltende Entscheidung. Nach der Freigabe verschwindet das Formular und die Karte wird grün. Audit (`product_release.refused` PARTIAL, `.granted` SUCCESS, beide mit Begründung) und Outbox stimmen, der PIN-Zähler stand danach wieder auf 0.
 
-- **Abschnitt 9** der Akte samt Freigabeformular — braucht eine Anmeldung als `qm.test`, weil `product_release.decide` allein bei QM liegt. Die Lesefassung ist als PL geprüft, das Entscheiden selbst nicht. Der Dienst ist durch sechs Integrationstests abgedeckt.
-- der **Service Worker**: er registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite ohne Verbindung ist damit ungeprüft. Dafür braucht es keinen anderen Benutzer, sondern `pnpm run build && pnpm run start`. Der Sync-Pfad selbst hängt nicht am Service Worker und ist vollständig geprüft — auch ein Neuladen **mit** Verbindung mitten in der Offline-Phase.
+Zusätzlich am Formular vorbei geprüft, weil das Verschwinden des Formulars sonst die einzige Sperre wäre: ein direkter `INSERT` einer zweiten `RELEASED`-Zeile scheitert an `product_releases_one_release_per_order`, eine zweite **Ablehnung** geht durch. Der partielle Index lässt genau das zu, was er soll.
+
+**Im Browser weiterhin ungeprüft:** nur noch der **Service Worker**. Er registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite **ohne** Verbindung ist damit offen. Dafür braucht es keinen anderen Benutzer, sondern `pnpm run build && pnpm run start`. Der Sync-Pfad selbst hängt nicht am Service Worker und ist vollständig geprüft — einschließlich eines Neuladens **mit** Verbindung mitten in der Offline-Phase.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
@@ -105,8 +106,8 @@ Für den Offline-Fluss: **Offline** öffnen (registriert das Gerät beim ersten 
 
 Wer die Umgebung übernimmt, findet sie **nicht** im Auslieferungszustand vor — das ist kein Fehler, aber gut zu wissen:
 
-- **Alle Konten stehen auf `pending:<email>`.** Sie binden sich beim nächsten Login neu (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen"). Nichts zu tun, nur nicht wundern, wenn `users.external_id` so aussieht.
-- **Der Demo-Auftrag `AUF-2026-23991` ist vollständig `COMPLETED`**, beide Schritte abgeschlossen, mit Nachweisen aus dem Offline-Durchlauf. Für eine **Produktfreigabe** ist das der richtige Zustand; für eine Wiederholung des Offline-Durchlaufs muss er zurückgesetzt werden (unten).
+- **`qm.test` ist verknüpft, die übrigen vier Konten stehen auf `pending:<email>`** und binden sich beim nächsten Login neu (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen"). Nichts zu tun, nur nicht wundern, wenn `users.external_id` so aussieht.
+- **Der Demo-Auftrag `AUF-2026-23991` ist vollständig `COMPLETED` und bereits freigegeben** — beide Schritte abgeschlossen mit Nachweisen aus dem Offline-Durchlauf, dazu zwei Freigabeentscheidungen (`REJECTED` → `RELEASED`) aus dem Test von Abschnitt 9. **Damit ist er als Vorlage für beide Abläufe verbraucht**: eine zweite Freigabe verweigert die Datenbank, und der Offline-Durchlauf braucht Schritt 1 wieder in `READY`. Für eine Wiederholung von einem der beiden zurücksetzen (unten) — das Skript räumt auch die Freigabeentscheidungen weg.
 - Zusätzlich liegen ein Fertigungsplan (`FP-…`, DRAFT) und eine freigegebene Zeichnung (`ZG-…`) im Demo-Projekt, angelegt für den Test der Dokumentbindung.
 - `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`; der clamd-Container läuft.
 
