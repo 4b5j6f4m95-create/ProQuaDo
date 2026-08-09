@@ -47,7 +47,7 @@ Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
-**ADRs:** vollständig — 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 005 (Signaturverfahren, in Phase 7 nachgeholt), 006 (Mandantenmodell), 007 (Export-Jobs, in Phase 6 nachgeholt). [ADR-005](docs/adr/ADR-005-signature-method.md) schreibt nur nieder, was seit Phase 3 gilt und worauf Code-Kommentare seither verwiesen (PIN + Audit-Trail, keine qualifizierte elektronische Signatur). Wer daran arbeitet, sollte vor allem zwei Punkte daraus kennen: der `signature_data`-Digest ist **keine** Signatur — er ist über keinen geheimen Schlüssel gebildet, die Zurechenbarkeit trägt der append-only Audit-Trail (ADR-004). Und es gibt **keine PIN-Fehlversuchssperre**; bei vier Stellen ist `STANDARD_API` mit 100/min dafür kein Ersatz.
+**ADRs:** vollständig — 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 005 (Signaturverfahren, in Phase 7 nachgeholt), 006 (Mandantenmodell), 007 (Export-Jobs, in Phase 6 nachgeholt). [ADR-005](docs/adr/ADR-005-signature-method.md) schreibt nur nieder, was seit Phase 3 gilt und worauf Code-Kommentare seither verwiesen (PIN + Audit-Trail, keine qualifizierte elektronische Signatur). Wer daran arbeitet, sollte vor allem einen Punkt daraus kennen: der `signature_data`-Digest ist **keine** Signatur — er ist über keinen geheimen Schlüssel gebildet, die Zurechenbarkeit trägt der append-only Audit-Trail (ADR-004). Die von ADR-005 ursprünglich als größte Lücke benannte fehlende PIN-Fehlversuchssperre ist seit Phase 7 geschlossen (Nachtrag im ADR).
 
 ---
 
@@ -100,6 +100,35 @@ Für die Dokumentbindung: Dokument im Projekt anlegen, hochladen, einreichen (PL
 Für die Akte: **Suche** öffnen, Seriennummer eingeben, beim Auftrag auf **Produktionsakte** — dort stehen dieselben zehn Abschnitte wie im PDF, darunter der Export. Das ZIP enthält Akte, Originalnachweise und `manifest.json`; der Downloadlink ist eine kurzlebige signierte URL. **Übersicht** und **Benachrichtigungen** sind rollenabhängig: wer nichts entscheiden darf, sieht keine offenen Entscheidungen.
 
 Für den Offline-Fluss: **Offline** öffnen (registriert das Gerät beim ersten Aufruf mit Verbindung), **Für Offline vorbereiten** laden, Netzwerk trennen (DevTools → Network → Offline), Schritt starten/erfassen/lokal abschließen, Netzwerk wieder verbinden, **Jetzt synchronisieren**. Konflikte landen unter **Konflikte** (PL/QM entscheiden mit PIN). Der Service Worker läuft nur im Production-Build — in `next dev` würde er HMR-Antworten cachen, siehe `src/components/ServiceWorkerRegistration.tsx`.
+
+### Zustand der lokalen Demo-Daten (Stand Ende Phase 7)
+
+Wer die Umgebung übernimmt, findet sie **nicht** im Auslieferungszustand vor — das ist kein Fehler, aber gut zu wissen:
+
+- **Alle Konten stehen auf `pending:<email>`.** Sie binden sich beim nächsten Login neu (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen"). Nichts zu tun, nur nicht wundern, wenn `users.external_id` so aussieht.
+- **Der Demo-Auftrag `AUF-2026-23991` ist vollständig `COMPLETED`**, beide Schritte abgeschlossen, mit Nachweisen aus dem Offline-Durchlauf. Für eine **Produktfreigabe** ist das der richtige Zustand; für eine Wiederholung des Offline-Durchlaufs muss er zurückgesetzt werden (unten).
+- Zusätzlich liegen ein Fertigungsplan (`FP-…`, DRAFT) und eine freigegebene Zeichnung (`ZG-…`) im Demo-Projekt, angelegt für den Test der Dokumentbindung.
+- `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`; der clamd-Container läuft.
+
+**Offline-Durchlauf wiederholen** — Ausführungsdaten zurücksetzen, Audit-Trail bleibt (er ist append-only und soll es sein):
+
+```bash
+docker exec -i proquado-postgres-1 psql -U proquado -d proquado <<'SQL'
+BEGIN;
+DELETE FROM conflict_decisions; DELETE FROM sync_conflicts; DELETE FROM sync_commands;
+DELETE FROM sync_cursors; DELETE FROM completion_submissions; DELETE FROM step_confirmations;
+DELETE FROM checklist_responses; DELETE FROM measurement_results; DELETE FROM product_releases;
+DELETE FROM work_step_releases WHERE work_step_instance_id IN (
+  SELECT id FROM work_step_instances WHERE step_number > 1);
+UPDATE work_step_instances SET status = CASE WHEN step_number = 1 THEN 'READY' ELSE 'LOCKED' END,
+  started_by_id = NULL, started_at = NULL, completed_at = NULL;
+UPDATE production_orders SET status='RELEASED', actual_start_at=NULL, actual_end_at=NULL;
+COMMIT;
+SQL
+```
+
+Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der alte Stand mit dem neuen:
+`indexedDB.deleteDatabase('proquado-offline')` in der Konsole, auf einer Seite **außerhalb** von `/offline` (sonst blockiert die offene Verbindung das Löschen).
 
 ---
 
@@ -430,3 +459,5 @@ Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind ab
 - Am Ende jeder Phase die vollständige Prüfkette laufen lassen **und** die betroffenen Seiten einmal im Browser öffnen.
 - Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
 - **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
+- **Eine Betriebsanweisung, die hier hineingeschrieben wird, sollte einmal ausgeführt worden sein.** Der `--force-recreate`-Hinweis für Keycloak stand eine halbe Phase lang da, war plausibel formuliert und entwertete beim Befolgen jede Kontoverknüpfung. Dokumentation, die man nur zu Ende gedacht hat, ist eine Vermutung mit Befehlszeile.
+- **Zahlen, die eine Begründung tragen, gehören in einen Test.** Zweimal an einem Tag hatte ein Kommentar eine Größenordnung behauptet, die nicht stimmte (Dauer eines PIN-Durchprobierens, Anzahl gefundener Fehler). Wo eine Zahl das Argument ist, prüft sie am besten die Testsuite — siehe `lockSecondsForAttempts`.
