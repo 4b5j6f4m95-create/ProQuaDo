@@ -17,7 +17,12 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
-**Weiterhin offen:** der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren). `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM — mit einer QM-Sitzung antwortet `/api/v1/sync/bundle` korrekt mit `403`. Für die Prüfung braucht es eine Anmeldung als `worker.test`.
+**Ohne Anmeldung im Browser geprüft (Phase 7):** `/api/health/ready` in allen drei Zuständen — `ready` mit `scannerKind: "stub"`, `degraded` mit `uploadsBlocked: true` bei nicht erreichbarem clamd (HTTP **200**, nicht 503 — siehe Begründung unten), und `ready` mit `scannerKind: "clamav"` gegen ein laufendes clamd.
+
+**Weiterhin offen, beides braucht eine Anmeldung:**
+
+- der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren) als `worker.test`. `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM — mit einer QM-Sitzung antwortet `/api/v1/sync/bundle` korrekt mit `403`.
+- der Blick auf die beiden neuen Bildschirme: **Verbindliche Dokumente** im Planungsbildschirm (als PL, Plan im Status DRAFT) und **Abschnitt 9** der Akte samt Freigabeformular (als QM). Beide sind durch Integrationstests abgedeckt und der Dev-Server kompiliert sie fehlerfrei — aber die zwei Fehler, die Phase 6/7 nur im Browser zeigten (pdfkit-Schriftmetriken, Seed-Doppelbenutzer), waren genau von der Sorte, die keine der anderen Kontrollen sieht.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
