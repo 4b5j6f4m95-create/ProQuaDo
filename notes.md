@@ -19,12 +19,15 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 **Ohne Anmeldung im Browser geprüft (Phase 7):** `/api/health/ready` in allen drei Zuständen — `ready` mit `scannerKind: "stub"`, `degraded` mit `uploadsBlocked: true` bei nicht erreichbarem clamd (HTTP **200**, nicht 503 — siehe Begründung unten), und `ready` mit `scannerKind: "clamav"` gegen ein laufendes clamd.
 
+**Im Browser geprüft (angemeldet als worker.test):** der Offline-Durchlauf bis zum lokalen Abschluss — Gerät registrieren, „Für Offline vorbereiten", Verbindung trennen (Dev-Server gestoppt **und** `navigator.onLine` false), Schritt starten, Checkliste, Messwert, PIN, lokal abschließen. Dabei bestätigt: Schritt 2 bleibt durchgehend 🔒 gesperrt, und **serverseitig ist nichts angekommen** — Schritt 1 weiterhin `READY`, keine Antworten, keine Messwerte, keine Abschlussmeldung. Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte die Synchronisation eines normalen Offline-Durchlaufs schlicht unmöglich.
+
 **Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten. Außerdem Abschnitt 9 der Akte in der Lesefassung: die abgeleiteten Zahlen, „Abgeschlossen ist nicht freigegeben" — und **kein** Freigabeformular, weil PL nur `product_release.view` hat.
 
 **Weiterhin offen, beides braucht eine andere Anmeldung:**
 
-- der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren) als `worker.test`, im Production-Build (der Service Worker registriert sich in `next dev` absichtlich nicht). `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM oder PL.
+- der **letzte Schritt** des Offline-Durchlaufs als `worker.test`: vorbereiten, offline arbeiten und lokal abschließen sind geprüft (siehe unten), die abschließende Synchronisation nach der Korrektur noch nicht.
 - **Abschnitt 9** der Akte samt Freigabeformular als `qm.test` — `product_release.decide` liegt allein bei QM.
+- der Offline-Durchlauf im **Production-Build**: der Service Worker registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite ohne Verbindung ist damit ungeprüft. Der Sync-Pfad selbst hängt nicht am Service Worker.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
@@ -97,6 +100,36 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
 Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Fix in `next.config.mjs`: CSP wird nur in Production gesetzt, `form-action` schließt dort die OIDC-Issuer-Origin explizit ein.
+
+### Der Offline-Fluss konnte nie synchronisieren — der optimistische Sperrtest schlug gegen die eigene Änderung an
+
+Der gravierendste Fund des Browser-Durchlaufs, und er lag im Herzstück von Phase 5.
+
+Ein Gerät stellt offline eine Kette in die Warteschlange: `start_work_step` → Checklisten­antworten → Messwert → `submit_completion`. **Alle** tragen dasselbe `baseVersion` — den Stand, den das Gerät beim Vorbereiten kannte, denn offline sagt ihm niemand etwas anderes. Beim Synchronisieren wird das erste Kommando angenommen und **hebt die Serverversion**; jedes folgende Kommando desselben Stapels scheiterte dann am optimistischen Sperrtest gegen eine Änderung, **die es selbst verursacht hatte**. Ergebnis im Browser: „1 übernommen, 0 abgelehnt, 4 Konflikt(e)" — und ein Schritt, der nie fertig wird.
+
+Der Sperrtest ist für „jemand **anderes** hat den Schritt bewegt, während du weg warst" da (docs/06, Negativtest #13). Ein Gerät, das sein eigenes unmittelbar vorheriges Kommando nicht kennt, ist nicht dieser Fall.
+
+Behoben in `sync-commands.ts` über `BatchVersions`: je Stapel und Schrittinstanz wird die Version beim ersten Anfassen gemerkt, dazu jede Version, die der Stapel selbst erzeugt. Ein `baseVersion` gilt genau dann als veraltet, wenn es in dieser Menge fehlt. Der Fremdgeräte-Fall bleibt damit unverändert ein Konflikt.
+
+Warum die Testkette das nicht sah: **Abnahmeszenario B sendet gar kein `baseVersion`** (der Sperrtest lief dort also nie), und Negativtest #13 sendet es nur für ein einzelnes Kommando. Die Form, die ein echter Client erzeugt — mehrere Kommandos mit _demselben_ `baseVersion` — kam in keinem Test vor. Sie kommt jetzt vor: „Ein Stapel, wie ein echtes Gerät ihn sendet" in `phase5-offline-sync`, mit beiden Hälften (Stapel geht durch; fremdes Gerät wird weiterhin abgewiesen).
+
+### Zwei Klicks im selben Tick bekamen dieselbe Sequenznummer
+
+Im selben Durchlauf sichtbar geworden, als `sync_commands` zwei `record_checklist_response` mit `sequence_number = 2` zeigte: `enqueueMutation` las den Zähler, wartete, und schrieb ihn zurück — zwei schnell nacheinander beantwortete Checklistenpunkte lasen beide denselben Wert. Der Stapel wird in Sequenzreihenfolge angewendet, Dubletten machen die Reihenfolge kausal zusammenhängender Kommandos also unbestimmt.
+
+Behoben mit einer Promise-Kette als Schleuse in `sync-client.ts`. Die Kette wird auch im Fehlerfall weitergereicht — sonst blockiert eine einzige Ablehnung alle späteren Einreihungen.
+
+### Ein geteiltes Tablet konnte den Benutzer nicht wechseln
+
+Beim Anmelden als `worker.test` auf demselben Gerät, das zuvor `qm.test` benutzt hatte: jede Aktion im Offline-Arbeitsbereich antwortete mit „Gerät wurde nicht gefunden", ohne Ausweg aus dem Bildschirm.
+
+Ursache: die Geräte-ID lag in der IndexedDB **je Browser**, nicht je Anmeldung. Der Server wies sie zu Recht ab — `assertDeviceActive` behandelt das Gerät eines anderen Benutzers absichtlich als „nicht gefunden", um kein Mitgliedschafts-Orakel zu sein. Nur merkte der Client das nie. Auf genau der Hardware, für die der Offline-Modus existiert.
+
+`resolveHandover` in `use-offline-workspace.ts` entscheidet jetzt beim Start, was der Vorgänger hinterlassen hat: gleiche Anmeldung → weiter; andere Anmeldung ohne offene Vorgänge → lokale Daten löschen und neu registrieren (die Aufträge, Nachweise und der Cursor des Vorgängers gehen den Nächsten nichts an, docs/08); andere Anmeldung **mit** offenen Vorgängen → **verweigern und sagen warum**. Das Letzte ist der Punkt: nicht übertragene Arbeit stillschweigend zu löschen, weil sich jemand anders angemeldet hat, wäre genau das Gegenteil dessen, was docs/06 über offline erfasste Arbeit sagt.
+
+### Die Sitzung läuft nach 15 Minuten ab — auch mitten im Offline-Betrieb
+
+Beobachtung aus demselben Durchlauf, nicht behoben: `session.maxAge` steht laut ADR-001 auf 15 Minuten. Für ein Hallentablet, das eine Schicht lang offline arbeitet, heißt das: nach dem Wiederverbinden ist die Sitzung weg und es braucht eine neue Anmeldung, bevor synchronisiert werden kann. **Die Warteschlange überlebt das** (verschlüsselte IndexedDB, hier mit 5 Vorgängen nachgeprüft) — verloren geht nichts, aber der Mitarbeiter muss sich anmelden, um Erfasstes abzuliefern. Ob 15 Minuten für die Sitzung (im Unterschied zum Access Token) das Richtige sind, gehört vor dem Piloten entschieden; es ist eine ADR-001-Frage, keine Kleinigkeit im Code.
 
 ### Es gab keine Abmeldung — und deshalb keinen Benutzerwechsel
 
@@ -283,7 +316,7 @@ pnpm run lint
 pnpm run format:check
 pnpm run test:unit          # 165 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
-pnpm run test:integration   # 102 Tests, echte Postgres+MinIO-Container (Testcontainers)
+pnpm run test:integration   # 104 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```
 
 Drei Tests laufen zusätzlich gegen ein echtes clamd und sind deshalb ausdrücklich einzuschalten — sie gehen **rot**, wenn keins antwortet (siehe „Jest entscheidet `skip` beim Einlesen" oben):

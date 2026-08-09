@@ -17,6 +17,19 @@ import type { LocalWorkStep } from './client-work-step-status';
  */
 
 const DEVICE_ID_KEY = 'device-id';
+/**
+ * Who the stored device belongs to. Added in Phase 7, because the device id
+ * was keyed to the *browser* and the tablet this application is built for is
+ * shared by a shift.
+ *
+ * What happened without it: the previous user's device id stayed in
+ * IndexedDB, the server correctly refused it (`assertDeviceActive` treats
+ * another user's device as not-found, so as not to be a membership oracle),
+ * and the offline workspace answered "Gerät wurde nicht gefunden" on every
+ * action with no way out of the screen. On the one piece of hardware the
+ * offline mode exists for.
+ */
+const DEVICE_OWNER_KEY = 'device-owner';
 
 export interface OfflineBundleResponse {
   cursor: string;
@@ -112,7 +125,20 @@ export function useOfflineWorkspace(actorId: string) {
         if (cancelled) return;
         dbRef.current = db;
 
-        let deviceId = await db.getMeta<string>(DEVICE_ID_KEY);
+        const handover = await resolveHandover(db, actorId);
+        if (cancelled) return;
+        if (handover.blocked) {
+          setState((s) => ({
+            ...s,
+            ready: true,
+            online: navigator.onLine,
+            error: handover.reason,
+          }));
+          await refresh();
+          return;
+        }
+
+        let deviceId = handover.deviceId;
         if (!deviceId && navigator.onLine) {
           // Registration needs the server; a device that has never been
           // online cannot sync anyway, so deferring it costs nothing.
@@ -121,6 +147,7 @@ export function useOfflineWorkspace(actorId: string) {
           });
           deviceId = registered.deviceId;
           await db.setMeta(DEVICE_ID_KEY, deviceId);
+          await db.setMeta(DEVICE_OWNER_KEY, actorId);
         }
 
         if (cancelled) return;
@@ -129,6 +156,7 @@ export function useOfflineWorkspace(actorId: string) {
           ready: true,
           online: navigator.onLine,
           deviceId: deviceId ?? null,
+          ...(handover.message ? { message: handover.message } : {}),
         }));
         await refresh();
       } catch (error) {
@@ -144,7 +172,7 @@ export function useOfflineWorkspace(actorId: string) {
       window.removeEventListener('online', setOnline);
       window.removeEventListener('offline', setOnline);
     };
-  }, [refresh]);
+  }, [refresh, actorId]);
 
   /** "Für Offline vorbereiten": pull the bundle and project it into the
    *  local database. Release tokens arrive only for steps the server has
@@ -298,6 +326,81 @@ export function useOfflineWorkspace(actorId: string) {
 // ── fetch helpers ────────────────────────────────────────────
 // Errors are re-thrown carrying the server's `code`, because the sync client
 // branches on DEVICE_REVOKED and a stringified message would not do.
+
+type Handover =
+  | { blocked: true; reason: string }
+  | { blocked: false; deviceId: string | undefined; message?: string };
+
+/**
+ * Decides what to do with whatever the last person left on this tablet.
+ *
+ * Three outcomes, and the middle one is the one that matters:
+ *
+ *  - Same user (or nothing stored): carry on.
+ *  - Different user, nothing pending: wipe and start fresh. The local
+ *    database holds the previous user's orders, evidence and cursor; showing
+ *    them to the next person would be a disclosure (docs/08), and syncing
+ *    their outbox under this session would attribute their work to somebody
+ *    else — which is the one thing this system must never do.
+ *  - Different user WITH unsynced work: refuse, and say so. Wiping here would
+ *    silently destroy captured work that only its author can deliver, and
+ *    docs/06 is explicit that offline-captured work is preserved and becomes
+ *    a decision. Losing it because somebody else logged in is not a decision.
+ *
+ * The owner was not recorded before Phase 7, so an unknown owner with a
+ * stored device id is treated as "possibly someone else" and verified against
+ * the server rather than assumed to be ours.
+ */
+async function resolveHandover(db: LocalDb, actorId: string): Promise<Handover> {
+  const deviceId = await db.getMeta<string>(DEVICE_ID_KEY);
+  if (!deviceId) return { blocked: false, deviceId: undefined };
+
+  const owner = await db.getMeta<string>(DEVICE_OWNER_KEY);
+  if (owner === actorId) return { blocked: false, deviceId };
+
+  if (owner === undefined && !(await belongsToSomebodyElse(deviceId))) {
+    // Pre-Phase-7 state that is in fact ours: adopt it rather than throw away
+    // a working device registration and whatever it still has to deliver.
+    await db.setMeta(DEVICE_OWNER_KEY, actorId);
+    return { blocked: false, deviceId };
+  }
+
+  const pending = (await db.listOutbox()).filter((m) => m.state !== 'CONFIRMED');
+  if (pending.length > 0) {
+    return {
+      blocked: true,
+      reason:
+        `Dieses Gerät hält noch ${pending.length} nicht übertragene Vorgang/Vorgänge einer ` +
+        'anderen Anmeldung. Bitte mit dem vorherigen Benutzer anmelden und synchronisieren — ' +
+        'diese Daten werden nicht verworfen.',
+    };
+  }
+
+  await db.wipe();
+  return {
+    blocked: false,
+    deviceId: undefined,
+    message: 'Neue Anmeldung erkannt — lokale Daten des vorherigen Benutzers wurden entfernt.',
+  };
+}
+
+/** True when the server does not recognise this device for the current
+ *  session. Offline (or any other failure) answers "no": refusing to work
+ *  because a check could not be run would strand a tablet that is doing
+ *  exactly what it is supposed to do. */
+async function belongsToSomebodyElse(deviceId: string): Promise<boolean> {
+  if (!navigator.onLine) return false;
+  try {
+    await getJson(`/api/v1/sync/health?deviceId=${encodeURIComponent(deviceId)}`);
+    return false;
+  } catch (error) {
+    // NOT_FOUND is the deliberate answer for "unknown id" AND "somebody
+    // else's id" — see assertDeviceActive on why the two are not
+    // distinguished. Anything else (403 without sync.execute, a network
+    // blip) is not evidence of a foreign device.
+    return error instanceof ApiError && error.status === 404;
+  }
+}
 
 class ApiError extends Error {
   readonly code: string;

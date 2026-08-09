@@ -593,6 +593,115 @@ describe('Abnahmeszenario B — Verbindungsabbruch', () => {
   }, 240_000);
 });
 
+describe('Ein Stapel, wie ein echtes Gerät ihn sendet', () => {
+  /**
+   * Every command carries the SAME baseVersion — the version the device knew
+   * when it prepared, because while offline nothing tells it otherwise.
+   *
+   * Abnahmeszenario B above sends no baseVersion at all, so the optimistic
+   * lock never ran there; Negativtest #13 sends one, but for a single
+   * command. Neither shape is what the client produces, and in between them
+   * sat a bug that made the entire offline flow impossible: the first command
+   * raised the server's version, and every later command in the same batch
+   * was then rejected as stale against a change it had caused itself.
+   *
+   * Found by running the flow in a browser. Written here so it stays found.
+   */
+  it('applies the whole batch although every command carries the same baseVersion', async () => {
+    const fx = await seedScenario('client-shaped-batch');
+    const bundle = await buildOfflineBundle(fx.worker, fx.deviceId);
+    const step1 = bundle.orders
+      .flatMap((o) => o.steps)
+      .find((s) => s.workStepInstanceId === fx.step1InstanceId)!;
+    const deviceKnownVersion = step1.version;
+
+    const results = await processSyncCommands({
+      actor: fx.worker,
+      deviceId: fx.deviceId,
+      commands: [
+        command(
+          'start_work_step',
+          { workStepInstanceId: fx.step1InstanceId, releaseToken: step1.releaseToken },
+          { sequenceNumber: 1, baseVersion: deviceKnownVersion },
+        ),
+        command(
+          'record_checklist_response',
+          {
+            workStepInstanceId: fx.step1InstanceId,
+            checklistItemId: fx.checklistItemId,
+            response: 'OK',
+          },
+          { sequenceNumber: 2, baseVersion: deviceKnownVersion },
+        ),
+        command(
+          'submit_completion',
+          {
+            workStepInstanceId: fx.step1InstanceId,
+            confirmation: { signatureMethod: 'PIN', pin: PIN },
+            usedDocumentRevisionIds: [],
+          },
+          { sequenceNumber: 3, baseVersion: deviceKnownVersion },
+        ),
+      ],
+    });
+
+    expect(results.map((r) => r.status)).toEqual(['ACCEPTED', 'ACCEPTED', 'ACCEPTED']);
+    expect(results[2]!.resultingState).toMatchObject({ result: 'COMPLETED' });
+
+    // And the successor opened only now, on the server, after validation.
+    const after = await ownerClient.workStepInstance.findMany({
+      where: { productionOrderId: fx.orderId },
+      orderBy: { stepNumber: 'asc' },
+    });
+    expect(after[0]!.status).toBe('COMPLETED');
+    expect(after[1]!.status).toBe('READY');
+  }, 180_000);
+
+  it('still refuses a device that is genuinely behind', async () => {
+    // The relaxation is confined to versions THIS batch produced. A second
+    // device holding a version from before somebody else's change must still
+    // be told, or Negativtest #13 would have been traded away for the fix.
+    const fx = await seedScenario('client-shaped-stale');
+    const bundle = await buildOfflineBundle(fx.worker, fx.deviceId);
+    const step1 = bundle.orders
+      .flatMap((o) => o.steps)
+      .find((s) => s.workStepInstanceId === fx.step1InstanceId)!;
+    const staleVersion = step1.version;
+
+    await processSyncCommands({
+      actor: fx.worker,
+      deviceId: fx.deviceId,
+      commands: [
+        command(
+          'start_work_step',
+          { workStepInstanceId: fx.step1InstanceId, releaseToken: step1.releaseToken },
+          { sequenceNumber: 1, baseVersion: staleVersion },
+        ),
+      ],
+    });
+
+    const second = await registerDevice({ actor: fx.worker, deviceLabel: 'Zweites Tablet' });
+    const results = await processSyncCommands({
+      actor: fx.worker,
+      deviceId: second.deviceId,
+      commands: [
+        command(
+          'record_checklist_response',
+          {
+            workStepInstanceId: fx.step1InstanceId,
+            checklistItemId: fx.checklistItemId,
+            response: 'OK',
+          },
+          { sequenceNumber: 1, baseVersion: staleVersion },
+        ),
+      ],
+    });
+
+    expect(results[0]!.status).toBe('CONFLICT');
+    expect(results[0]!.conflictType).toBe('ENTITY_VERSION_CONFLICT');
+  }, 180_000);
+});
+
 describe('Abnahmeszenario C — Revisionskonflikt (Negativtest #4)', () => {
   it('blocks the step, preserves the old revision, and lets a responsible person decide', async () => {
     const fx = await seedScenario('scenario-c', { withBoundDocument: true });

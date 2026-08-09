@@ -341,17 +341,37 @@ async function pushPendingBlobs(deps: SyncDeps): Promise<void> {
  * mutation. Everything a device wants to send goes through here, so the
  * counter has exactly one writer.
  */
+/**
+ * Serializes sequence-number assignment.
+ *
+ * Read-modify-write across two awaits is a race, and it is not theoretical:
+ * answering two checklist items in quick succession produced two mutations
+ * with the SAME sequence number, seen in `sync_commands` during the first
+ * end-to-end offline run. The batch is applied in sequence order, so
+ * duplicates make the order of causally related commands undefined — and
+ * "checklist answer before completion" is exactly the ordering docs/06
+ * relies on.
+ */
+let sequenceGate: Promise<unknown> = Promise.resolve();
+
 export async function enqueueMutation(
   db: LocalDb,
   input: Omit<CreateMutationInput, 'sequenceNumber'>,
 ): Promise<LocalMutation> {
-  const current = await db.getMeta<number>(SEQUENCE_META_KEY);
-  const sequenceNumber = nextSequenceNumber(current);
-  await db.setMeta(SEQUENCE_META_KEY, sequenceNumber);
+  const run = sequenceGate.then(async () => {
+    const current = await db.getMeta<number>(SEQUENCE_META_KEY);
+    const sequenceNumber = nextSequenceNumber(current);
+    await db.setMeta(SEQUENCE_META_KEY, sequenceNumber);
 
-  const mutation = createMutation({ ...input, sequenceNumber });
-  await db.enqueue(mutation);
-  return mutation;
+    const mutation = createMutation({ ...input, sequenceNumber });
+    await db.enqueue(mutation);
+    return mutation;
+  });
+
+  // The gate must advance even when this call fails, or one rejection would
+  // wedge every later enqueue behind it.
+  sequenceGate = run.catch(() => undefined);
+  return run;
 }
 
 function isDeviceRevoked(error: unknown): boolean {

@@ -96,8 +96,12 @@ export async function processSyncCommands(
   const ordered = [...params.commands].sort((a, b) => a.sequenceNumber - b.sequenceNumber);
   const results: SyncCommandResult[] = [];
 
+  // See BatchVersions: the optimistic lock must not fire on changes this very
+  // batch caused.
+  const batchVersions: BatchVersions = new Map();
+
   for (const command of ordered) {
-    results.push(await processOne(params.actor, params.deviceId, command));
+    results.push(await processOne(params.actor, params.deviceId, command, batchVersions));
   }
 
   // Answer in the order the client sent, so a naive client can zip request
@@ -108,10 +112,35 @@ export async function processSyncCommands(
     .filter((r): r is SyncCommandResult => r !== undefined);
 }
 
+/**
+ * Which entity versions this batch is allowed to be "behind" on, per work
+ * step instance: the version the step had when the batch first touched it,
+ * plus every version the batch has itself produced since.
+ *
+ * Without this the offline flow could not complete a single step. A device
+ * queues start → checklist → measurement → completion while offline, and every
+ * one of those commands carries the same `baseVersion` — the version the
+ * device knew when it prepared, because nothing told it otherwise. The first
+ * command is applied and raises the server's version; every later command in
+ * the same batch then failed the optimistic lock against a change it had
+ * caused itself, and the whole session ended in ENTITY_VERSION_CONFLICT.
+ *
+ * The lock exists to catch "somebody ELSE moved this while you were away"
+ * (docs/06, Negativtest #13). A device being unaware of its own immediately
+ * preceding command is not that, and treating it as such made the check fire
+ * on the one path it was supposed to protect.
+ *
+ * Found by running the offline flow end-to-end in a browser; the integration
+ * tests missed it because they build each command with the version the server
+ * actually has, which a real client cannot know.
+ */
+type BatchVersions = Map<string, Set<number>>;
+
 async function processOne(
   actor: Actor,
   deviceId: string,
   command: SyncCommandEnvelope,
+  batchVersions: BatchVersions,
 ): Promise<SyncCommandResult> {
   // ── Claim ────────────────────────────────────────────────
   // The row is written BEFORE the command runs. A crash between "applied"
@@ -123,13 +152,37 @@ async function processOne(
 
   let outcome: SyncCommandResult;
   try {
-    outcome = await executeCommand(actor, deviceId, command);
+    outcome = await executeCommand(actor, deviceId, command, batchVersions);
   } catch (error) {
     outcome = await classifyFailure(actor, command, error);
   }
 
   await finalizeCommand(actor, claim.commandId, outcome);
+  // Whatever the command did to the step's version, the rest of THIS batch
+  // may be unaware of it without that being a conflict.
+  await rememberBatchVersion(actor, command, batchVersions);
   return outcome;
+}
+
+async function rememberBatchVersion(
+  actor: Actor,
+  command: SyncCommandEnvelope,
+  batchVersions: BatchVersions,
+): Promise<void> {
+  const stepId =
+    typeof command.payload.workStepInstanceId === 'string'
+      ? command.payload.workStepInstanceId
+      : undefined;
+  if (!stepId) return;
+
+  const instance = await withOrgContext(actor.organizationId, (tx) =>
+    tx.workStepInstance.findFirst({ where: { id: stepId }, select: { version: true } }),
+  );
+  if (!instance) return;
+
+  const known = batchVersions.get(stepId) ?? new Set<number>();
+  known.add(instance.version);
+  batchVersions.set(stepId, known);
 }
 
 type Claim =
@@ -245,6 +298,7 @@ async function executeCommand(
   actor: Actor,
   deviceId: string,
   command: SyncCommandEnvelope,
+  batchVersions: BatchVersions,
 ): Promise<SyncCommandResult> {
   const schema = COMMAND_PAYLOAD_SCHEMAS[command.commandType];
   if (!schema) {
@@ -261,7 +315,7 @@ async function executeCommand(
   // conditions that changed *while the device was away* and that must become
   // a human decision rather than a bare error — a revoked permission and a
   // stale entity version.
-  const preflight = await runPreflight(actor, command, payload);
+  const preflight = await runPreflight(actor, command, payload, batchVersions);
   if (preflight) return preflight;
 
   switch (command.commandType) {
@@ -449,6 +503,7 @@ async function runPreflight(
   actor: Actor,
   command: SyncCommandEnvelope,
   payload: Record<string, unknown>,
+  batchVersions: BatchVersions,
 ): Promise<SyncCommandResult | null> {
   const workStepInstanceId =
     typeof payload.workStepInstanceId === 'string' ? payload.workStepInstanceId : undefined;
@@ -500,7 +555,22 @@ async function runPreflight(
 
     // ENTITY_VERSION_CONFLICT (Negativtest #13): two devices synced work on
     // the same step, or somebody moved it on the server in between.
-    if (instance && command.baseVersion !== undefined && command.baseVersion !== instance.version) {
+    //
+    // "In between" excludes this batch's own earlier commands — see
+    // BatchVersions. The first time the batch touches a step, its current
+    // version becomes acceptable; every version the batch then produces is
+    // added.
+    if (instance) {
+      const known = batchVersions.get(instance.id);
+      if (!known) batchVersions.set(instance.id, new Set([instance.version]));
+    }
+    const acceptableVersions = instance ? batchVersions.get(instance.id) : undefined;
+
+    if (
+      instance &&
+      command.baseVersion !== undefined &&
+      !(acceptableVersions?.has(command.baseVersion) ?? false)
+    ) {
       return {
         idempotencyKey: command.idempotencyKey,
         status: 'CONFLICT' as const,
