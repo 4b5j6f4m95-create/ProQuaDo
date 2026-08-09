@@ -161,21 +161,29 @@ model WorkCenter {
 }
 
 model User {
-  id                  String   @id @default(uuid())
-  organizationId      String   @map("organization_id")
-  externalId          String   @map("external_id") // subject claim from OIDC provider
-  email               String
-  displayName         String?  @map("display_name")
-  isActive            Boolean  @default(true) @map("is_active")
-  mfaRequired         Boolean  @default(false) @map("mfa_required")
+  id                            String    @id @default(uuid())
+  organizationId                String    @map("organization_id")
+  externalId                    String    @map("external_id") // subject claim from OIDC provider
+  email                         String
+  displayName                   String?   @map("display_name")
+  isActive                      Boolean   @default(true) @map("is_active")
+  mfaRequired                   Boolean   @default(false) @map("mfa_required")
   // Scrypt hash of the confirmation PIN used for step-up confirmation of
   // critical actions (ADR-005: "PIN + Audit-Trail für MVP"). Never the PIN
   // itself, never reversible — see src/lib/auth/confirmation-pin.ts. Null
   // means the user has not set a PIN and therefore cannot confirm steps.
-  confirmationPinHash String?  @map("confirmation_pin_hash")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
-  version             Int      @default(1)
+  confirmationPinHash           String?   @map("confirmation_pin_hash")
+  /// Consecutive failed PIN confirmations, reset to 0 on the next success.
+  /// ADR-005 named the missing lockout as this method's most obvious gap: a
+  /// four-digit PIN behind a 100-requests-per-minute ceiling is not defended.
+  confirmationPinFailedAttempts Int       @default(0) @map("confirmation_pin_failed_attempts")
+  /// Set while the account is refusing confirmations. Time-based and
+  /// self-clearing on purpose — a worker standing at a machine must not need
+  /// an administrator to carry on working (see confirm-with-pin.ts).
+  confirmationPinLockedUntil    DateTime? @map("confirmation_pin_locked_until")
+  createdAt                     DateTime  @default(now()) @map("created_at")
+  updatedAt                     DateTime  @updatedAt @map("updated_at")
+  version                       Int       @default(1)
 
   organization Organization @relation(fields: [organizationId], references: [id])
   employee     Employee?

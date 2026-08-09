@@ -22,7 +22,7 @@ Für das MVP gilt **Verfahren 3: PIN-Bestätigung plus Audit-Trail**. Eine quali
 Konkret:
 
 - Jeder Benutzer hat eine **Bestätigungs-PIN**, gespeichert ausschließlich als scrypt-Hash in `users.confirmation_pin_hash` (`src/lib/auth/confirmation-pin.ts`). Der Klartext existiert für die Dauer eines `verify()`-Aufrufs, wird nie geloggt und nie in ein Audit-Event geschrieben. scrypt mit N=2^15, weil eine vierstellige PIN einen teuren KDF nötiger hat als ein Passwort.
-- Die PIN wird verlangt bei: Abschluss eines Arbeitsschritts (`submitWorkStepCompletion`), Vier-Augen-Entscheidung (`decideSecondApproval`) und Konfliktentscheidung (`decideSyncConflict`). Alle drei sind Aussagen über Produktkonformität, die einer Person zugerechnet werden.
+- Die PIN wird verlangt bei: Abschluss eines Arbeitsschritts (`submitWorkStepCompletion`), Vier-Augen-Entscheidung (`decideSecondApproval`), Konfliktentscheidung (`decideSyncConflict`) und Produktfreigabe (`decideProductRelease`, seit Phase 7). Alle vier sind Aussagen über Produktkonformität, die einer Person zugerechnet werden. Geprüft wird an genau **einer** Stelle, `src/domain/identity/confirm-with-pin.ts` — siehe den Nachtrag unten, warum das nicht nur Aufräumen war.
 - Bei jedem Abschluss entsteht eine Zeile in `step_confirmations` mit dem **wörtlichen Bestätigungstext** und seiner **Version** (`STEP_CONFIRMATION_TEXT`, `STEP_CONFIRMATION_TEXT_VERSION`). Was jemand bestätigt hat, ist damit auch dann noch lesbar, wenn der Text später umformuliert wird.
 - `signature_data` enthält einen SHA-256-Digest über `(userId, workStepInstanceId, textVersion, confirmedAt, method)` — `buildSignatureDigest`. Er bindet zusammen, wer wann was mit welchem Verfahren bestätigt hat.
 
@@ -60,7 +60,7 @@ Kryptografie, die Sicherheit vortäuscht, ist schlechter als ihr sichtbares Fehl
 - **Keine Rechtsverbindlichkeit gegenüber Dritten.** Wo ein Kunde oder eine Zertifizierung eine qualifizierte Signatur verlangt, erfüllt dieses Verfahren die Anforderung nicht. Das muss vor einem solchen Vertrag geklärt werden, nicht danach.
 - Eine PIN kann weitergegeben werden. Dagegen hilft kein technisches Mittel dieser Klasse — nur Organisation, und das Vier-Augen-Prinzip dort, wo es wirklich zählt.
 - Der Digest lädt zu der Fehlannahme ein, er sei eine Signatur. Deshalb steht es oben ausdrücklich, und deshalb nennt das Akten-PDF ihn „Digest" und nicht „Signatur".
-- Vier- bis zwölfstellige PINs sind ein kleiner Suchraum. Abgefedert durch scrypt und dadurch, dass die Prüfung hinter einer authentifizierten Sitzung liegt und seit Phase 7 gegen `STANDARD_API` (100 Anfragen pro Minute und Benutzer) zählt. Eine **dedizierte Sperre nach n Fehlversuchen gibt es nicht** — bei vier Stellen sind 100 Versuche pro Minute weniger Schutz, als es klingt. Das ist die offensichtlichste Lücke dieses Verfahrens und der erste Punkt, an dem nachzubessern ist.
+- Vier- bis zwölfstellige PINs sind ein kleiner Suchraum. Abgefedert durch scrypt, durch die authentifizierte Sitzung, durch `STANDARD_API` und seit Phase 7 durch eine **Fehlversuchssperre** — siehe den Nachtrag unten. Eine PIN bleibt trotzdem das schwächste Glied dieses Verfahrens; wer mehr braucht, braucht ein anderes Verfahren, nicht mehr Stellen.
 
 **Alternativen erwogen:** siehe oben (QES, fortgeschrittene Signatur mit Benutzerschlüsseln).
 
@@ -68,4 +68,22 @@ Kryptografie, die Sicherheit vortäuscht, ist schlechter als ihr sichtbares Fehl
 
 - Sobald ein Kunde oder eine Zertifizierung ausdrücklich eine qualifizierte Signatur verlangt.
 - Sobald Bestätigungen außerhalb der Organisation vorgelegt werden sollen, wo „unser Audit-Trail sagt es" keine Antwort ist.
-- Sobald eine PIN-Fehlversuchssperre gebaut wird — dann lohnt es, gleich zu prüfen, ob nicht ein gerätegebundener Schlüssel die bessere Investition ist.
+- Sobald die Fehlversuchssperre (Nachtrag unten) nicht mehr reicht — etwa weil PINs nachweislich weitergegeben werden. Dann hilft kein weiterer Parameter, sondern nur ein gerätegebundener Schlüssel oder eine zweite Person.
+
+---
+
+## Nachtrag (2026-08-09): Fehlversuchssperre
+
+Die oben als „offensichtlichste Lücke" benannte fehlende Sperre ist umgesetzt.
+
+**Regel.** Fünf aufeinanderfolgende Fehlversuche sperren die Bestätigung. Die Wartezeit beginnt bei einer Minute und verdoppelt sich je weiterem Fehlversuch bis zu **15 Minuten**. Ein erfolgreicher Versuch setzt den Zähler zurück — gezählt werden *aufeinanderfolgende* Fehlversuche, damit gelegentliches Vertippen über eine Schicht sich nicht zu einer Sperre summiert.
+
+**Die Zahl, um die es geht.** Bei 5 Versuchen je 15 Minuten dauert das vollständige Durchprobieren einer vierstelligen PIN rund **drei Wochen** ununterbrochenen Ratens, im Erwartungswert die Hälfte — und jeder einzelne Versuch schreibt ein Audit-Event, jeder fünfte ein `confirmation_pin.locked`. Ein leiser Angriff ist das nicht. Die Rechnung steht als Zusicherung im Unit-Test, damit sie keine Behauptung bleibt, die niemand nachrechnet.
+
+**Zeitbasiert und selbstlösend, mit Absicht.** Ein Mitarbeiter an der Maschine darf für eine vertippte PIN keine Administration brauchen. Eine Sperre, die jemand anderes aufheben muss, ist eine Sperre, die durch geteilte PINs umgangen wird — und damit wäre die Zurechenbarkeit verloren, also genau das, wofür die PIN da ist.
+
+**Wer sie auslösen kann.** Nur der Kontoinhaber. Die PIN wird gegen den *authentifizierten Actor* geprüft, Fehlversuche kann also ausschließlich erzeugen, wer die Sitzung hält. Es gibt keinen Weg, eine Kollegin aus ihrer Schicht auszusperren.
+
+**Nebenbefund, der den eigentlichen Anlass gab.** Vor dieser Änderung existierte die PIN-Prüfung in **vier** Kopien (Schrittabschluss, Vier-Augen, Konfliktentscheidung, Produktfreigabe). Eine Sperre in einer davon hätte drei offen gelassen. Es gibt jetzt genau eine Stelle, `src/domain/identity/confirm-with-pin.ts`; alle vier Dienste rufen sie auf. Eine Kontrolle, die in vier Dateien erinnert werden muss, fehlt irgendwann in einer.
+
+**Neuer Fehlercode.** `CONFIRMATION_LOCKED` (HTTP 423), getrennt von `CONFIRMATION_FAILED`: ein Client, der „falsche PIN" nicht von „gesperrt, noch vier Minuten" unterscheiden kann, verschweigt entweder die Wartezeit oder hämmert weiter. Der Code steht nicht in der Tabelle von docs/05, die älter ist — vermerkt wie die übrigen dokumentierten Abweichungen.

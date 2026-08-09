@@ -2,13 +2,8 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { writeOutboxEvent } from '@/lib/audit/write-outbox-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { verifyConfirmationPin } from '@/lib/auth/confirmation-pin';
-import {
-  ConfirmationFailedError,
-  NotFoundError,
-  SamePersonReviewDeniedError,
-  ValidationError,
-} from '@/lib/domain-errors';
+import { confirmWithPin } from '@/domain/identity/confirm-with-pin';
+import { NotFoundError, SamePersonReviewDeniedError, ValidationError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 import { finalizeStepCompletion } from '@/domain/execution/complete-work-step';
 
@@ -54,10 +49,7 @@ export async function decideSecondApproval(
     throw new ValidationError('Eine Ablehnung der Vier-Augen-Prüfung erfordert eine Begründung.');
   }
 
-  const pinValid = await verifyReviewerPin(command.actor, command.pin);
-  if (!pinValid) {
-    throw new ConfirmationFailedError('Die eingegebene PIN ist nicht korrekt.');
-  }
+  await confirmWithPin(command.actor, command.pin, { purpose: 'second_approval.decision' });
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const instance = await tx.workStepInstance.findFirst({
@@ -175,19 +167,6 @@ export async function decideSecondApproval(
       nextStepInstanceIds: finalized.nextStepInstanceIds,
     };
   });
-}
-
-async function verifyReviewerPin(actor: Actor, pin: string): Promise<boolean> {
-  const user = await withOrgContext(actor.organizationId, (tx) =>
-    tx.user.findFirst({ where: { id: actor.userId }, select: { confirmationPinHash: true } }),
-  );
-  if (!user) throw new NotFoundError('Benutzer');
-  if (!user.confirmationPinHash) {
-    throw new ConfirmationFailedError(
-      'Für Ihr Konto ist keine Bestätigungs-PIN hinterlegt — bitte an die Administration wenden.',
-    );
-  }
-  return verifyConfirmationPin(pin, user.confirmationPinHash);
 }
 
 // NOTE on "passende Prüferqualifikation" (MASTERPROMPT.md Kap. 8): the

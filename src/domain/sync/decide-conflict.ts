@@ -3,8 +3,8 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { writeOutboxEvent } from '@/lib/audit/write-outbox-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { verifyConfirmationPin } from '@/lib/auth/confirmation-pin';
-import { ConfirmationFailedError, NotFoundError, ValidationError } from '@/lib/domain-errors';
+import { NotFoundError, ValidationError } from '@/lib/domain-errors';
+import { confirmWithPin } from '@/domain/identity/confirm-with-pin';
 import type { Actor } from '@/domain/shared/actor';
 import { validateSubmissionWithin } from '@/domain/execution/complete-work-step';
 import { releaseWorkStepInstance } from '@/domain/execution/release-work-step';
@@ -65,10 +65,7 @@ export async function decideSyncConflict(
     throw new ValidationError('Eine Konfliktentscheidung erfordert eine Begründung.');
   }
 
-  const pinValid = await verifyActorPin(command.actor, command.pin);
-  if (!pinValid) {
-    throw new ConfirmationFailedError('Die eingegebene PIN ist nicht korrekt.');
-  }
+  await confirmWithPin(command.actor, command.pin, { purpose: 'sync_conflict.decision' });
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const conflict = await tx.syncConflict.findFirst({
@@ -523,17 +520,4 @@ async function requireStep(tx: Prisma.TransactionClient, conflict: ConflictRow) 
   });
   if (!instance) throw new NotFoundError('Arbeitsschritt');
   return instance;
-}
-
-async function verifyActorPin(actor: Actor, pin: string): Promise<boolean> {
-  const user = await withOrgContext(actor.organizationId, (tx) =>
-    tx.user.findFirst({ where: { id: actor.userId }, select: { confirmationPinHash: true } }),
-  );
-  if (!user) throw new NotFoundError('Benutzer');
-  if (!user.confirmationPinHash) {
-    throw new ConfirmationFailedError(
-      'Für Ihr Konto ist keine Bestätigungs-PIN hinterlegt — bitte an die Administration wenden.',
-    );
-  }
-  return verifyConfirmationPin(pin, user.confirmationPinHash);
 }

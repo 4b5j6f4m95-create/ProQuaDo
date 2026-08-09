@@ -123,6 +123,31 @@ export class ConfirmationFailedError extends DomainError {
   }
 }
 
+/**
+ * The PIN lockout from ADR-005's amendment. A separate code from
+ * CONFIRMATION_FAILED on purpose: a client that cannot tell "wrong PIN" from
+ * "locked, wait four minutes" will either hide the wait or keep hammering,
+ * and both are worse than saying it. 423 Locked rather than 403 for the same
+ * reason ORDER_ON_HOLD uses it — the request was understood and the resource
+ * is temporarily refusing, which is not the same as being forbidden.
+ *
+ * Not in the docs/05 error table, which predates the lockout; recorded in
+ * notes.md alongside the other documented deviations.
+ */
+export class ConfirmationLockedError extends DomainError {
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    const minutes = Math.ceil(retryAfterSeconds / 60);
+    super(
+      'CONFIRMATION_LOCKED',
+      `Zu viele fehlgeschlagene PIN-Eingaben. Die Bestätigung ist noch etwa ${minutes} Minute(n) gesperrt.`,
+      423,
+    );
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 // ── Quality errors (Phase 4) ─────────────────────────────────
 
 /** A hold freezes work in its scope. The message always names the reason

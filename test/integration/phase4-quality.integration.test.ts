@@ -48,6 +48,7 @@ let disposeNonConformance: typeof import('@/domain/quality/ncr-workflow').dispos
 let applyProductionHold: typeof import('@/domain/quality/production-holds').applyProductionHold;
 let releaseProductionHold: typeof import('@/domain/quality/production-holds').releaseProductionHold;
 let decideSecondApproval: typeof import('@/domain/quality/second-approval').decideSecondApproval;
+let PIN_ATTEMPTS_BEFORE_LOCK: typeof import('@/domain/identity/confirm-with-pin').PIN_ATTEMPTS_BEFORE_LOCK;
 let createMeasuringEquipment: typeof import('@/domain/quality/measuring-equipment').createMeasuringEquipment;
 let recordCalibration: typeof import('@/domain/quality/measuring-equipment').recordCalibration;
 let setMeasuringEquipmentStatus: typeof import('@/domain/quality/measuring-equipment').setMeasuringEquipmentStatus;
@@ -131,6 +132,7 @@ beforeAll(async () => {
   ({ applyProductionHold, releaseProductionHold } =
     await import('@/domain/quality/production-holds'));
   ({ decideSecondApproval } = await import('@/domain/quality/second-approval'));
+  ({ PIN_ATTEMPTS_BEFORE_LOCK } = await import('@/domain/identity/confirm-with-pin'));
   ({ createMeasuringEquipment, recordCalibration, setMeasuringEquipmentStatus } =
     await import('@/domain/quality/measuring-equipment'));
 
@@ -795,5 +797,131 @@ describe('Regression — Nachbesserung nach abgelehntem Abschluss', () => {
         where: { workStepInstanceId: fx.step1InstanceId },
       }),
     ).toBe(2);
+  }, 240_000);
+});
+
+/**
+ * PIN-Fehlversuchssperre — the gap ADR-005 named as its own most obvious one.
+ *
+ * Exercised through decideSecondApproval, but the point is that it is not
+ * specific to it: until Phase 7 four services each carried their own copy of
+ * the PIN check, and a lockout added to one would have been missing from the
+ * other three. There is one `confirmWithPin` now, and these properties hold
+ * wherever it is called.
+ */
+describe('PIN-Fehlversuchssperre', () => {
+  async function awaitingApproval(name: string) {
+    const fx = await seedScenario(name, { fourEyesOnStep1: true });
+    await startWorkStep({ actor: fx.worker, workStepInstanceId: fx.step1InstanceId });
+    await fulfil(fx, fx.worker, fx.step1InstanceId, '2.0');
+    const submitted = await complete(fx.worker, fx.step1InstanceId);
+    expect(submitted.result).toBe('AWAITING_SECOND_APPROVAL');
+    return fx;
+  }
+
+  const wrongPin = (fx: Awaited<ReturnType<typeof awaitingApproval>>) =>
+    decideSecondApproval({
+      actor: fx.inspector,
+      workStepInstanceId: fx.step1InstanceId,
+      decision: 'APPROVE',
+      pin: '0000',
+    });
+
+  it('locks the account after the configured number of consecutive failures', async () => {
+    const fx = await awaitingApproval('pin-lock');
+
+    for (let attempt = 1; attempt < PIN_ATTEMPTS_BEFORE_LOCK; attempt++) {
+      await expect(wrongPin(fx)).rejects.toMatchObject({ code: 'CONFIRMATION_FAILED' });
+    }
+    // The one that trips it answers differently — a client that cannot tell
+    // "wrong PIN" from "locked" will either hide the wait or keep hammering.
+    await expect(wrongPin(fx)).rejects.toMatchObject({ code: 'CONFIRMATION_LOCKED', status: 423 });
+
+    // And the correct PIN is refused too, or the lock would be decorative.
+    await expect(
+      decideSecondApproval({
+        actor: fx.inspector,
+        workStepInstanceId: fx.step1InstanceId,
+        decision: 'APPROVE',
+        pin: PIN,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFIRMATION_LOCKED' });
+
+    // Nothing was decided along the way.
+    const step = await ownerClient.workStepInstance.findUniqueOrThrow({
+      where: { id: fx.step1InstanceId },
+    });
+    expect(step.status).toBe('AWAITING_SECOND_APPROVAL');
+  }, 240_000);
+
+  it('counts consecutive failures only, so ordinary mistyping never accumulates', async () => {
+    const fx = await awaitingApproval('pin-reset');
+
+    for (let attempt = 1; attempt < PIN_ATTEMPTS_BEFORE_LOCK; attempt++) {
+      await expect(wrongPin(fx)).rejects.toMatchObject({ code: 'CONFIRMATION_FAILED' });
+    }
+
+    // A success in between clears the counter — a worker who fumbles four
+    // times over a shift must never find themselves one slip from a lock.
+    const decided = await decideSecondApproval({
+      actor: fx.inspector,
+      workStepInstanceId: fx.step1InstanceId,
+      decision: 'APPROVE',
+      pin: PIN,
+    });
+    expect(decided.status).toBe('COMPLETED');
+
+    const reviewer = await ownerClient.user.findUniqueOrThrow({
+      where: { id: fx.inspector.userId },
+    });
+    expect(reviewer.confirmationPinFailedAttempts).toBe(0);
+    expect(reviewer.confirmationPinLockedUntil).toBeNull();
+  }, 240_000);
+
+  it('locks the account, not the action, and nobody else', async () => {
+    const fx = await awaitingApproval('pin-scope');
+
+    for (let attempt = 0; attempt < PIN_ATTEMPTS_BEFORE_LOCK; attempt++) {
+      await expect(wrongPin(fx)).rejects.toMatchObject({
+        code: expect.stringMatching(/^CONFIRMATION_(FAILED|LOCKED)$/),
+      });
+    }
+
+    const locked = await ownerClient.user.findUniqueOrThrow({
+      where: { id: fx.inspector.userId },
+    });
+    expect(locked.confirmationPinFailedAttempts).toBe(PIN_ATTEMPTS_BEFORE_LOCK);
+    expect(locked.confirmationPinLockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+    // The PIN is verified for the AUTHENTICATED actor, so failures can only
+    // ever be produced by the holder of that session. Nobody can lock a
+    // colleague out of their shift — the QM here is untouched.
+    const untouched = await ownerClient.user.findUniqueOrThrow({
+      where: { id: fx.qualityManager.userId },
+    });
+    expect(untouched.confirmationPinFailedAttempts).toBe(0);
+    expect(untouched.confirmationPinLockedUntil).toBeNull();
+  }, 240_000);
+
+  it('writes an audit event for every failure and names the one that locked', async () => {
+    const fx = await awaitingApproval('pin-audit');
+
+    for (let attempt = 0; attempt < PIN_ATTEMPTS_BEFORE_LOCK; attempt++) {
+      await expect(wrongPin(fx)).rejects.toBeDefined();
+    }
+
+    const events = await ownerClient.auditEvent.findMany({
+      where: { resourceId: fx.inspector.userId, resourceType: 'user' },
+      orderBy: { serverTimestamp: 'asc' },
+    });
+    expect(events).toHaveLength(PIN_ATTEMPTS_BEFORE_LOCK);
+    expect(events.slice(0, -1).every((e) => e.eventType === 'confirmation_pin.failed')).toBe(true);
+    expect(events.at(-1)!.eventType).toBe('confirmation_pin.locked');
+    expect(events.every((e) => e.result === 'FAILURE')).toBe(true);
+    // "Somebody tried eleven times last Tuesday" has to be answerable, and
+    // the purpose says which confirmation was being attempted.
+    expect(events.at(-1)!.newValues).toMatchObject({ purpose: 'second_approval.decision' });
+    // The PIN itself is never written, anywhere.
+    expect(JSON.stringify(events)).not.toContain('0000');
   }, 240_000);
 });

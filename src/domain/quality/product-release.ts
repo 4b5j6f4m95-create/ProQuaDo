@@ -4,8 +4,8 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { writeOutboxEvent } from '@/lib/audit/write-outbox-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { verifyConfirmationPin } from '@/lib/auth/confirmation-pin';
-import { ConfirmationFailedError, NotFoundError, ValidationError } from '@/lib/domain-errors';
+import { NotFoundError, ValidationError } from '@/lib/domain-errors';
+import { confirmWithPin } from '@/domain/identity/confirm-with-pin';
 import type { Actor } from '@/domain/shared/actor';
 
 /**
@@ -78,10 +78,7 @@ export async function decideProductRelease(
 
   // Verified before the transaction and never inside it: scrypt is slow by
   // design, and the plaintext must not travel further than it has to (ADR-005).
-  const pinValid = await verifyActorPin(command.actor, command.pin);
-  if (!pinValid) {
-    throw new ConfirmationFailedError('Die eingegebene PIN ist nicht korrekt.');
-  }
+  await confirmWithPin(command.actor, command.pin, { purpose: 'product_release.decision' });
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const order = await tx.productionOrder.findFirst({
@@ -264,19 +261,6 @@ export function describeBlockers(basis: ProductReleaseBasis): string[] {
     blockers.push(`${basis.activeHolds} Sperre(n) sind aktiv`);
   }
   return blockers;
-}
-
-async function verifyActorPin(actor: Actor, pin: string): Promise<boolean> {
-  const user = await withOrgContext(actor.organizationId, (tx) =>
-    tx.user.findFirst({ where: { id: actor.userId }, select: { confirmationPinHash: true } }),
-  );
-  if (!user) throw new NotFoundError('Benutzer');
-  if (!user.confirmationPinHash) {
-    throw new ConfirmationFailedError(
-      'Für Ihr Konto ist keine Bestätigungs-PIN hinterlegt — bitte an die Administration wenden.',
-    );
-  }
-  return verifyConfirmationPin(pin, user.confirmationPinHash);
 }
 
 /** See ADR-005 on what this digest is and, more importantly, what it is not. */

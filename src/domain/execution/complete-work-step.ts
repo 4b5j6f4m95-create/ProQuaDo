@@ -4,9 +4,8 @@ import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { writeOutboxEvent } from '@/lib/audit/write-outbox-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { verifyConfirmationPin } from '@/lib/auth/confirmation-pin';
+import { confirmWithPin } from '@/domain/identity/confirm-with-pin';
 import {
-  ConfirmationFailedError,
   NotFoundError,
   OrderOnHoldError,
   ValidationError,
@@ -90,10 +89,10 @@ export async function submitWorkStepCompletion(
   // The PIN is checked before the mutating transaction and its plaintext
   // never enters it — scrypt verification is also slow enough that holding
   // a database transaction open across it would be wasteful.
-  const pinIsValid = await verifyActorPin(command.actor, command.confirmation.pin);
-  if (!pinIsValid) {
-    throw new ConfirmationFailedError('Die eingegebene PIN ist nicht korrekt.');
-  }
+  await confirmWithPin(command.actor, command.confirmation.pin, {
+    purpose: 'work_step.completion',
+    deviceId: command.deviceId,
+  });
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const duplicate = await tx.completionSubmission.findFirst({
@@ -729,22 +728,6 @@ async function completeOrderIfFinished(
     eventType: 'production_order.completed',
     payload: { orderId: order.id },
   });
-}
-
-async function verifyActorPin(actor: Actor, pin: string): Promise<boolean> {
-  const user = await withOrgContext(actor.organizationId, (tx) =>
-    tx.user.findFirst({
-      where: { id: actor.userId },
-      select: { confirmationPinHash: true },
-    }),
-  );
-  if (!user) throw new NotFoundError('Benutzer');
-  if (!user.confirmationPinHash) {
-    throw new ConfirmationFailedError(
-      'Für Ihr Konto ist keine Bestätigungs-PIN hinterlegt — bitte an die Administration wenden.',
-    );
-  }
-  return verifyConfirmationPin(pin, user.confirmationPinHash);
 }
 
 /**
