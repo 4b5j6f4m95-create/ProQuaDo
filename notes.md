@@ -165,6 +165,25 @@ Ohne `id_token_hint`, dafür mit `client_id` + `post_logout_redirect_uri`: so mu
 docker compose up -d --force-recreate keycloak
 ```
 
+### Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen
+
+Direkte Folge des vorigen Eintrags, und der Fehler war meiner: Ich habe `--force-recreate` als Vorgehen empfohlen, ohne zu prüfen, was es mit bestehenden Anmeldungen macht. Ergebnis beim nächsten Anmeldeversuch: **„Access Denied — You do not have permission to sign in."**
+
+Der Container hat kein Volume für `KC_DB: dev-file`. Ein Neuaufbau bedeutet also frische Datenbank und Re-Import des Realms — und die Realm-Datei legte **keine Benutzer-IDs fest**, Keycloak vergab bei jedem Import neue. Die `external_id` in `users` zeigt danach auf ein Subject, das es nicht mehr gibt. Der `pending:<email>`-Mechanismus greift nicht, weil er beim ersten Login verbraucht wurde: das Konto ist verknüpft, nur eben falsch.
+
+Im Log steht es klar (`Login denied: no matching user record`), auf dem Bildschirm nicht — dort steht nur „Access Denied", was nach einer Berechtigungsfrage aussieht und keine ist.
+
+**Behoben an der Ursache:** die Realm-Datei schreibt die Benutzer-IDs jetzt fest (`"id": "11111111-…-00000000000N"`). Ein Re-Import vergibt damit dieselben Subjects wie zuvor, und ein Neuaufbau ist folgenlos.
+
+**Wenn Verknüpfungen doch einmal veraltet sind** — etwa auf einer Installation, die vor dieser Änderung angelegt wurde — ist das Zurücksetzen auf den Einladungszustand der vorgesehene Weg; die Konten binden sich beim nächsten Login neu, ohne Datenverlust:
+
+```bash
+docker exec -i proquado-postgres-1 psql -U proquado -d proquado -c \
+  "UPDATE users SET external_id = 'pending:' || email WHERE external_id NOT LIKE 'pending:%';"
+```
+
+**Lehre:** Wer eine Betriebsanweisung in dieses Dokument schreibt, sollte sie einmal ausgeführt haben. Diese hier war beim Aufschreiben plausibel und beim Befolgen falsch.
+
 ### `pnpm run build` neben laufendem `next dev` zerlegt den Dev-Server
 
 Beim Browser-Test aufgetreten und einige Minuten Fehlersuche wert: eine Seite antwortete plötzlich mit `500` und `Cannot find module './vendor-chunks/@swc+helpers@0.5.5.js'`. Kein Anwendungsfehler — `pnpm run build` schreibt in dasselbe `.next/`, aus dem der laufende Dev-Server seine Chunks lädt, und überschreibt sie. Der Dev-Server bemerkt das nicht und sucht danach Dateien, die es nicht mehr gibt.
