@@ -16,6 +16,9 @@ body {
 }
 
 nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   margin-bottom: 1.5rem;
   padding-bottom: 1rem;
   border-bottom: 1px solid #ddd;
@@ -260,6 +263,16 @@ button:disabled {
 li > .inline-form {
   display: inline;
   margin-left: 0.5rem;
+}
+
+/* Sits at the end of the nav, visually separated: who you are is a different
+   kind of thing from where you can go. */
+.nav-session {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-left: auto;
+  max-width: none;
 }
 
 .link-button {

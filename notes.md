@@ -56,7 +56,7 @@ docker compose ps clamav
 
 Ob der Scanner wirklich antwortet, sagt `GET /api/health/ready` unter `checks.malwareScanner` — nicht der Containerstatus.
 
-**Demo-User** (Keycloak-Passwort für alle: `devpassword`), verknüpft über den `pending:<email>`-Mechanismus beim ersten Login (siehe `src/lib/auth/resolve-login.ts`):
+**Demo-User** (Keycloak-Passwort für alle: `devpassword`; Anmeldung mit E-Mail oder Benutzername wie `pl.test`), verknüpft über den `pending:<email>`-Mechanismus beim ersten Login (siehe `src/lib/auth/resolve-login.ts`). **Benutzerwechsel geht über „Abmelden"** rechts in der Navigation — ohne das beendet nur die App-Sitzung, und Keycloak meldet beim nächsten Klick stillschweigend denselben Benutzer wieder an (siehe „Es gab keine Abmeldung" unten):
 
 | User                         | Rolle              |
 | ---------------------------- | ------------------ |
@@ -97,6 +97,22 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
 Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Fix in `next.config.mjs`: CSP wird nur in Production gesetzt, `form-action` schließt dort die OIDC-Issuer-Origin explizit ein.
+
+### Es gab keine Abmeldung — und deshalb keinen Benutzerwechsel
+
+Beim Versuch, für den Offline-Test von `pl.test` auf `worker.test` zu wechseln, aufgefallen: die Anwendung hatte **überhaupt keine Abmeldung**. `signOut` war in `src/lib/auth/index.ts` exportiert und nirgends verwendet, die Navigation hatte keinen Eintrag, und der Bildschirm nannte auch nicht, wer angemeldet ist.
+
+Die Folge ist nicht bloß unbequem. Selbst wenn man die App-Sitzung loswird (JWT, 15 Minuten), bleibt die **SSO-Sitzung bei Keycloak** bestehen: ein Klick auf „Mit SSO anmelden" meldet stillschweigend dieselbe Person wieder an, ohne je nach einem Passwort zu fragen. An einem geteilten Hallen-Tablet heißt das, dass der Nächste unter dem Namen des Vorgängers arbeitet — und der Audit-Trail schreibt genau das. In einem System, dessen Zweck Zurechenbarkeit ist, ist das ein Sicherheitsmangel, kein Komfortmangel.
+
+Umgesetzt sind beide Hälften: `signOut({ redirect: false })` für die eigene Sitzung, danach eine Weiterleitung an das **`end_session_endpoint`** des Providers. Das wird über `/.well-known/openid-configuration` **ermittelt**, nicht zusammengebaut — `/protocol/openid-connect/logout` ist ein Keycloak-Pfad, und ihn fest zu verdrahten würde ADR-001 (generisches OIDC) stillschweigend aufheben.
+
+Ohne `id_token_hint`, dafür mit `client_id` + `post_logout_redirect_uri`: so muss das ID-Token nirgends hin, wo es sonst nicht gebraucht wird. Preis ist eine Rückfrage des Providers — an einem geteilten Gerät ist „wirklich abmelden?" kein Preis.
+
+**Fallstrick dabei:** Keycloak lehnt die Rücksprung-URL mit „Invalid redirect uri" ab, solange sie nicht als `post.logout.redirect.uris` **am Client** registriert ist. `redirectUris` allein genügt nicht. Steht jetzt in `infra/keycloak/proquado-realm.json`. Die Realm-Konfiguration wird nur beim Anlegen importiert (`--import-realm`, `KC_DB: dev-file`) — nach einer Änderung daran:
+
+```bash
+docker compose up -d --force-recreate keycloak
+```
 
 ### `pnpm run build` neben laufendem `next dev` zerlegt den Dev-Server
 
