@@ -21,7 +21,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
-**ADRs:** vorhanden sind 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 006 (Mandantenmodell) und 007 (Export-Jobs, in Phase 6 nachgeholt). **ADR-005 (Signaturverfahren) fehlt als Dokument**, obwohl Code-Kommentare darauf verweisen — etwa `buildSignatureDigest` in `complete-work-step.ts`. Inhaltlich ist die Entscheidung getroffen und umgesetzt (PIN + Audit-Trail, keine qualifizierte elektronische Signatur; docs/10 nennt sie in der Kandidatenliste), aber sie ist nirgends niedergeschrieben. Wer als Nächstes an Signaturen arbeitet, sollte das Dokument nachziehen.
+**ADRs:** vollständig — 001 (Auth), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 005 (Signaturverfahren, in Phase 7 nachgeholt), 006 (Mandantenmodell), 007 (Export-Jobs, in Phase 6 nachgeholt). [ADR-005](docs/adr/ADR-005-signature-method.md) schreibt nur nieder, was seit Phase 3 gilt und worauf Code-Kommentare seither verwiesen (PIN + Audit-Trail, keine qualifizierte elektronische Signatur). Wer daran arbeitet, sollte vor allem zwei Punkte daraus kennen: der `signature_data`-Digest ist **keine** Signatur — er ist über keinen geheimen Schlüssel gebildet, die Zurechenbarkeit trägt der append-only Audit-Trail (ADR-004). Und es gibt **keine PIN-Fehlversuchssperre**; bei vier Stellen ist `STANDARD_API` mit 100/min dafür kein Ersatz.
 
 ---
 
@@ -286,7 +286,7 @@ Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind ab
 
 2. **Produktfreigabe als eigener Vorgang.** Abschnitt 9 der Akte rechnet heute nur zusammen, ob etwas offen ist, und sagt ausdrücklich, dass die Freigabe selbst nicht geführt wird. Ein eigenes Modell (wer, wann, auf welcher Grundlage, mit PIN) ist die naheliegende nächste Modellerweiterung.
 
-3. **ADR-005 nachziehen** (Signaturverfahren) — entschieden und umgesetzt, aber nicht dokumentiert; Code-Kommentare verweisen ins Leere.
+3. **PIN-Fehlversuchssperre.** Der erste Punkt, den ADR-005 selbst als offensichtlichste Lücke nennt: eine vierstellige PIN hinter einem Limit von 100 Anfragen pro Minute ist schwächer, als es aussieht. Ein Zähler je Benutzer mit wachsender Wartezeit — `rate_limit_windows` steht bereits als gemeinsamer Speicher zur Verfügung.
 
 4. **ERP/Webhook-Adapter** aus Phase 6 — docs/10 führt ihn als „optional für MVP". Sinnvoll erst, wenn ein realer Konsument existiert, an dem sich das Interface bewähren kann.
 
