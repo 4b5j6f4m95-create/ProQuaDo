@@ -191,6 +191,12 @@ model User {
   notifications      Notification[]
 
   @@unique([organizationId, externalId])
+  // Added in Phase 7. Two accounts with the same address inside one
+  // organization are not a state this system has an answer for — "which user
+  // is qm.test" has to have one. Its absence is what let a re-run of the seed
+  // create a shadow account after the `pending:` sentinel had been consumed
+  // by a real login (see seedDemoUsers).
+  @@unique([organizationId, email])
   @@index([organizationId])
   @@map("users")
 }

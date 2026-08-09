@@ -15,7 +15,9 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 - **Phase 7 (Pilot und Härtung)**: begonnen — Malware-Scan schließt in Produktion, Rate Limits aus docs/05 durchgesetzt, 12 Angriffstests gegen die Offline-Invariante. Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
 - **Vor dem Piloten weiterhin offen**: (a) die von docs/10 geforderte **manuelle** Sicherheitsüberprüfung der Offline-Invariante — `phase7-offline-invariant-attacks` ist die automatisierte Hälfte davon und probiert nur die Angriffe, die jemand bedacht hat; (b) ein erreichbarer echter Scanner (`MALWARE_SCANNER=clamav` + clamd-Container) in der Zielumgebung; (c) Lasttest nach docs/09 Ebene 8 und Restore-Probe; (d) die Rate Limits sind pro Prozess gezählt und bei mehreren Instanzen entsprechend schwächer.
 
-**Noch nicht im Browser geprüft:** die neuen Seiten aus Phase 5 und 6 (`/offline`, `/sync/conflicts`, `/dashboard`, `/search`, `/notifications`, `/production-orders/{id}/dossier`) wurden nie eingeloggt in einem Browser geöffnet. Sie kompilieren, laufen serverseitig an und leiten unangemeldet korrekt auf `/login` um; ihr gerendertes Ergebnis ist nur durch den Production-Build belegt. Server-Logik, Sync-Protokoll und Aktenexport sind durch Integrationstests gegen echte Infrastruktur abgedeckt. Wer als Nächstes an diesen Seiten arbeitet, sollte sie einmal manuell durchklicken, bevor er ihnen glaubt.
+**Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
+
+**Weiterhin offen:** der vollständige Offline-Durchlauf (vorbereiten → offline arbeiten → synchronisieren). `sync.execute` liegt bei WORKER und INSPECTOR, nicht bei QM — mit einer QM-Sitzung antwortet `/api/v1/sync/bundle` korrekt mit `403`. Für die Prüfung braucht es eine Anmeldung als `worker.test`.
 
 Alle 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden.
 
@@ -100,6 +102,20 @@ docker exec -i proquado-postgres-1 psql -U proquado -d proquado -c "UPDATE _pris
 ```
 
 Nebenbei: `docker exec` ohne `-i` verschluckt ein Here-Document stillschweigend — das SQL läuft dann gar nicht, ohne Fehlermeldung.
+
+### pdfkit findet seine Schriftmetriken nicht, sobald Next.js es bündelt
+
+Der erste Export im Browser scheiterte mit `ENOENT: … .next/server/vendor-chunks/data/Helvetica.afm`. pdfkit lädt die Metriken seiner Standardschriften zur Laufzeit von der Platte; Next.js' Server-Bundling schreibt das Modul um, nimmt die Datendateien aber nicht mit. Fix in `next.config.mjs`: `experimental.serverComponentsExternalPackages: ['pdfkit', 'archiver']`.
+
+Bemerkenswert ist, **was das nicht gefunden hat**: Typecheck nicht, die Integrationstests nicht (Jest löst aus `node_modules` auf und bündelt nie), `next build` nicht (es ist ein Dateizugriff zur Laufzeit, kein Kompilierschritt). Nur das Öffnen der Seite. Gleiche Bauart wie der `pino-pretty`-Eintrag oben — bei Paketen, die zur Laufzeit eigene Dateien lesen, ist Bündeln die Standardfalle.
+
+### Der Seed legt nach dem ersten Login Doppelbenutzer an
+
+`seedDemoUsers` hatte seinen Upsert auf das Sentinel `pending:<email>` geschlüsselt. Das wird beim ersten SSO-Login durch die echte OIDC-Subject-ID ersetzt (`resolve_org_for_login`). Ein erneuter Seed-Lauf fand die Zeile also nicht mehr und legte **einen zweiten Benutzer mit derselben E-Mail** an; der kollidierte danach auf `employees.employee_number` und brach den Seed mittendrin ab — verwaistes Konto zurück, Demo-Fixtures nie erzeugt.
+
+Aufgefallen ist es, weil ein erneuter Seed-Lauf genau der vorgesehene Weg ist, **neue Berechtigungsatome an bestehende Organisationen auszuliefern**: `seedOrganizationRbac` legt Permissions und Rollenzuordnungen per Upsert an, aber nichts im Deployment-Pfad ruft es automatisch auf. Wer ein Atom in `permissions-catalog.ts` ergänzt, muss den Seed nachziehen — sonst liefert die Anwendung `PERMISSION_DENIED` für eine Berechtigung, die im Code längst vergeben ist.
+
+Zwei Korrekturen: der Seed sucht jetzt per `(organizationId, email)` und lässt `externalId` einer verknüpften Anmeldung unangetastet; und `users` hat einen Unique-Index auf `(organization_id, email)`, damit der Zustand gar nicht mehr entstehen kann. Die zugehörige Migration schlägt auf Installationen mit bestehenden Dubletten bewusst fehl — welches der beiden Konten die Audit-Historie behält, darf keine Migration stillschweigend entscheiden.
 
 ### Ein Test, der versehentlich echte Infrastruktur anspricht, beweist etwas anderes als sein Name
 

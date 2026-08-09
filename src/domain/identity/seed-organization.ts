@@ -101,22 +101,39 @@ export async function seedDemoUsers(
       ? await hashConfirmationPin(demo.confirmationPin)
       : undefined;
 
-    const user = await db.user.upsert({
-      where: {
-        organizationId_externalId: {
-          organizationId: seeded.organizationId,
-          externalId: `pending:${demo.email}`,
-        },
-      },
-      update: { confirmationPinHash },
-      create: {
-        organizationId: seeded.organizationId,
-        externalId: `pending:${demo.email}`,
-        email: demo.email,
-        displayName: demo.displayName,
-        confirmationPinHash,
-      },
+    // Keyed on EMAIL, not on the `pending:` sentinel.
+    //
+    // The sentinel is consumed on first SSO login: resolve_org_for_login()
+    // replaces it with the OIDC subject id (see src/lib/auth/resolve-login.ts).
+    // An upsert keyed on `pending:<email>` therefore stops matching the
+    // moment somebody logs in, and re-running the seed — which is exactly
+    // what adding a new permission atom requires — created a SECOND user row
+    // for the same person. The duplicate then collided on
+    // employees.employee_number and aborted the seed halfway, leaving an
+    // orphaned account behind and the demo fixtures unseeded.
+    //
+    // Found in Phase 7 by re-seeding a database whose users had logged in.
+    const existing = await db.user.findFirst({
+      where: { organizationId: seeded.organizationId, email: demo.email },
+      orderBy: { createdAt: 'asc' },
     });
+
+    const user = existing
+      ? await db.user.update({
+          where: { id: existing.id },
+          // displayName and PIN are refreshed; externalId is NOT — overwriting
+          // a linked account's subject id would unlink a real login.
+          data: { displayName: demo.displayName, confirmationPinHash },
+        })
+      : await db.user.create({
+          data: {
+            organizationId: seeded.organizationId,
+            externalId: `pending:${demo.email}`,
+            email: demo.email,
+            displayName: demo.displayName,
+            confirmationPinHash,
+          },
+        });
     userIdByEmail[demo.email] = user.id;
 
     await db.employee.upsert({

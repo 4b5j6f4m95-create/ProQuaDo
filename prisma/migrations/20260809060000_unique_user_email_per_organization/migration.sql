@@ -1,0 +1,22 @@
+-- One account per email address per organization.
+--
+-- Its absence caused a real defect: `seedDemoUsers` keyed its upsert on the
+-- `pending:<email>` sentinel, which resolve_org_for_login() consumes on first
+-- SSO login. Re-running the seed afterwards — which is exactly what picking up
+-- a newly added permission atom requires — created a SECOND user row for the
+-- same person, which then collided on employees.employee_number and aborted
+-- the seed halfway.
+--
+-- The seed is fixed to look up by email (see src/domain/identity/seed-organization.ts).
+-- This constraint is the half that does not depend on remembering.
+--
+-- NOTE for existing installations: this migration FAILS if an organization
+-- already holds duplicate addresses. That is deliberate. Merging two accounts
+-- means deciding which one owns the audit history and the role grants, and
+-- that is not a decision a migration may take silently. Resolve duplicates
+-- first:
+--
+--   SELECT organization_id, email, count(*)
+--     FROM users GROUP BY 1, 2 HAVING count(*) > 1;
+
+CREATE UNIQUE INDEX "users_organization_id_email_key" ON "users"("organization_id", "email");
