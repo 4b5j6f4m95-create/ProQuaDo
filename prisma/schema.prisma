@@ -866,6 +866,10 @@ model StepDocumentBinding {
   document         Document         @relation(fields: [documentId], references: [id])
   documentRevision DocumentRevision @relation(fields: [documentRevisionId], references: [id])
 
+  /// One binding per (step, revision). Duplicates would change the
+  /// `documentSetHash` that travels inside every release token without the
+  /// document set having changed — see the migration comment.
+  @@unique([planStepId, documentRevisionId])
   @@index([organizationId])
   @@index([planStepId])
   @@map("step_document_bindings")

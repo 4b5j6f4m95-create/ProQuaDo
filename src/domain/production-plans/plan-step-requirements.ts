@@ -227,6 +227,14 @@ export interface BindDocumentToStepCommand {
  * Only a RELEASED revision may be bound: binding a draft would make an
  * unreviewed drawing binding for production, which is the failure mode
  * Geschäftsgrundsatz 6 exists to prevent.
+ *
+ * A revision may be bound to a step only once. That was implicit while the
+ * only caller was a test that bound each revision deliberately; with a UI
+ * behind it, a double click is a duplicate row — and duplicates are not
+ * cosmetic here, because `hashIdSet` in release-work-step.ts hashes the list
+ * of bound revision ids, so a repeated id produces a different documentSetHash
+ * for an unchanged document set. A release token would then disagree with the
+ * plan it was minted from.
  */
 export async function bindDocumentToPlanStep(command: BindDocumentToStepCommand) {
   await assertPermission(command.actor, 'work_step_definition.update');
@@ -242,6 +250,19 @@ export async function bindDocumentToPlanStep(command: BindDocumentToStepCommand)
     if (revision.status !== 'RELEASED') {
       throw new ValidationError(
         `Nur eine freigegebene Dokumentrevision darf verbindlich gebunden werden (Status: ${revision.status}).`,
+      );
+    }
+
+    // Checked here as well as in the database, so the user gets a sentence
+    // rather than a constraint violation. The unique index is what makes it
+    // true under concurrency.
+    const alreadyBound = await tx.stepDocumentBinding.findFirst({
+      where: { planStepId: step.id, documentRevisionId: revision.id },
+      select: { id: true },
+    });
+    if (alreadyBound) {
+      throw new ValidationError(
+        `Revision ${revision.revisionNumber} ist mit diesem Arbeitsschritt bereits verknüpft.`,
       );
     }
 
@@ -271,5 +292,64 @@ export async function bindDocumentToPlanStep(command: BindDocumentToStepCommand)
     });
 
     return binding;
+  });
+}
+
+export interface UnbindDocumentFromStepCommand {
+  actor: Actor;
+  productionPlanRevisionId: string;
+  planStepId: string;
+  bindingId: string;
+}
+
+/**
+ * Removes a binding while the plan is still DRAFT.
+ *
+ * The counterpart had to exist once there was a UI: without it a mis-selected
+ * drawing is permanent for the life of the revision, and the only way out is
+ * a new revision of the whole plan. Deleting rather than soft-deleting is
+ * right here precisely because `loadEditableStep` confines it to DRAFT — a
+ * plan that has never been released has no execution history to protect, and
+ * nothing downstream has yet been able to reference the binding. Every
+ * released revision remains untouched and unchanged, which is what
+ * Geschäftsgrundsatz 6 actually protects.
+ *
+ * The audit event carries what was removed, so the deletion is itself
+ * reconstructible.
+ */
+export async function unbindDocumentFromPlanStep(
+  command: UnbindDocumentFromStepCommand,
+): Promise<void> {
+  await assertPermission(command.actor, 'work_step_definition.update');
+
+  await withOrgContext(command.actor.organizationId, async (tx) => {
+    const step = await loadEditableStep(tx, command.planStepId, command.productionPlanRevisionId);
+
+    const binding = await tx.stepDocumentBinding.findFirst({
+      where: { id: command.bindingId },
+      include: { documentRevision: { select: { revisionNumber: true } } },
+    });
+    if (!binding) throw new NotFoundError('Dokumentbindung');
+    if (binding.planStepId !== step.id) {
+      throw new ValidationError('Die Bindung gehört nicht zu diesem Arbeitsschritt.');
+    }
+
+    await tx.stepDocumentBinding.delete({ where: { id: binding.id } });
+
+    await writeAuditEvent(tx, {
+      organizationId: command.actor.organizationId,
+      eventType: 'step_document_binding.removed',
+      resourceType: 'step_document_binding',
+      resourceId: binding.id,
+      actorId: command.actor.userId,
+      previousValues: {
+        planStepId: step.id,
+        documentRevisionId: binding.documentRevisionId,
+        revisionNumber: binding.documentRevision.revisionNumber,
+        pageNumber: binding.pageNumber,
+        markerLabel: binding.markerLabel,
+      },
+      source: 'web',
+    });
   });
 }

@@ -1,5 +1,8 @@
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
-import { getProductionPlanRevision } from '@/domain/production-plans/plan-queries';
+import {
+  getProductionPlanRevision,
+  listBindableDocumentRevisions,
+} from '@/domain/production-plans/plan-queries';
 import {
   isPlanStructureEditable,
   type PlanRevisionStatus,
@@ -10,6 +13,8 @@ import {
   addPhotoRequirementAction,
   addPlanStepAction,
   addPlanStepDependencyAction,
+  bindDocumentToStepAction,
+  unbindDocumentFromStepAction,
   submitPlanForReviewAction,
   approvePlanAction,
   rejectPlanAction,
@@ -21,6 +26,11 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
   const revision = await getProductionPlanRevision(actor, params.id);
   const editable = isPlanStructureEditable(revision.status as PlanRevisionStatus);
   const nextStepNumber = revision.steps.length + 1;
+  // Only needed while the plan can still be edited — a released plan shows
+  // its bindings but offers no choices.
+  const bindableRevisions = editable
+    ? await listBindableDocumentRevisions(actor, revision.productionPlan.projectId)
+    : [];
 
   return (
     <main>
@@ -111,6 +121,32 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
             {step.inspectionCharacteristics.length === 0 && <li className="muted">—</li>}
           </ul>
 
+          {/* Which released revision is binding for this step. The list a
+              worker sees on the tablet, and the set the offline revision
+              conflict is computed against (Abnahmeszenario C). */}
+          <h4>Verbindliche Dokumente</h4>
+          <ul>
+            {step.documentBindings.map((binding) => (
+              <li key={binding.id}>
+                📄 {binding.documentRevision.document.documentNumber} Rev.{' '}
+                {binding.documentRevision.revisionNumber} — {binding.documentRevision.title}
+                {binding.pageNumber ? `, S. ${binding.pageNumber}` : ''}
+                {binding.markerLabel ? ` (${binding.markerLabel})` : ''}
+                {editable && (
+                  <form action={unbindDocumentFromStepAction} className="inline-form">
+                    <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
+                    <input type="hidden" name="planStepId" value={step.id} />
+                    <input type="hidden" name="bindingId" value={binding.id} />
+                    <button type="submit" className="link-button">
+                      entfernen
+                    </button>
+                  </form>
+                )}
+              </li>
+            ))}
+            {step.documentBindings.length === 0 && <li className="muted">—</li>}
+          </ul>
+
           {editable && (
             <div className="requirement-forms">
               <form action={addChecklistItemAction}>
@@ -172,6 +208,42 @@ export default async function ProductionPlanRevisionPage({ params }: { params: {
                 </label>
                 <button type="submit">+ Prüfmerkmal</button>
               </form>
+
+              {bindableRevisions.length > 0 ? (
+                <form action={bindDocumentToStepAction}>
+                  <input type="hidden" name="productionPlanRevisionId" value={revision.id} />
+                  <input type="hidden" name="planStepId" value={step.id} />
+                  <label>
+                    Dokumentrevision
+                    <select name="documentRevisionId" required>
+                      {bindableRevisions.map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {candidate.document.documentNumber} Rev. {candidate.revisionNumber} —{' '}
+                          {candidate.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Seite (optional)
+                    <input name="pageNumber" type="number" min={1} />
+                  </label>
+                  <label>
+                    Markierung (optional)
+                    <input name="markerLabel" maxLength={100} placeholder="Detail B" />
+                  </label>
+                  <button type="submit">+ Dokumentbindung</button>
+                </form>
+              ) : (
+                // Said plainly rather than shown as an empty dropdown: the
+                // usual reason is that the project's drawings exist but have
+                // not been released yet, and that is a different problem from
+                // "there are no documents".
+                <p className="muted">
+                  Keine freigegebene Dokumentrevision in diesem Projekt — erst freigeben, dann
+                  binden.
+                </p>
+              )}
             </div>
           )}
         </section>

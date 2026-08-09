@@ -35,6 +35,10 @@ let addPlanStepDependency: typeof import('@/domain/production-plans/plan-steps')
 let submitProductionPlanForReview: typeof import('@/domain/production-plans/plan-review-workflow').submitProductionPlanForReview;
 let approveProductionPlan: typeof import('@/domain/production-plans/plan-review-workflow').approveProductionPlan;
 let releaseProductionPlan: typeof import('@/domain/production-plans/plan-review-workflow').releaseProductionPlan;
+let bindDocumentToPlanStep: typeof import('@/domain/production-plans/plan-step-requirements').bindDocumentToPlanStep;
+let unbindDocumentFromPlanStep: typeof import('@/domain/production-plans/plan-step-requirements').unbindDocumentFromPlanStep;
+let getProductionPlanRevision: typeof import('@/domain/production-plans/plan-queries').getProductionPlanRevision;
+let listBindableDocumentRevisions: typeof import('@/domain/production-plans/plan-queries').listBindableDocumentRevisions;
 
 beforeAll(async () => {
   pgContainer = await new PostgreSqlContainer('postgres:16-alpine')
@@ -94,6 +98,10 @@ beforeAll(async () => {
     await import('@/domain/documents/document-review-workflow'));
   ({ getReleasedRevision } = await import('@/domain/documents/document-queries'));
   ({ createProductionPlan } = await import('@/domain/production-plans/create-production-plan'));
+  ({ bindDocumentToPlanStep, unbindDocumentFromPlanStep } =
+    await import('@/domain/production-plans/plan-step-requirements'));
+  ({ getProductionPlanRevision, listBindableDocumentRevisions } =
+    await import('@/domain/production-plans/plan-queries'));
   ({ addPlanStep, addPlanStepDependency } = await import('@/domain/production-plans/plan-steps'));
   ({ submitProductionPlanForReview, approveProductionPlan, releaseProductionPlan } =
     await import('@/domain/production-plans/plan-review-workflow'));
@@ -546,5 +554,189 @@ describe('Tenant isolation for Phase 2 entities (ADR-006)', () => {
         projectInOrgB.id,
       ),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+/**
+ * Step-document binding — docs/10 lists it under Phase 2, the model arrived
+ * there, the service in Phase 5, and the planning screen only in Phase 7.
+ * Until then Abnahmeszenario C was defined entirely in terms of these
+ * bindings and could not be produced from the application at all.
+ *
+ * These tests cover what the screen actually needs from the domain: the list
+ * of choices it may offer, and the two operations behind its buttons.
+ */
+describe('Schritt-Dokumentbindung', () => {
+  async function bindableFixture(name: string) {
+    const fx = await seedFixtures(name);
+
+    const { document, revision: draft } = await createDocument({
+      actor: fx.projectLead,
+      projectId: fx.projectId,
+      documentNumber: `DOC-${randomUUID().slice(0, 8)}`,
+      title: 'Fertigungszeichnung',
+      firstRevision: { title: 'Fertigungszeichnung Rev. 01' },
+    });
+    await uploadAndCompleteRevision(fx.projectLead, draft.id);
+    await submitDocumentRevisionForReview({
+      actor: fx.projectLead,
+      documentRevisionId: draft.id,
+    });
+    await approveDocumentRevision({ actor: fx.qualityManager, documentRevisionId: draft.id });
+    const released = await releaseDocumentRevision({
+      actor: fx.qualityManager,
+      documentRevisionId: draft.id,
+    });
+
+    const { revision: planRevision } = await createProductionPlan({
+      actor: fx.projectLead,
+      projectId: fx.projectId,
+      productId: fx.productId,
+      planNumber: `PLAN-${randomUUID().slice(0, 8)}`,
+      name: 'Plan mit Bindung',
+    });
+    const step = await addPlanStep({
+      actor: fx.projectLead,
+      productionPlanRevisionId: planRevision.id,
+      stepNumber: 1,
+      title: 'Montage nach Zeichnung',
+    });
+
+    return { fx, document, released, planRevision, step };
+  }
+
+  it('offers only released revisions of the plan project as choices', async () => {
+    const { fx, released, planRevision } = await bindableFixture('binding-choices');
+
+    // A second document in the same project that never got released — the
+    // usual state of a project mid-flight, and the one the screen must not
+    // present as bindable.
+    const { revision: unreleased } = await createDocument({
+      actor: fx.projectLead,
+      projectId: fx.projectId,
+      documentNumber: `DOC-${randomUUID().slice(0, 8)}`,
+      title: 'Entwurf, noch nicht freigegeben',
+      firstRevision: { title: 'Entwurf Rev. 01' },
+    });
+
+    const choices = await listBindableDocumentRevisions(fx.projectLead, fx.projectId);
+    const ids = choices.map((c) => c.id);
+    expect(ids).toContain(released.id);
+    expect(ids).not.toContain(unreleased.id);
+
+    // And nothing from a different project leaks into the list.
+    const other = await seedFixtures('binding-choices-other');
+    const foreign = await listBindableDocumentRevisions(other.projectLead, other.projectId);
+    expect(foreign.map((c) => c.id)).not.toContain(released.id);
+    expect(planRevision.status).toBe('DRAFT');
+  });
+
+  it('binds and unbinds, and the plan query shows the current state', async () => {
+    const { fx, released, planRevision, step } = await bindableFixture('binding-roundtrip');
+
+    const binding = await bindDocumentToPlanStep({
+      actor: fx.projectLead,
+      productionPlanRevisionId: planRevision.id,
+      planStepId: step.id,
+      documentRevisionId: released.id,
+      pageNumber: 3,
+      markerLabel: 'Detail B',
+    });
+
+    const withBinding = await getProductionPlanRevision(fx.projectLead, planRevision.id);
+    expect(withBinding.steps[0]!.documentBindings).toHaveLength(1);
+    expect(withBinding.steps[0]!.documentBindings[0]!.pageNumber).toBe(3);
+    expect(withBinding.steps[0]!.documentBindings[0]!.documentRevision.revisionNumber).toBe(
+      released.revisionNumber,
+    );
+
+    await unbindDocumentFromPlanStep({
+      actor: fx.projectLead,
+      productionPlanRevisionId: planRevision.id,
+      planStepId: step.id,
+      bindingId: binding.id,
+    });
+
+    const afterRemoval = await getProductionPlanRevision(fx.projectLead, planRevision.id);
+    expect(afterRemoval.steps[0]!.documentBindings).toHaveLength(0);
+
+    // The removal is itself reconstructible — a binding that vanished without
+    // a trace would be exactly what an audit asks about.
+    const events = await ownerClient.auditEvent.findMany({
+      where: { resourceId: binding.id, eventType: 'step_document_binding.removed' },
+    });
+    expect(events).toHaveLength(1);
+  });
+
+  it('refuses to bind the same revision twice', async () => {
+    const { fx, released, planRevision, step } = await bindableFixture('binding-duplicate');
+
+    const bind = () =>
+      bindDocumentToPlanStep({
+        actor: fx.projectLead,
+        productionPlanRevisionId: planRevision.id,
+        planStepId: step.id,
+        documentRevisionId: released.id,
+      });
+
+    await bind();
+    // Not cosmetic: hashIdSet in release-work-step.ts hashes the sorted list
+    // of bound revision ids, so a duplicate would change documentSetHash for
+    // an unchanged document set and a release token would disagree with the
+    // plan it was minted from.
+    await expect(bind()).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    const bindings = await ownerClient.stepDocumentBinding.count({
+      where: { planStepId: step.id },
+    });
+    expect(bindings).toBe(1);
+  });
+
+  it('refuses to bind anything that is not released', async () => {
+    const { fx, planRevision, step } = await bindableFixture('binding-unreleased');
+    const { revision: draft } = await createDocument({
+      actor: fx.projectLead,
+      projectId: fx.projectId,
+      documentNumber: `DOC-${randomUUID().slice(0, 8)}`,
+      title: 'Noch im Entwurf',
+      firstRevision: { title: 'Noch im Entwurf Rev. 01' },
+    });
+
+    // Geschäftsgrundsatz 6: an unreviewed drawing must never become binding
+    // for production.
+    await expect(
+      bindDocumentToPlanStep({
+        actor: fx.projectLead,
+        productionPlanRevisionId: planRevision.id,
+        planStepId: step.id,
+        documentRevisionId: draft.id,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('stops accepting changes once the plan leaves DRAFT', async () => {
+    const { fx, released, planRevision, step } = await bindableFixture('binding-frozen');
+
+    const binding = await bindDocumentToPlanStep({
+      actor: fx.projectLead,
+      productionPlanRevisionId: planRevision.id,
+      planStepId: step.id,
+      documentRevisionId: released.id,
+    });
+    await submitProductionPlanForReview({
+      actor: fx.projectLead,
+      productionPlanRevisionId: planRevision.id,
+    });
+
+    // The binding is part of what was reviewed. Removing it afterwards would
+    // change what a released plan demands without a new revision.
+    await expect(
+      unbindDocumentFromPlanStep({
+        actor: fx.projectLead,
+        productionPlanRevisionId: planRevision.id,
+        planStepId: step.id,
+        bindingId: binding.id,
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
   });
 });

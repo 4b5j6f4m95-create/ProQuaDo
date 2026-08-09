@@ -9,6 +9,8 @@ import {
   addChecklistItem,
   addInspectionCharacteristic,
   addPhotoRequirement,
+  bindDocumentToPlanStep,
+  unbindDocumentFromPlanStep,
 } from '@/domain/production-plans/plan-step-requirements';
 import {
   submitProductionPlanForReview,
@@ -96,6 +98,45 @@ export async function addInspectionCharacteristicAction(formData: FormData): Pro
     lowerLimit: (formData.get('lowerLimit') as string) || undefined,
     upperLimit: (formData.get('upperLimit') as string) || undefined,
     unit: (formData.get('unit') as string) || undefined,
+  });
+  revalidatePath(`/production-plans/${productionPlanRevisionId}`);
+}
+
+/**
+ * Binds a released document revision to a plan step — docs/10 Phase 2
+ * "Schritt-Dokumentbindung", and the last piece Abnahmeszenario C needed to
+ * be reachable from the interface rather than only from a test.
+ *
+ * `pageNumber` and `markerLabel` are optional in the model and stay optional
+ * here: a binding without a page still says which drawing is binding, which
+ * is the part production correctness depends on.
+ */
+export async function bindDocumentToStepAction(formData: FormData): Promise<void> {
+  const actor = await requireAuthContext();
+  const productionPlanRevisionId = String(formData.get('productionPlanRevisionId'));
+  const pageNumber = Number(formData.get('pageNumber'));
+  const markerLabel = String(formData.get('markerLabel') ?? '').trim();
+
+  await bindDocumentToPlanStep({
+    actor,
+    productionPlanRevisionId,
+    planStepId: String(formData.get('planStepId')),
+    documentRevisionId: String(formData.get('documentRevisionId')),
+    pageNumber: Number.isFinite(pageNumber) && pageNumber > 0 ? pageNumber : undefined,
+    markerLabel: markerLabel || undefined,
+  });
+  revalidatePath(`/production-plans/${productionPlanRevisionId}`);
+}
+
+export async function unbindDocumentFromStepAction(formData: FormData): Promise<void> {
+  const actor = await requireAuthContext();
+  const productionPlanRevisionId = String(formData.get('productionPlanRevisionId'));
+
+  await unbindDocumentFromPlanStep({
+    actor,
+    productionPlanRevisionId,
+    planStepId: String(formData.get('planStepId')),
+    bindingId: String(formData.get('bindingId')),
   });
   revalidatePath(`/production-plans/${productionPlanRevisionId}`);
 }

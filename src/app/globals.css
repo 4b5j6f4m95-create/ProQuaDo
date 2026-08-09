@@ -248,6 +248,26 @@ button:disabled {
   max-width: none;
 }
 
+/* A destructive-but-cheap action that belongs beside the thing it acts on
+   (removing a document binding from a DRAFT plan step) rather than in the
+   form block below it. Still a real submit button, so it keeps the keyboard
+   and screen-reader behaviour a link would lose. */
+li > .inline-form {
+  display: inline;
+  margin-left: 0.5rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #a3120a;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  width: auto;
+}
+
 .requirement-forms {
   display: flex;
   flex-wrap: wrap;
