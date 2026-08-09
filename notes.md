@@ -13,7 +13,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 - **Phase 5 (Offline und Synchronisation)**: abgeschlossen — Geräteregistrierung mit Fernsperre, commit-geordneter Ereignis-Cursor, Sync-API (health/commands/changes/bundle), Release-Token-Auslieferung ans Gerät, verschlüsselte IndexedDB mit Outbox, chunk-basierter Foto-Upload mit Wiederaufnahme, alle sieben Konflikttypen im Konfliktcenter. Abnahmeszenarien B und C laufen end-to-end; **alle 15 Negativtests sind grün**.
 - **Phase 6 (Akte, Reporting, Integrationen)**: abgeschlossen — digitale Produktionsakte mit allen zehn Abschnitten aus Masterprompt Kap. 10, PDF-Erzeugung, ZIP-Export mit hashgeprüftem Manifest, Rückverfolgbarkeitssuche, Dashboard und ereignisgetriebene In-App-Benachrichtigungen. Abnahmeszenario F läuft end-to-end. **Nicht umgesetzt**: die ERP-/Webhook-Grundlage, die docs/10 für Phase 6 als „Implementierung optional für MVP" führt — es gibt bisher keinen Konsumenten, an dem sich ein Adapter-Interface bewähren könnte.
 - **Phase 7 (Pilot und Härtung)**: weit fortgeschritten.
-  - _Sicherheit_: **manuelle Überprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11](docs/11_OFFLINE_INVARIANT_REVIEW.md)); Geräteidentität wird überall verifiziert statt nur angenommen; Obergrenze aktiver Geräte je Benutzer; `STANDARD_API` erstmals durchgesetzt; Rate Limits instanzübergreifend (`rate_limit_windows`); **PIN-Fehlversuchssperre** ([ADR-005](docs/adr/ADR-005-signature-method.md)-Nachtrag); echter ClamAV mit EICAR-Nachweis und Readiness-Meldung; 17 Angriffstests gegen die Invariante.
+  - _Sicherheit_: **manuelle Überprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11](docs/11_OFFLINE_INVARIANT_REVIEW.md)); Geräteidentität wird überall verifiziert statt nur angenommen; Obergrenze aktiver Geräte je Benutzer; `STANDARD_API` erstmals durchgesetzt; Rate Limits instanzübergreifend (`rate_limit_windows`); **PIN-Fehlversuchssperre** ([ADR-005](docs/adr/ADR-005-signature-method.md)-Nachtrag); echter ClamAV mit EICAR-Nachweis und Readiness-Meldung; 17 Angriffstests gegen die Invariante; **CSP auf Nonce umgestellt**, weil die bisherige in Production die Hydration verhinderte.
   - _Funktion_: **Produktfreigabe als eigener Vorgang** — Abschnitt 9 der Akte nennt jetzt eine Entscheidung mit Person, Zeitpunkt, Begründung und kopierter Grundlage, statt nur zusammenzurechnen, ob etwas offen ist; **UI für die Schritt-Dokumentbindung**; **Abmeldung** samt Benutzerwechsel auf geteilten Geräten.
   - _Dokumentation_: ADR-005 nachgeholt, ADR-001 um die Sitzungsdauer ergänzt.
   - Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
@@ -44,7 +44,11 @@ Der Durchlauf fand **drei** Fehler, alle unten beschrieben; der schwerste machte
 
 Zusätzlich am Formular vorbei geprüft, weil das Verschwinden des Formulars sonst die einzige Sperre wäre: ein direkter `INSERT` einer zweiten `RELEASED`-Zeile scheitert an `product_releases_one_release_per_order`, eine zweite **Ablehnung** geht durch. Der partielle Index lässt genau das zu, was er soll.
 
-**Im Browser weiterhin ungeprüft:** nur noch der **Service Worker**. Er registriert sich in `next dev` absichtlich nicht, das Neuladen der Seite **ohne** Verbindung ist damit offen. Dafür braucht es keinen anderen Benutzer, sondern `pnpm run build && pnpm run start`. Der Sync-Pfad selbst hängt nicht am Service Worker und ist vollständig geprüft — einschließlich eines Neuladens **mit** Verbindung mitten in der Offline-Phase.
+**Im Production-Build geprüft (`pnpm run build && pnpm run start`): der Service Worker.** Nach dem Laden von `/offline` ist er registriert und `activated`, der Cache `proquado-shell-v1` enthält Seite, CSS und alle Chunks. Dann **Server gestoppt** und neu geladen: die Seite rendert vollständig, `transferSize: 0`, `deliveredByServiceWorker: true`, während ein `fetch` auf die API nachweislich mit „Failed to fetch" scheitert. Eine Navigation auf `/dashboard` landet dabei im Offline-Arbeitsbereich — der vorgesehene Rückfall.
+
+Dieser Lauf legte den schwersten Fehler der Phase offen: die CSP verhinderte in Production **jede** Hydration. Siehe „Dieselbe CSP verhinderte in Production jede Hydration" unten — ohne diesen Test wäre die Anwendung in Produktion eine statische Seite gewesen.
+
+Eine Beobachtung ohne Fehlerwert: bei totem Server steht dort weiter „🟢 Online", weil `navigator.onLine` den **Verbindungsstatus des Geräts** meldet, nicht die Erreichbarkeit des Servers. In der Halle (WLAN weg) stimmt die Anzeige; bei einem Serverausfall im Netz stimmt sie nicht. Die Synchronisation hängt nicht daran — sie scheitert dann am `fetch` und behält die Warteschlange.
 
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
@@ -75,6 +79,16 @@ docker compose ps clamav
 ```
 
 Ob der Scanner wirklich antwortet, sagt `GET /api/health/ready` unter `checks.malwareScanner` — nicht der Containerstatus.
+
+**Production-Build lokal starten** — nötig für alles, was nur dort greift: Service Worker, CSP, `RATE_LIMIT_STORE=postgres`, das Verbot des Malware-Stubs:
+
+```bash
+# Dev-Server vorher stoppen (siehe Stolperstein zu .next)
+pnpm run build
+pnpm run start -p 3002
+```
+
+`MALWARE_SCANNER="stub"` wird in Production **abgelehnt** — für einen lokalen Production-Lauf entweder clamd starten und `MALWARE_SCANNER="clamav"` setzen, oder damit rechnen, dass jeder Upload scheitert. `.claude/launch.json` hat dafür eine zweite Konfiguration `prod`.
 
 **Demo-User** (Keycloak-Passwort für alle: `devpassword`; Anmeldung mit E-Mail oder Benutzername wie `pl.test`), verknüpft über den `pending:<email>`-Mechanismus beim ersten Login (siehe `src/lib/auth/resolve-login.ts`). **Benutzerwechsel geht über „Abmelden"** rechts in der Navigation — ohne das beendet nur die App-Sitzung, und Keycloak meldet beim nächsten Klick stillschweigend denselben Benutzer wieder an (siehe „Es gab keine Abmeldung" unten):
 
@@ -145,7 +159,26 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
-Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Fix in `next.config.mjs`: CSP wird nur in Production gesetzt, `form-action` schließt dort die OIDC-Issuer-Origin explizit ein.
+Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Erste Fassung: CSP nur in Production, `form-action` schließt dort die OIDC-Issuer-Origin ein. Die Hälfte davon war falsch — siehe den nächsten Eintrag.
+
+### Dieselbe CSP verhinderte in Production **jede** Hydration
+
+Der gravierendste Fund der Phase, gefunden beim ersten `pnpm run start` dieses Projekts.
+
+Der Eintrag oben schloss aus „Next.js' Dev-Modus benutzt Inline-Skripte", die CSP gehöre deshalb nur in Production. Beide Prämissen stimmen, die Folgerung nicht: **auch der Production-Build liefert Inline-Skripte aus** — sie tragen den RSC-Payload und den Hydrations-Bootstrap. `script-src 'self'` blockierte sie. In der Konsole: eine Wand aus CSP-Verstößen, React-Fehler **#423** (Hydrationsabbruch) und „Connection closed" (abgerissener RSC-Stream).
+
+Die Wirkung war total: **kein einziges Client-Element funktionierte.** Keine PIN-Dialoge, keine Produktfreigabe, keine Dokumentbindung, kein Offline-Arbeitsbereich, keine Service-Worker-Registrierung. Die Anwendung sah aus wie eine statische Seite.
+
+Warum nichts davon auffiel: die CSP ist in der Entwicklung **abgeschaltet**. Typecheck, Unit- und Integrationstests und `next build` laufen alle, ohne dass sie je greift. Erst `next start` bringt sie zur Anwendung — und das hatte in sieben Phasen niemand getan.
+
+Behoben mit einer Nonce je Anfrage (`src/middleware.ts`): Next.js stempelt die Nonce auf die Skripte, die es selbst erzeugt, sodass sein Bootstrap läuft und später eingeschleuste Skripte nicht. `'strict-dynamic'` erlaubt den so freigegebenen Skripten, ihre Chunks nachzuladen. `'unsafe-inline'` wäre eine Zeile gewesen und hätte den Zweck der CSP aufgegeben.
+
+**Zwei Fallstricke auf dem Weg:**
+
+- Die Nonce muss auf den **Request**-Headern stehen, nicht nur auf der Antwort — nur dann sieht Next sie und stempelt seine eigenen Skripte. Steht sie nur auf der Antwort, bleibt alles blockiert und der Fehler sieht unverändert aus.
+- Bei einem Projekt mit `src/`-Verzeichnis gehört die Datei nach **`src/middleware.ts`**. Im Projektwurzelverzeichnis wird sie stillschweigend ignoriert; erkennbar nur daran, dass `.next/server/middleware-manifest.json` nach dem Build `"middleware": {}` enthält.
+
+**Lehre:** Was nur in Production greift, muss auch einmal in Production laufen. Eine Absicherung, die in der gesamten Prüfkette abgeschaltet ist, ist ungeprüft — unabhängig davon, wie grün die Kette aussieht.
 
 ### Der Offline-Fluss konnte nie synchronisieren — der optimistische Sperrtest schlug gegen die eigene Änderung an
 
@@ -460,5 +493,6 @@ Nach Reihenfolge des Nutzens, nicht der Mühe. Die Gates vor dem Piloten sind ab
 - Am Ende jeder Phase die vollständige Prüfkette laufen lassen **und** die betroffenen Seiten einmal im Browser öffnen.
 - Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
 - **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
+- **Was nur in Production greift, muss auch einmal in Production laufen.** Die CSP war in der gesamten Prüfkette abgeschaltet und verhinderte dort, wo sie galt, jede Hydration — sieben Phasen lang unbemerkt, weil niemand `next start` ausgeführt hatte. Grün heißt nur „geprüft, was geprüft wurde".
 - **Eine Betriebsanweisung, die hier hineingeschrieben wird, sollte einmal ausgeführt worden sein.** Der `--force-recreate`-Hinweis für Keycloak stand eine halbe Phase lang da, war plausibel formuliert und entwertete beim Befolgen jede Kontoverknüpfung. Dokumentation, die man nur zu Ende gedacht hat, ist eine Vermutung mit Befehlszeile.
 - **Zahlen, die eine Begründung tragen, gehören in einen Test.** Zweimal an einem Tag hatte ein Kommentar eine Größenordnung behauptet, die nicht stimmte (Dauer eines PIN-Durchprobierens, Anzahl gefundener Fehler). Wo eine Zahl das Argument ist, prüft sie am besten die Testsuite — siehe `lockSecondsForAttempts`.
