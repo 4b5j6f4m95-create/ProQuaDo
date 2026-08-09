@@ -121,12 +121,14 @@ Für den Offline-Fluss: **Offline** öffnen (registriert das Gerät beim ersten 
 
 ### Zustand der lokalen Demo-Daten (Stand Ende Phase 7)
 
-Wer die Umgebung übernimmt, findet sie **nicht** im Auslieferungszustand vor — das ist kein Fehler, aber gut zu wissen:
+**Die Container sind gestoppt** (`docker compose down`). Die Daten sind da: Postgres und MinIO liegen unter `./.docker-data/`, ein `docker compose up -d` bringt alles unverändert zurück. Einzige Ausnahme ist **Keycloak**, das kein Volume hat (`KC_DB: dev-file`) und den Realm bei jedem Start neu aus `infra/keycloak/proquado-realm.json` aufbaut — seit die Benutzer-IDs dort festgeschrieben sind, ist das folgenlos, die Anmeldungen funktionieren weiter (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen").
+
+Wer die Umgebung übernimmt, findet die Daten darin **nicht** im Auslieferungszustand vor — das ist kein Fehler, aber gut zu wissen:
 
 - **`qm.test` ist verknüpft, die übrigen vier Konten stehen auf `pending:<email>`** und binden sich beim nächsten Login neu (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen"). Nichts zu tun, nur nicht wundern, wenn `users.external_id` so aussieht.
 - **Der Demo-Auftrag `AUF-2026-23991` ist vollständig `COMPLETED` und bereits freigegeben** — beide Schritte abgeschlossen mit Nachweisen aus dem Offline-Durchlauf, dazu zwei Freigabeentscheidungen (`REJECTED` → `RELEASED`) aus dem Test von Abschnitt 9. **Damit ist er als Vorlage für beide Abläufe verbraucht**: eine zweite Freigabe verweigert die Datenbank, und der Offline-Durchlauf braucht Schritt 1 wieder in `READY`. Für eine Wiederholung von einem der beiden zurücksetzen (unten) — das Skript räumt auch die Freigabeentscheidungen weg.
 - Zusätzlich liegen ein Fertigungsplan (`FP-…`, DRAFT) und eine freigegebene Zeichnung (`ZG-…`) im Demo-Projekt, angelegt für den Test der Dokumentbindung.
-- `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`; der clamd-Container läuft.
+- `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`. Der clamd-Container ist mit heruntergefahren worden; seine Signaturen liegen in `./.docker-data/clamav` und müssen nicht erneut geladen werden.
 - Der Seed ist zuletzt nach dem Hinzukommen von `integration.manage` gelaufen; das Atom ist in der Demo-Organisation vorhanden. **Webhook-Abonnements gibt es keine** — wer die Zustellung ausprobieren will, legt eines an und ruft den Dispatch-Endpunkt von Hand auf (oben unter „Für die ERP-/Webhook-Anbindung").
 
 **Offline-Durchlauf wiederholen** — Ausführungsdaten zurücksetzen, Audit-Trail bleibt (er ist append-only und soll es sein):
@@ -152,6 +154,16 @@ Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der al
 ---
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
+
+Inzwischen 25 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
+
+- **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
+- **Die Anmeldung schlägt fehl oder zeigt den falschen Benutzer**: „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen" (die Meldung lautet „Access Denied" und meint etwas anderes), „Es gab keine Abmeldung", „Der Seed legt nach dem ersten Login Doppelbenutzer an".
+- **Der Offline-/Sync-Pfad verhält sich unerwartet**: „Der Offline-Fluss konnte nie synchronisieren", „Zwei Klicks im selben Tick", „Ein geteiltes Tablet konnte den Benutzer nicht wechseln", „Sitzungsdauer und Access-Token-Dauer".
+- **Eine Schaltfläche tut nichts oder die Seite bricht ab**: „Der Abschlussknopf war dauerhaft gesperrt", „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg".
+- **Ein Test ist grün und beweist trotzdem nichts**: „Jest entscheidet `skip` beim Einlesen", „Ein Test, der versehentlich echte Infrastruktur anspricht", „Eine Kontrolle, die nur einen von zwei Pfaden kennt".
+- **Datenbank und Schema**: „Eine bereits angewendete Migration nachträglich zu ändern", „Prisma-Client-Regenerierung erfordert Server-Neustart", „Relationsnamen bei bidirektionalen Prisma-Beziehungen", „Abgelehnte Vorgänge dürfen nicht in derselben Transaktion geworfen werden", „Berechtigung hängt manchmal von Daten ab".
+- **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften".
 
 ### Portkonflikte mit anderen Projekten
 
