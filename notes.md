@@ -19,7 +19,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
 **Ohne Anmeldung im Browser geprüft (Phase 7):** `/api/health/ready` in allen drei Zuständen — `ready` mit `scannerKind: "stub"`, `degraded` mit `uploadsBlocked: true` bei nicht erreichbarem clamd (HTTP **200**, nicht 503 — siehe Begründung unten), und `ready` mit `scannerKind: "clamav"` gegen ein laufendes clamd.
 
-**Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten.
+**Im Browser geprüft (angemeldet als PL):** die Schritt-Dokumentbindung im Planungsbildschirm — binden mit Seite und Markierung, Dublette abgewiesen, entfernen. Die Prüfung fand **zwei** Fehler, die keine andere Kontrolle sehen konnte, beide in der Schicht über dem Dienst: siehe „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg" unten. Außerdem Abschnitt 9 der Akte in der Lesefassung: die abgeleiteten Zahlen, „Abgeschlossen ist nicht freigegeben" — und **kein** Freigabeformular, weil PL nur `product_release.view` hat.
 
 **Weiterhin offen, beides braucht eine andere Anmeldung:**
 
@@ -97,6 +97,20 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
 Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Fix in `next.config.mjs`: CSP wird nur in Production gesetzt, `form-action` schließt dort die OIDC-Issuer-Origin explizit ein.
+
+### `pnpm run build` neben laufendem `next dev` zerlegt den Dev-Server
+
+Beim Browser-Test aufgetreten und einige Minuten Fehlersuche wert: eine Seite antwortete plötzlich mit `500` und `Cannot find module './vendor-chunks/@swc+helpers@0.5.5.js'`. Kein Anwendungsfehler — `pnpm run build` schreibt in dasselbe `.next/`, aus dem der laufende Dev-Server seine Chunks lädt, und überschreibt sie. Der Dev-Server bemerkt das nicht und sucht danach Dateien, die es nicht mehr gibt.
+
+Die Meldung zeigt auf `node_modules` und Webpack und legt damit einen Abhängigkeitsfehler nahe. Es ist keiner:
+
+```bash
+# Dev-Server stoppen, dann
+rm -rf .next
+# und neu starten
+```
+
+**Regel:** Die volle Prüfkette (die `pnpm run build` enthält) und `next dev` nicht gleichzeitig laufen lassen — oder danach `.next` wegwerfen.
 
 ### Prisma-Client-Regenerierung erfordert Server-Neustart
 
