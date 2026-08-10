@@ -53,6 +53,15 @@ export function middleware(request: NextRequest): NextResponse {
   // this is derived from config rather than written as a literal domain).
   const issuerOrigin = process.env.OIDC_ISSUER ? new URL(process.env.OIDC_ISSUER).origin : "'self'";
 
+  // `connect-src` muss den Objektspeicher einschließen: Fotos und Dokumente
+  // lädt der BROWSER mit einer presignierten URL direkt dorthin, am
+  // Anwendungsserver vorbei (ADR-003). Liegt der Speicher auf einer anderen
+  // Origin — der Normalfall, und in der Entwicklung ebenso —, blockiert
+  // `'self'` allein jeden Upload. Wie die fehlende Nonce war das ein Fehler,
+  // den nur ein Production-Lauf zeigt; gefunden hat ihn
+  // test/e2e/document-upload.spec.ts.
+  const storageOrigins = objectStorageOrigins();
+
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
@@ -60,7 +69,7 @@ export function middleware(request: NextRequest): NextResponse {
     // cannot execute. The threat CSP addresses here is script injection.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    "connect-src 'self'",
+    ['connect-src', "'self'", ...storageOrigins].join(' '),
     "frame-ancestors 'none'",
     "base-uri 'self'",
     `form-action 'self' ${issuerOrigin}`,
@@ -76,6 +85,35 @@ export function middleware(request: NextRequest): NextResponse {
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set('Content-Security-Policy', csp);
   return response;
+}
+
+/**
+ * Die Origin(s), an die eine presignierte Upload-URL zeigen kann — abgeleitet
+ * aus derselben Konfiguration, aus der `object-storage.ts` seinen Client baut,
+ * damit hier keine zweite Wahrheit entsteht.
+ *
+ * Ohne `S3_ENDPOINT` (echtes AWS) bildet das SDK den Host aus Region und
+ * Bucket; beide möglichen Formen werden aufgenommen, weil die Wahl zwischen
+ * ihnen an `S3_FORCE_PATH_STYLE` hängt. Eine Origin zu viel in `connect-src`
+ * ist harmlos — eine zu wenig heißt: keine Fotos aus der Halle.
+ */
+function objectStorageOrigins(): string[] {
+  const endpoint = process.env.S3_ENDPOINT?.trim();
+  if (endpoint) {
+    try {
+      return [new URL(endpoint).origin];
+    } catch {
+      // Unbrauchbarer Endpunkt: nichts hinzufügen. Der Upload scheitert dann
+      // sichtbar, statt dass eine kaputte CSP alles andere mitreißt.
+      return [];
+    }
+  }
+
+  const region = process.env.S3_REGION ?? 'us-east-1';
+  const bucketName = process.env.S3_BUCKET;
+  const origins = [`https://s3.${region}.amazonaws.com`];
+  if (bucketName) origins.push(`https://${bucketName}.s3.${region}.amazonaws.com`);
+  return origins;
 }
 
 export const config = {

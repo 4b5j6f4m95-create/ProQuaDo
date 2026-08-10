@@ -32,6 +32,15 @@ test('Der ausgelieferte Build steht unter der Nonce-CSP, und die Nonce erreicht 
     /script-src [^;]*'unsafe-inline'/,
   );
 
+  // Der Objektspeicher muss in `connect-src` stehen, sonst kommt kein Foto
+  // aus der Halle an — der Browser lädt mit presignierter URL direkt dorthin
+  // (ADR-003). Hier steht die Zusicherung am Header, den vollständigen Beweis
+  // führt document-upload.spec.ts mit einem echten Upload.
+  const storageOrigin = new URL(process.env.S3_ENDPOINT ?? 'http://localhost:9010').origin;
+  expect(csp, `connect-src ohne Objektspeicher (${storageOrigin})`).toContain(
+    `connect-src 'self' ${storageOrigin}`,
+  );
+
   const html = await response.text();
   expect(html, 'Next.js hat seine Skripte nicht mit der Nonce gestempelt').toContain(
     `nonce="${nonce}"`,
