@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 // This suite spins up a REAL PostgreSQL (Testcontainers), applies the REAL
 // migrations (including RLS policies and the proquado_app role — see
@@ -50,7 +51,7 @@ beforeAll(async () => {
   ({ resolveLogin } = await import('@/lib/auth/resolve-login'));
   ({ seedOrganizationRbac, seedDemoUsers } = await import('@/domain/identity/seed-organization'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 120_000);
 
 afterAll(async () => {

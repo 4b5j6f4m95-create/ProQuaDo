@@ -4,6 +4,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 // Phase 3 (Online-Ausführung) against real infrastructure — real Postgres
 // with real RLS and CHECK constraints, real MinIO for photo evidence, real
@@ -114,7 +115,7 @@ beforeAll(async () => {
   ({ submitWorkStepCompletion } = await import('@/domain/execution/complete-work-step'));
   ({ getWorkStepInstance } = await import('@/domain/execution/execution-queries'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {

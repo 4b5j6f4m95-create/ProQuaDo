@@ -13,9 +13,7 @@ generator client {
 // `prisma migrate`/`prisma db push` and MUST point at the schema-owning role,
 // which bypasses RLS by default (required to create tables/policies at all).
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_DATABASE_URL")
+  provider = "postgresql"
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import './env-init';
 
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 import type { Actor } from '@/domain/shared/actor';
 import { createProductionPlan } from '@/domain/production-plans/create-production-plan';
@@ -71,7 +72,7 @@ let ownerClient: PrismaClient | null = null;
 
 function owner(): PrismaClient {
   ownerClient ??= new PrismaClient({
-    datasources: { db: { url: process.env.DIRECT_DATABASE_URL } },
+    adapter: new PrismaPg({ connectionString: process.env.DIRECT_DATABASE_URL }),
   });
   return ownerClient;
 }

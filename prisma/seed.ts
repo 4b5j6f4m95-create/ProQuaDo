@@ -3,10 +3,11 @@
 // its own PrismaClient instance, NOT the app's RLS-restricted singleton in
 // src/lib/db/client.ts. Never reuse this pattern inside request handling.
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { seedOrganizationRbac, seedDemoUsers } from '../src/domain/identity/seed-organization';
 
 const db = new PrismaClient({
-  datasources: { db: { url: process.env.DIRECT_DATABASE_URL } },
+  adapter: new PrismaPg({ connectionString: process.env.DIRECT_DATABASE_URL }),
 });
 
 const DEMO_ORG_NAME = 'ProQuaDo Demo GmbH';
