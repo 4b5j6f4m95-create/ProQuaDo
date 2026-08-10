@@ -59,6 +59,8 @@ Eine Beobachtung ohne Fehlerwert: bei totem Server steht dort weiter „🟢 Onl
 
 **Betriebsdokumentation:** [docs/12](docs/12_DEPLOYMENT.md) sagt, was ein Server braucht — Komponenten, Umgebungsvariablen, was nur in Produktion greift, Health, Backup, Dimensionierung aus dem Lasttest und eine Checkliste vor dem Piloten. Zwei Dinge daraus sind beim Schreiben erst aufgefallen: dass die Migration die Datenbankrolle mit einem Passwort aus dem Repository anlegt, wenn man sie nicht vorher selbst anlegt, und dass die CSP jeden Upload blockiert hätte (siehe Stolpersteine).
 
+**Betriebs-Runbook:** [docs/14](docs/14_RUNBOOK.md) — wiederkehrende Aufgaben, worauf alarmiert wird (und worauf ausdrücklich **nicht**: der HTTP-Status von `/api/health/ready` bleibt bei totem clamd 200, wer darauf alarmiert sieht den Ausfall nie), zehn Störungsbilder mit Symptom, Ursache und Vorgehen, und eine Liste dessen, was nie getan wird. Beim Schreiben ist ein Fehler in der eigenen Betriebsanweisung aufgefallen: **`pnpm exec tsx prisma/seed.ts` scheitert, sobald die Konfiguration nur in einer `.env` steht** — das Skript liest `DIRECT_DATABASE_URL` unmittelbar und lädt selbst kein dotenv; das tut `prisma.config.ts`, und das sieht nur die Prisma-CLI. Die Meldung (`SASL: … client password must be a string`) sieht nach einem Datenbankproblem aus und ist keines. Überall auf `pnpm exec prisma db seed` umgestellt, das in beiden Fällen funktioniert.
+
 **Staging aufsetzen:** [docs/13](docs/13_STAGING_SETUP.md) ist die Schrittfolge dazu — bewusst keine zweite Referenz, sondern nur das, was docs/12 nicht leisten kann: die Reihenfolge und nach jedem Schritt die Probe, an der man merkt, dass er gewirkt hat. Jeder Schritt trägt ein Kennzeichen, ob er ausgeführt wurde oder aus docs/12 abgeleitet ist. Anlass für die Umgebung sind die drei Prüfungen, die auf keinem Entwicklungsrechner gehen und dieselbe Voraussetzung teilen: Sync-Messung auf Zielhardware, Restore-Probe gegen das echte Backup, externer Penetrationstest.
 
 **Dabei wurde die gefährlichste Anweisung nachgewiesen statt behauptet** — die Reihenfolge „Rolle vor Migration" aus docs/12 §3.1, gegen zwei Wegwerf-Cluster, in beiden Richtungen: Rolle vorher angelegt ⇒ das Passwort aus dem Repository wird abgewiesen; direkt migriert ⇒ es verbindet. Ein Nebenbefund gehört zu jeder künftigen Passwortprobe an einem Postgres-Container: von **innen** greift `host all all 127.0.0.1/32 trust`, dort verbindet jedes beliebige Passwort. Wer die Probe so fährt, prüft nichts und merkt es nicht. Gemessen wird von außen über den gemappten Port.
@@ -75,7 +77,7 @@ Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entst
 docker compose up -d postgres minio minio-init keycloak
 pnpm install
 pnpm exec prisma migrate deploy
-pnpm exec tsx prisma/seed.ts
+pnpm exec prisma db seed
 pnpm run dev
 ```
 
@@ -598,7 +600,7 @@ Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks �
 
 ```bash
 docker compose up -d postgres minio minio-init keycloak
-pnpm exec prisma migrate deploy && pnpm exec tsx prisma/seed.ts   # einmalig
+pnpm exec prisma migrate deploy && pnpm exec prisma db seed              # einmalig
 pnpm run test:e2e                    # 18 Tests (drei davon Anmeldungen), ~2 Min inkl. Build
 pnpm run test:e2e work-step          # nur eine Datei
 pnpm exec playwright show-trace test-results/<…>/trace.zip        # nach einem Fehlschlag
