@@ -4,7 +4,8 @@ import { getProject } from '@/domain/projects/project-queries';
 import { listReleasedPlanRevisionsForProject } from '@/domain/projects/lookup-queries';
 import { createProductionOrderAction } from '@/app/production-orders/actions';
 
-export default async function NewProductionOrderPage({ params }: { params: { id: string } }) {
+export default async function NewProductionOrderPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const [project, planRevisions] = await Promise.all([
     getProject(actor, params.id),

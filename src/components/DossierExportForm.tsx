@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import {
   exportDossierAction,
   type ExportFormState,
@@ -18,7 +19,7 @@ const INITIAL_STATE: ExportFormState = { error: null, downloadUrl: null, summary
  * export produced.
  */
 export function DossierExportForm({ productionOrderId }: { productionOrderId: string }) {
-  const [state, formAction] = useFormState(exportDossierAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(exportDossierAction, INITIAL_STATE);
 
   return (
     <form action={formAction} className="card">

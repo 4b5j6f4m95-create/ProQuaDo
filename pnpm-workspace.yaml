@@ -26,3 +26,9 @@ allowBuilds:
   cpu-features: false
   ssh2: false
   unrs-resolver: false
+  # Nur für next/image, das dieses Projekt nicht benutzt — die einzige
+  # Bilddarstellung ist der Fotonachweis, und der kommt aus dem
+  # Objektspeicher. sharp bringt vorgebaute Binärdateien mit, sein
+  # Build-Skript wird also auch dann nicht gebraucht, wenn es einmal
+  # dazukommt.
+  sharp: false

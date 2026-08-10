@@ -17,7 +17,8 @@ const ALL_STATUSES: ProjectStatus[] = [
   'ARCHIVED',
 ];
 
-export default async function ProjectDetailPage({ params }: { params: { id: string } }) {
+export default async function ProjectDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const [project, documents, plans, orders] = await Promise.all([
     getProject(actor, params.id),

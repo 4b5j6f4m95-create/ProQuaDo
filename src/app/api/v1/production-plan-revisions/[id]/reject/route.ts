@@ -8,8 +8,9 @@ const rejectSchema = z.object({ reason: z.string().min(1) });
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const body = rejectSchema.parse(await request.json());

@@ -30,7 +30,8 @@ const STEP_KIND_LABEL: Record<string, string> = {
 };
 
 /** Arbeitsschritt-Ansicht — docs/07_WIREFLOWS_UX.md A2–A6 und A9. */
-export default async function WorkStepPage({ params }: { params: { id: string } }) {
+export default async function WorkStepPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const step = await getWorkStepInstance(actor, params.id);
   const siblings = await listWorkStepsOfOrder(actor, step.productionOrderId);

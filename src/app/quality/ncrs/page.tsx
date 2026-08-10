@@ -4,11 +4,10 @@ import { listNonConformances } from '@/domain/quality/ncr-queries';
 import { StatusChip } from '@/components/StatusChip';
 
 /** NCR-Übersicht (docs/07 C1). */
-export default async function NonConformanceListPage({
-  searchParams,
-}: {
-  searchParams: { open?: string; blocking?: string };
+export default async function NonConformanceListPage(props: {
+  searchParams: Promise<{ open?: string; blocking?: string }>;
 }) {
+  const searchParams = await props.searchParams;
   const actor = await requirePageAuth();
   const openOnly = searchParams.open !== 'false';
   const blockingOnly = searchParams.blocking === 'true';

@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { decideConflictAction, type ConflictDecisionFormState } from '@/app/sync/actions';
 import {
   DECISION_CONSEQUENCE,
@@ -29,7 +30,7 @@ export function ConflictDecisionForm({
   conflictId: string;
   availableDecisions: readonly ConflictDecisionType[];
 }) {
-  const [state, formAction] = useFormState(decideConflictAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(decideConflictAction, INITIAL_STATE);
   const [selected, setSelected] = useState<ConflictDecisionType | null>(null);
 
   if (state.resultingAction) {

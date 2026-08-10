@@ -3,7 +3,8 @@ import { getProject } from '@/domain/projects/project-queries';
 import { listProductsForProject } from '@/domain/projects/lookup-queries';
 import { createProductionPlanAction } from '@/app/production-plans/actions';
 
-export default async function NewProductionPlanPage({ params }: { params: { id: string } }) {
+export default async function NewProductionPlanPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const [project, products] = await Promise.all([
     getProject(actor, params.id),

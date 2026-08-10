@@ -15,7 +15,8 @@ import {
 
 /** Order detail for planning/production management: assignments, release,
  *  and the full step list with server-owned statuses. */
-export default async function ProductionOrderPage({ params }: { params: { id: string } }) {
+export default async function ProductionOrderPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const order = await getProductionOrder(actor, params.id);
 

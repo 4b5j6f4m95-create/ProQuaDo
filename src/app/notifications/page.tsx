@@ -14,11 +14,10 @@ const SEVERITY_ICON: Record<string, string> = {
 
 /** In-App-Benachrichtigungen. Fan-out aus dem Outbox-Strom passiert beim
  *  Lesen — siehe dispatch-notifications.ts. */
-export default async function NotificationsPage({
-  searchParams,
-}: {
-  searchParams: { all?: string };
+export default async function NotificationsPage(props: {
+  searchParams: Promise<{ all?: string }>;
 }) {
+  const searchParams = await props.searchParams;
   const actor = await requirePageAuth();
   const includeRead = searchParams.all === '1';
   const notifications = await listNotifications(actor, { includeRead });

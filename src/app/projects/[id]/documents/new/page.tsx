@@ -2,7 +2,8 @@ import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import { getProject } from '@/domain/projects/project-queries';
 import { createDocumentAction } from '@/app/documents/actions';
 
-export default async function NewDocumentPage({ params }: { params: { id: string } }) {
+export default async function NewDocumentPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const project = await getProject(actor, params.id);
 

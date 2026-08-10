@@ -15,8 +15,9 @@ const exportSchema = z.object({ format: z.enum(['PDF', 'ZIP']) });
  */
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const { format } = exportSchema.parse(await request.json());
@@ -35,8 +36,9 @@ export async function POST(
 
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     return NextResponse.json({ exports: await listDossierExports(actor, params.id) });

@@ -13,7 +13,8 @@ import { ProductReleaseForm } from '@/components/ProductReleaseForm';
  * wie im PDF, damit niemand exportieren muss, um zu sehen, was drinsteht
  * (Abnahmeszenario F: "sieht mit Berechtigung lückenlos …").
  */
-export default async function DossierPage({ params }: { params: { id: string } }) {
+export default async function DossierPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const dossier = await assembleProductionDossier(actor, params.id);
   const exports = await listDossierExports(actor, params.id);

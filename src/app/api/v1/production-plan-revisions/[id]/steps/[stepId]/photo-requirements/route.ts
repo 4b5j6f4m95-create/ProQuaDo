@@ -13,8 +13,9 @@ const addRequirementSchema = z.object({
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string; stepId: string } },
+  props: { params: Promise<{ id: string; stepId: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const body = addRequirementSchema.parse(await request.json());

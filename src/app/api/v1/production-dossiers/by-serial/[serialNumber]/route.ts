@@ -8,8 +8,9 @@ import { findOrdersBySerialNumber } from '@/domain/dossier/search';
 // deliberately a list.
 export async function GET(
   request: Request,
-  { params }: { params: { serialNumber: string } },
+  props: { params: Promise<{ serialNumber: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const orders = await findOrdersBySerialNumber(actor, decodeURIComponent(params.serialNumber));
