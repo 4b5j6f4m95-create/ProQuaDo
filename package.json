@@ -37,7 +37,7 @@
     "@prisma/client": "^5.20.0",
     "archiver": "^7.0.1",
     "next": "^14.2.13",
-    "next-auth": "5.0.0-beta.21",
+    "next-auth": "5.0.0-beta.32",
     "pdfkit": "^0.19.1",
     "pino": "^9.4.0",
     "pino-pretty": "^11.2.2",
