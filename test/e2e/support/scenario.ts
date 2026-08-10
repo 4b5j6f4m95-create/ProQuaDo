@@ -122,6 +122,31 @@ export async function readProductReleaseDecisions(
   });
 }
 
+/**
+ * Setzt das Export-Kontingent einer Rolle zurück.
+ *
+ * `EXPORT` erlaubt **5 Exporte je Benutzer und Stunde** — und das ist keine
+ * Bequemlichkeitsgrenze, sondern das Mittel, auf das sich ADR-007 beruft, wenn
+ * es einen synchronen Export für vertretbar erklärt. Der Exporttest verbraucht
+ * zwei davon (PDF und ZIP), also wäre der dritte Lauf innerhalb einer Stunde
+ * rot — nicht wegen eines Fehlers, sondern weil eine Zusicherung wirkt, die
+ * wirken soll.
+ *
+ * Deshalb wird das Fenster **zurückgesetzt statt angehoben**: die Grenze bleibt
+ * im Produktionscode unangetastet und der Test beginnt bei null. Das Gegenteil
+ * — die Grenze für Tests hochzudrehen — hieße, etwas anderes zu prüfen als das,
+ * was ausgeliefert wird.
+ *
+ * Der Schlüssel ist der SHA-256 von `<Kategorie>:<Subjekt-ID>`; die Tabelle
+ * speichert nie die ID selbst (siehe Schemakommentar zu `RateLimitWindow`).
+ * Sie steht außerhalb von RLS, deshalb geht das über den Owner-Client.
+ */
+export async function resetExportRateLimit(role: DemoRole): Promise<void> {
+  const context = await getDemoContext();
+  const key = createHash('sha256').update(`EXPORT:${context.actors[role].userId}`).digest('hex');
+  await owner().$executeRaw`DELETE FROM rate_limit_windows WHERE key = ${key}`;
+}
+
 /** Audit-Ereignistypen zu einer Ressource, in Serverzeitfolge. */
 export async function readAuditEventTypes(resourceId: string): Promise<string[]> {
   const events = await owner().auditEvent.findMany({
