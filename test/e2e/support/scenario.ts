@@ -147,6 +147,43 @@ export async function resetExportRateLimit(role: DemoRole): Promise<void> {
   await owner().$executeRaw`DELETE FROM rate_limit_windows WHERE key = ${key}`;
 }
 
+/**
+ * Den PIN-Hash eines Demo-Kontos lesen und zurückschreiben.
+ *
+ * Nur für den Test der PIN-Selbstvergabe: der ändert notwendigerweise die PIN
+ * eines Kontos, und die Demo-Konten teilen sich alle Spezifikationen dieses
+ * Laufs (`workers: 1`, dieselben Anmeldungen). Ohne Zurückschreiben stünde
+ * `pl.test` danach auf einem anderen Wert als dem in notes.md dokumentierten
+ * `1234` — und der nächste Lauf, der damit bestätigen will, wäre rot, ohne
+ * dass etwas kaputt ist.
+ *
+ * Der Hash wird roh bewegt, nicht die PIN: der Test kennt sie danach so wenig
+ * wie vorher.
+ */
+export async function readConfirmationPinHash(role: DemoRole): Promise<string | null> {
+  const context = await getDemoContext();
+  const user = await owner().user.findUniqueOrThrow({
+    where: { id: context.actors[role].userId },
+    select: { confirmationPinHash: true },
+  });
+  return user.confirmationPinHash;
+}
+
+export async function restoreConfirmationPinHash(
+  role: DemoRole,
+  hash: string | null,
+): Promise<void> {
+  const context = await getDemoContext();
+  await owner().user.update({
+    where: { id: context.actors[role].userId },
+    data: {
+      confirmationPinHash: hash,
+      confirmationPinFailedAttempts: 0,
+      confirmationPinLockedUntil: null,
+    },
+  });
+}
+
 /** Audit-Ereignistypen zu einer Ressource, in Serverzeitfolge. */
 export async function readAuditEventTypes(resourceId: string): Promise<string[]> {
   const events = await owner().auditEvent.findMany({

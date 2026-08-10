@@ -243,6 +243,15 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Kein Fehler, aber auch nicht in Ordnung: ein Konto ohne Bestätigungs-PIN
+   kann nichts abschließen. Kontrast gegen Weiß 5,6:1, also über der
+   AA-Schwelle — die Warnung muss auf einem Hallentablet bei Streiflicht
+   lesbar bleiben. */
+.warning-text {
+  color: #8a4b00;
+  font-weight: 600;
+}
+
 .muted {
   color: #555;
 }

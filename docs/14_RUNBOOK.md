@@ -154,7 +154,9 @@ Danach weist der Server jede Aktion dieses Geräts ab — auch außerhalb des Sy
 
 **Was der Support nicht tun kann und nicht tun soll:** sie aufheben. Geprüft wird gegen den authentifizierten Actor — niemand kann jemand anderen aussperren, und niemand muss jemanden befreien. Eine Sperre, die Administration braucht, wird an der Maschine durch geteilte PINs umgangen, und damit wäre genau die Zurechenbarkeit weg, für die die PIN existiert (ADR-005).
 
-Wer seine PIN vergessen hat, setzt sie selbst neu — das ist ein Kontovorgang, kein Störfall.
+**Wer seine PIN vergessen hat, kommt derzeit nicht weiter — das ist eine bekannte Lücke.** Unter **Mein Konto** lässt sich die PIN setzen und ändern, aber das Ändern verlangt die bisherige. Ein Konto, dessen Inhaber die PIN nicht mehr kennt, ist damit ohne Eingriff in die Datenbank arbeitsunfähig.
+
+Der vorgesehene Weg ist nicht, dass die Administration eine neue PIN vergibt — dann kennt sie jemand anderes, und die Zurechnung im Audit-Trail trägt nicht mehr. Vorgesehen ist, dass die Administration die hinterlegte PIN **löscht**, ohne je eine zu kennen; das Konto steht danach wie ein frisches da und der Inhaber setzt seine eigene neu. Diese Funktion fehlt noch und kommt mit der Benutzerverwaltung (siehe Übergabe in `notes.md`). Bis dahin: `confirmation_pin_hash` auf `NULL` setzen, mit derselben Sorgfalt wie jeder andere direkte Eingriff.
 
 ### 3.7 Konflikte stauen sich im Konfliktcenter ⚠️
 

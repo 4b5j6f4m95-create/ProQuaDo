@@ -36,7 +36,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               are somebody else if the screen never says who you are. */}
           {session?.user && (
             <form action={signOutAction} className="nav-session">
-              <span className="muted">{session.user.displayName ?? session.user.email}</span>
+              {/* Der Name führt zum eigenen Konto — dort wird die
+                  Bestätigungs-PIN gesetzt. Ohne sie lässt sich kein Schritt
+                  abschließen, ein frisch angelegtes Konto muss also hier
+                  vorbei, bevor es arbeiten kann. */}
+              <Link href="/account" className="muted">
+                {session.user.displayName ?? session.user.email}
+              </Link>
               <button type="submit" className="link-button">
                 Abmelden
               </button>
