@@ -76,7 +76,11 @@ export const COMMAND_PAYLOAD_SCHEMAS = {
 export const syncCommandEnvelopeSchema = z.object({
   idempotencyKey: uuid,
   commandType: z.enum(SYNC_COMMAND_TYPES),
-  payload: z.record(z.unknown()),
+  // Seit zod 4 verlangt `z.record` beide Schemata. Der Schlüsseltyp war
+  // vorher implizit `string` — hier steht er nur ausdrücklich, die
+  // Nutzlast bleibt unverändert offen und wird erst vom Schema des
+  // jeweiligen Kommandotyps geprüft (`SYNC_COMMAND_PAYLOADS` oben).
+  payload: z.record(z.string(), z.unknown()),
   clientTimestamp: z.coerce.date(),
   sequenceNumber: z.number().int().positive(),
   /** Optimistic lock: the entity version the device last saw. A mismatch is
