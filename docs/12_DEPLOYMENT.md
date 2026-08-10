@@ -47,11 +47,22 @@ Ergänzt docs/01 (Zieltopologie, nichtfunktionale Anforderungen) und docs/08 (Be
 | Variable                        | Vorgabe                       | Wirkung                                                                             |
 | ------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------- |
 | `S3_FORCE_PATH_STYLE`           | `false`                       | Für MinIO auf `true`.                                                                   |
+| `DATABASE_POOL_MAX`             | `25`                          | Poolgröße des Treiber-Adapters. **`connection_limit` in der URL wirkt seit Prisma 7 nicht mehr** — siehe unten. |
 | `RATE_LIMIT_STORE`              | `postgres` (in Produktion)    | So lassen. `memory` zählt je Prozess und vervielfacht hinter N Repliken jedes Limit.    |
 | `CLAMAV_TIMEOUT_MS`             | `30000`                       |                                                                                         |
 | `LOG_LEVEL`                     | `info`                        |                                                                                         |
 | `SERVER_NODE_ID`                | —                             | Je Instanz unterschiedlich setzen; steht im Audit-Trail.                                |
 | `ALLOW_PRIVATE_WEBHOOK_TARGETS` | —                             | Nur Entwicklung. In Produktion bedingungslos ignoriert.                                 |
+
+---
+
+### 2.1 Verbindungen seit Prisma 7
+
+Prisma 7 hat die Rust-Engine abgelöst; der Client verbindet über einen Treiber-Adapter (`pg`). Drei Folgen für den Betrieb:
+
+- **Im Schema stehen keine URLs mehr.** Die Anwendung liest `DATABASE_URL` selbst (`src/lib/db/client.ts`), `prisma migrate` und der Seed lesen `DIRECT_DATABASE_URL` über `prisma.config.ts`. Die Trennung aus ADR-006 liegt damit in zwei Dateien statt in zwei Feldern derselben.
+- **Die Poolgröße steuert `DATABASE_POOL_MAX`**, nicht mehr `connection_limit` in der URL. Der Parameter wird stillschweigend überlesen; ohne die Variable nähme der Adapter die Vorgabe von `pg` (10 Verbindungen).
+- **Der Sync ist damit langsamer geworden** als unter Prisma 5 — siehe §8. Wer an der Durchsatzgrenze plant, sollte das einrechnen.
 
 ---
 
@@ -171,8 +182,8 @@ Gemessen mit `pnpm run test:load` (docs/09 Ebene 8) auf einem Entwicklungsrechne
 
 | Größe                                        | Messwert                            |
 | -------------------------------------------- | ------------------------------------- |
-| Sync-Durchsatz                               | ~64 Stapel/s, ~255 Kommandos/s        |
-| 200 Tablets, Schichtwechsel gleichzeitig     | p95 ~3,0 s (Ziel docs/09: < 3 s)      |
+| Sync-Durchsatz                               | 54–62 Stapel/s (Prisma 7; ~64 unter Prisma 5) |
+| 200 Tablets, Schichtwechsel gleichzeitig     | p95 **3,2–3,7 s** — Ziel docs/09 ist < 3 s und wird gerissen |
 | Akte mit 500 Schritten, PDF                  | 0,2 s                                 |
 | Dashboard, 50 gleichzeitig                   | p95 84 ms                             |
 | Speicherbedarf                               | 10–50 GB/Jahr, fotolastig (docs/01)   |
@@ -192,6 +203,8 @@ Der Sync liegt **auf** der Zielgrenze, nicht darunter. Vor einem Piloten mit 200
 - [ ] Alle Geheimnisse aus einem Secret-Store, keines aus `.env.example`
 - [ ] Seed nach dem Deployment gelaufen
 - [ ] Ein Upload aus dem Browser tatsächlich ausgeführt (CSP, presignierte URL, Scan)
-- [ ] Backup für Datenbank **und** Objektspeicher, Restore-Probe durchgeführt
+- [ ] `DATABASE_POOL_MAX` gesetzt (sonst still 10 Verbindungen — siehe §2.1)
+- [ ] Sync-Durchsatz auf der **Zielhardware** gemessen, nicht auf einem Entwicklungsrechner (§8)
+- [ ] Backup für Datenbank **und** Objektspeicher, Restore-Probe **gegen das echte Backup** durchgeführt
 - [ ] Scheduler eingerichtet, falls Webhooks genutzt werden
 - [ ] Externer Penetrationstest (docs/11 §5 ersetzt ihn ausdrücklich nicht)
