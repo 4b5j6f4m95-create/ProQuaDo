@@ -38,9 +38,19 @@ import { NextResponse, type NextRequest } from 'next/server';
  * `next dev` uses eval-based HMR, which no nonce helps with. The choice from
  * the earlier phase is unchanged and still right — what changes is that
  * production is now actually usable.
+ *
+ * ## Warum die Datei `proxy.ts` heißt
+ *
+ * Next 16 hat die `middleware`-Konvention zu `proxy` umbenannt (Dateiname und
+ * benannter Export). Die alte Form wird noch verstanden, ist aber deprecated.
+ * Inhaltlich ändert sich nichts: dieselbe Funktion, derselbe `matcher`,
+ * dieselbe Nonce. Ein Unterschied ist zu beachten — `proxy` läuft
+ * ausschließlich in der Node.js-Laufzeit, die `edge`-Laufzeit steht dort nicht
+ * zur Verfügung. Für diesen Code ist das folgenlos: er benutzt nur
+ * `crypto.getRandomValues`, `btoa` und `URL`.
  */
 
-export function middleware(request: NextRequest): NextResponse {
+export function proxy(request: NextRequest): NextResponse {
   if (process.env.NODE_ENV !== 'production') return NextResponse.next();
 
   const bytes = new Uint8Array(16);
@@ -77,7 +87,7 @@ export function middleware(request: NextRequest): NextResponse {
 
   // Next.js reads the nonce out of the CSP on the REQUEST headers. Setting it
   // only on the response would leave its own scripts unnonced — which is
-  // precisely the state this middleware exists to end.
+  // precisely the state this proxy exists to end.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('Content-Security-Policy', csp);

@@ -73,7 +73,7 @@ export default defineConfig({
     command: `pnpm run build && pnpm run start -p ${PORT}`,
     url: `${BASE_URL}/api/health`,
     // Ausdrücklich, nicht geerbt: die lokale `.env` setzt NODE_ENV auf
-    // "development", und geerbt hieße ein Server, der die CSP (src/middleware.ts
+    // "development", und geerbt hieße ein Server, der die CSP (src/proxy.ts
     // prüft NODE_ENV) gar nicht erst anwendet — also genau die Prüfung
     // aushebelt, für die dieser Lauf gegen den Production-Build fährt.
     env: { NODE_ENV: 'production' },
