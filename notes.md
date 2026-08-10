@@ -127,7 +127,7 @@ pnpm run start -p 3002
 
 Seed legt zusätzlich ein Demo-Projekt (`PROJ-2026-0001`) mit Site, Customer und Product an. Er ist wiederholbar und darf jederzeit erneut laufen — **muss** er sogar, sobald ein Berechtigungsatom in `permissions-catalog.ts` dazukommt, denn nur `seedOrganizationRbac` trägt es in bestehende Organisationen ein (siehe „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten).
 
-**Bestätigungs-PIN der Demo-User: `1234`** (Seed setzt einen scrypt-Hash in `users.confirmation_pin_hash`). Ohne PIN kann ein Arbeitsschritt nicht bestätigt/abgeschlossen werden — echte Benutzer setzen ihre PIN selbst, geseedet wird sie nur für Demo/Test.
+**Bestätigungs-PIN der Demo-User: `1234`** (Seed setzt einen scrypt-Hash in `users.confirmation_pin_hash`). Ohne PIN kann ein Arbeitsschritt nicht bestätigt/abgeschlossen werden. Echte Benutzer setzen ihre PIN selbst unter **Mein Konto** (`/account`); geseedet wird sie nur für Demo und Test. **Dieser Satz beschrieb bis zur Umsetzung eine Absicht, keine Funktion** — es gab keinen Weg dorthin, `confirmation_pin_hash` wurde ausschließlich vom Seed geschrieben, und ein frisch angelegtes echtes Konto war damit arbeitsunfähig. Die Demo-PIN `1234` lässt sich über das Formular übrigens **nicht** wählen: fortlaufende Ziffernfolgen weist die Regel ab, und der Seed umgeht sie, weil er den Hash unmittelbar schreibt.
 
 Ein durchgängiger Ausführungsflow braucht zusätzlich: Fertigungsplan mit Schritten + Anforderungen anlegen (PL) → einreichen (PL) → genehmigen (QM) → freigeben (PL) → Produktionsauftrag anlegen/einplanen/freigeben und einem Worker zuweisen (PM) → Worker sieht ihn unter **Meine Aufträge**.
 
@@ -586,9 +586,9 @@ Die vollständige Kette, in dieser Reihenfolge — jede Stufe findet etwas, das 
 pnpm run typecheck          # Sekunden
 pnpm run lint
 pnpm run format:check
-pnpm run test:unit          # 202 Tests, keine Infrastruktur nötig
+pnpm run test:unit          # 209 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
-pnpm run test:integration   # 118 Tests, echte Postgres+MinIO-Container (Testcontainers)
+pnpm run test:integration   # 126 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```
 
 Drei Tests laufen zusätzlich gegen ein echtes clamd und sind deshalb ausdrücklich einzuschalten — sie gehen **rot**, wenn keins antwortet (siehe „Jest entscheidet `skip` beim Einlesen" oben):
@@ -605,7 +605,7 @@ Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks �
 ```bash
 docker compose up -d postgres minio minio-init keycloak
 pnpm exec prisma migrate deploy && pnpm exec prisma db seed              # einmalig
-pnpm run test:e2e                    # 18 Tests (drei davon Anmeldungen), ~2 Min inkl. Build
+pnpm run test:e2e                    # 22 Tests (drei davon Anmeldungen), ~2 Min inkl. Build
 pnpm run test:e2e work-step          # nur eine Datei
 pnpm exec playwright show-trace test-results/<…>/trace.zip        # nach einem Fehlschlag
 ```
@@ -732,6 +732,10 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 ## Übergabe: woran man als Nächstes arbeiten kann
 
 Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe; die Testpyramide aus docs/09 ist seit heute vollständig. Was bleibt, ist Betrieb, Erprobung und das Nachziehen von Abhängigkeiten — siehe „Stand" oben.
+
+0. **Stammdaten lassen sich in der Anwendung nicht erfassen — und das ist Programmierarbeit.** Aufgefallen bei der Frage, was ohne Altsystem an die Stelle der Datenmigration tritt: `docs/10` führt sie als „**falls Altsystem vorhanden**" und stellt die andere Hälfte der Frage nie. Standort, Kunde, Produkt, Benutzer, Mitarbeiter und Rollenzuweisung entstehen ausschließlich im Seed mit fest verdrahteten Demo-Werten; es gibt dafür weder Dienst noch Route noch Bildschirm. Das Projektformular bietet Auswahllisten für Standort und Kunde, die ohne diese Zeilen leer bleiben — ein Pilot kann sein erstes echtes Projekt also gar nicht anlegen. Erhoben und im Einzelnen belegt; die Reihenfolge ist Organisation → Standort → Kunde → **Projekt** → Produkt (das Produkt hängt am Projekt, nicht am Standort). Zwei Entscheidungen hängen daran: für Kunde und Produkt gibt es **kein Berechtigungsatom** (der Katalog hat 58, keines davon passt), und Abteilung und Arbeitsplatz haben **keinen Eindeutigkeits-Constraint** — mit einem Formular davor sind Dubletten eine Frage der Zeit.
+
+   Der erste Teil davon — die **Bestätigungs-PIN** — ist erledigt: sie lässt sich unter `/account` selbst setzen und ändern. **Offen bleibt das Zurücksetzen einer vergessenen PIN.** Der vorgesehene Weg ist nicht, dass die Administration eine neue vergibt, sondern dass sie die hinterlegte **löscht**, ohne je eine zu kennen; das Konto steht danach wie ein frisches da. Das gehört zur Benutzerverwaltung und kommt mit ihr.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 

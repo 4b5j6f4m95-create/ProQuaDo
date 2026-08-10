@@ -62,6 +62,15 @@ test.describe('als PL', () => {
     await expect(page.getByRole('button', { name: '+ Dokumentbindung' })).toBeVisible();
     await expectNoAccessibilityViolations(page, 'Fertigungsplan (DRAFT)');
   });
+
+  test('Mein Konto mit PIN-Formular', async ({ page }) => {
+    // Drei Passwortfelder in einem Formular — die Art Bildschirm, an der
+    // fehlende Beschriftungen und zu kleine Ziele am ehesten auffallen, und
+    // der erste, den ein neues Konto überhaupt zu sehen bekommt.
+    await page.goto('/account');
+    await expect(page.getByRole('heading', { name: /Bestätigungs-PIN/ })).toBeVisible();
+    await expectNoAccessibilityViolations(page, 'Mein Konto');
+  });
 });
 
 test.describe('als QM', () => {

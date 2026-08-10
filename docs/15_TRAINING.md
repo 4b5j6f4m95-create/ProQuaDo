@@ -17,7 +17,7 @@ Rollenbasierte Schulung für den Piloten (docs/10, Phase 7).
 | Voraussetzung                                                   | Sonst passiert                                                    |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Konten angelegt und **einmal angemeldet**                        | Die Kontoverknüpfung entsteht erst beim ersten Login                  |
-| Jede Person hat ihre **Bestätigungs-PIN** gesetzt                | Ohne PIN lässt sich kein Arbeitsschritt abschließen                   |
+| Jede Person hat sich **einmal angemeldet und ihre PIN gesetzt** (unter **Mein Konto**) | Ohne PIN lässt sich kein Arbeitsschritt abschließen — und niemand kann sie stellvertretend vergeben |
 | Ein Übungsauftrag je Teilnehmer, Schritt 1 auf `READY`           | Zwei Personen am selben Auftrag blockieren sich gegenseitig           |
 | Tablets registriert, „Für Offline vorbereiten" einmal ausgeführt | Der Offline-Teil der Schulung fällt sonst aus                         |
 
@@ -32,6 +32,8 @@ Rollenbasierte Schulung für den Piloten (docs/10, Phase 7).
 **Die Navigation zeigt allen alles.** Übersicht, Projekte, Meine Aufträge, Abweichungen, Prüfmittel, Offline, Konflikte, Suche, Benachrichtigungen — jeder sieht jeden Eintrag. Ob dahinter etwas steht, entscheidet die Rolle: eine Seite kann leer bleiben oder eine Handlung verweigern. **Das ist kein Fehler und soll gleich zu Beginn gesagt werden**, sonst wird jeder leere Bildschirm zum Support-Fall.
 
 **Die Bestätigungs-PIN** ist die Unterschrift. Sie wird bei allem verlangt, was zugerechnet wird: Schritt abschließen, Vier-Augen-Entscheidung, Konfliktentscheidung, Produktfreigabe. Sie ist **persönlich** und wird nicht geteilt — eine geteilte PIN macht die Zurechenbarkeit wertlos, für die das ganze System gebaut ist.
+
+**Jeder setzt sie selbst**, unter **Mein Konto** (über den eigenen Namen rechts in der Navigation). Es gibt bewusst keinen Weg, sie für jemand anderen zu vergeben: wer sie vergibt, kennt sie. Das ist die erste Übung jeder Einheit — **vor** allem anderen, denn ohne PIN lässt sich nichts abschließen. Zwei Dinge dazu ansagen: die Demo-PIN `1234` wird abgewiesen (fortlaufende Folge), und wer seine PIN vergisst, braucht derzeit die Administration, weil das Ändern die bisherige verlangt.
 
 **Abmelden nicht vergessen.** Rechts in der Navigation. Auf einem geteilten Tablet ist das der einzige Weg, den Benutzer zu wechseln: ohne Abmeldung meldet der Anmeldedienst stillschweigend dieselbe Person wieder an, und der Audit-Trail schreibt die Arbeit dem Vorgänger zu.
 
