@@ -177,6 +177,8 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 
 `pino`s Standard-Transport (`transport: { target: 'pino-pretty' }`) nutzt Worker Threads, die Next.js' Server-Bundling nicht auflösen kann (`Cannot find module .next/server/vendor-chunks/lib/worker.js`, crasht jeden Request). Fix in `src/lib/logger/index.ts`: `pino-pretty` als synchroner Destination-Stream statt als Transport. Nicht zurückändern.
 
+**Beim Sprung auf pino 10 nachgeprüft, weil keine Prüfstufe hier hinsieht:** die CI baut und testet ausschließlich mit `NODE_ENV=production`, wo der Pretty-Stream gar nicht entsteht — ein Bruch an dieser Stelle wäre also grün durchgelaufen und erst auf dem nächsten Entwicklungsrechner aufgefallen. Geprüft wurde deshalb von Hand: Pretty-Ausgabe und Redaction (`pin`, verschachteltes `token`) unter `NODE_ENV=development`, und ein laufender `next dev`, der `/login` und `/api/health/ready` mit 200 beantwortet, ohne die Worker-Meldung von damals.
+
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
 Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Erste Fassung: CSP nur in Production, `form-action` schließt dort die OIDC-Issuer-Origin ein. Die Hälfte davon war falsch — siehe den nächsten Eintrag.
