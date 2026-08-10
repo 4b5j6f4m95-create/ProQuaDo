@@ -24,6 +24,10 @@ export const SYSTEM_ROLES = {
       'role.manage',
       'qualification.manage',
       'delegation.create',
+      // Stammdaten: ohne Standort und Kunde lässt sich kein Projekt anlegen,
+      // ohne Benutzer und Rollenzuweisung arbeitet niemand. Bis Phase 7
+      // entstand beides ausschließlich im Seed.
+      'customer.manage',
       'project.view',
       'document.view',
       'production_order.view',
@@ -84,6 +88,10 @@ export const SYSTEM_ROLES = {
       'project.create',
       'project.view',
       'project.update',
+      // Produkte hängen am Projekt (`products.project_id`), gehören also zu
+      // dem, was die Projektleitung ohnehin aufbaut — anders als Kunden, die
+      // organisationsweit gelten und bei der Administration bleiben.
+      'product.manage',
       'document.upload',
       'document.revise',
       'document.review',

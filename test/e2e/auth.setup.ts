@@ -46,3 +46,7 @@ setup('Anmeldung als pl.test', async ({ page }) => {
 setup('Anmeldung als qm.test', async ({ page }) => {
   await signInAs(page, 'qualityManager', 'qm.test');
 });
+
+setup('Anmeldung als admin.test', async ({ page }) => {
+  await signInAs(page, 'admin', 'admin.test');
+});
