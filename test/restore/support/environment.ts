@@ -10,6 +10,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 /**
  * Zwei vollständig getrennte Umgebungen für die Restore-Probe (docs/09 Ebene
@@ -72,7 +73,7 @@ export async function startEnvironment(
   };
   await client(s3).send(new CreateBucketCommand({ Bucket: s3.bucket }));
 
-  const owner = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  const owner = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 
   return {
     name,

@@ -4,6 +4,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 // Real PostgreSQL + real MinIO (both via Testcontainers), real migrations,
 // real domain services — no mocks. See docs/09_TEST_PYRAMID.md "Ebene 3".
@@ -106,7 +107,7 @@ beforeAll(async () => {
   ({ submitProductionPlanForReview, approveProductionPlan, releaseProductionPlan } =
     await import('@/domain/production-plans/plan-review-workflow'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 180_000);
 
 afterAll(async () => {

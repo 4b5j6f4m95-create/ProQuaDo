@@ -5,6 +5,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 // Phase 6 (Akte, Reporting) against real infrastructure.
 //
@@ -145,7 +146,7 @@ beforeAll(async () => {
   ({ listNotifications } = await import('@/domain/notifications/notification-queries'));
   ({ getObjectBytes } = await import('@/lib/storage/object-storage'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {

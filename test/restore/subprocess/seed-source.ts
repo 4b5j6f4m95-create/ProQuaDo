@@ -11,6 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 import type { Actor } from '@/domain/shared/actor';
 import { seedOrganizationRbac, seedDemoUsers } from '@/domain/identity/seed-organization';
@@ -55,7 +56,9 @@ import { decideProductRelease } from '@/domain/quality/product-release';
 const PIN = '1234';
 
 async function main(): Promise<void> {
-  const owner = new PrismaClient({ datasources: { db: { url: process.env.DIRECT_DATABASE_URL } } });
+  const owner = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: process.env.DIRECT_DATABASE_URL }),
+  });
   const suffix = randomUUID().slice(0, 8);
 
   const seeded = await seedOrganizationRbac(owner, `restore-${suffix}`);

@@ -3,6 +3,7 @@ import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 /**
  * Infrastruktur für den Lasttest (docs/09 Ebene 8) — echtes Postgres, echtes
@@ -54,6 +55,11 @@ export async function startInfra(): Promise<LoadTestInfra> {
 
   const minio = await startMinio();
 
+  // Seit Prisma 7 steuert nicht mehr die URL die Poolgröße, sondern der
+  // Treiber-Adapter — siehe src/lib/db/client.ts. `connection_limit` bleibt
+  // in der URL stehen, weil `prisma migrate` sie weiterhin liest; wirksam für
+  // die Anwendung ist DATABASE_POOL_MAX.
+  process.env.DATABASE_POOL_MAX = String(connectionLimit);
   process.env.DATABASE_URL = appUrl;
   process.env.DIRECT_DATABASE_URL = ownerUrl;
   process.env.RELEASE_TOKEN_SECRET = 'load-test-release-token-secret';
@@ -61,7 +67,7 @@ export async function startInfra(): Promise<LoadTestInfra> {
   process.env.MALWARE_SCANNER = 'stub';
   process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'error';
 
-  const ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  const ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 
   return {
     ownerClient,

@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { CreateBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 /**
@@ -103,7 +104,7 @@ beforeAll(async () => {
   ({ ClamAvScanner } = await import('@/lib/storage/malware-scan'));
   ({ PostgresRateLimitStore } = await import('@/lib/api/rate-limit'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {

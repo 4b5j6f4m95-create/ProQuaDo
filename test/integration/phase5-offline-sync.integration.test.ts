@@ -4,6 +4,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers';
 import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 // Phase 5 (Offline und Synchronisation) against real infrastructure.
 //
@@ -134,7 +135,7 @@ beforeAll(async () => {
   ({ beginChunkedPhotoUpload, uploadPhotoChunk, finishChunkedPhotoUpload, readUploadState } =
     await import('@/domain/execution/photo-upload-chunks'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {

@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 /**
  * ERP-/Webhook-Anbindung — docs/10 Phase 6, dort „optional für MVP".
@@ -88,7 +89,7 @@ beforeAll(async () => {
   ({ withOrgContext } = await import('@/lib/db/tenant-context'));
   ({ verifyWebhookSignature } = await import('@/lib/integrations/webhook-signature'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {

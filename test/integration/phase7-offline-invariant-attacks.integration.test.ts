@@ -2,6 +2,7 @@ import { execSync } from 'node:child_process';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
 /**
  * Phase 7 hardening — adversarial tests against the central invariant of
@@ -94,7 +95,7 @@ beforeAll(async () => {
   ({ submitWorkStepCompletion } = await import('@/domain/execution/complete-work-step'));
   ({ verifyReleaseToken } = await import('@/lib/security/release-token'));
 
-  ownerClient = new PrismaClient({ datasources: { db: { url: ownerUrl } } });
+  ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
 
 afterAll(async () => {
