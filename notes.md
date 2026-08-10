@@ -596,6 +596,22 @@ Drei Entscheidungen dahinter:
 
 **Nicht in der CI**, wie der Lasttest: sie braucht zwei Container-Paare und Docker-Zugriff für `pg_dump`. Vorgesehen ist der wöchentliche Lauf aus docs/01.
 
+### Automatische Prüfungen bei GitHub
+
+Die Pipeline-Skizze in docs/09 nennt drei Stufen, die es lange nicht gab, weil sie für ein privates Repository im Free-Plan nicht verfügbar waren. Seit das Repository öffentlich ist, laufen sie:
+
+| docs/09           | Umsetzung                                                                                             | Wo die Befunde stehen      |
+| ----------------- | ----------------------------------------------------------------------------------------------------- | -------------------------- |
+| `sast_scan`       | CodeQL (`.github/workflows/codeql.yml`), `security-and-quality`                                       | Security → Code scanning   |
+| `dependency_scan` | Dependabot: Warnungen, Sicherheitskorrekturen, monatliche Aktualisierungen (`.github/dependabot.yml`) | Security → Dependabot      |
+| `secret_scan`     | Secret Scanning **mit Push Protection**                                                               | Security → Secret scanning |
+
+Drei Entscheidungen dazu:
+
+- **CodeQL ist kein erforderlicher Check.** Eine statische Analyse liefert Hinweise, keine Beweise; ein Gate, das an einem Falschbefund hängt, wird abgeschaltet statt gelesen. Erforderlich bleiben die fünf Stufen, die etwas ausführen.
+- **Dependabot aktualisiert monatlich und gebündelt**, nicht täglich und einzeln. Jeder Aktualisierungs-PR löst die vollständige Pipeline aus, E2E-Lauf mit drei Containern inklusive. Dringendes kommt über die Sicherheitswarnungen und wartet nicht auf den Zeitplan.
+- **Push Protection ist der wichtigste der drei Schalter.** Er weist ein Geheimnis ab, bevor es in der Historie steht — nachträglich ist ein veröffentlichtes Geheimnis nicht gelöscht, sondern verbrannt. Beim Wechsel auf öffentlich wurde die Historie einmal vollständig durchsucht: keine echten Schlüssel, nur die als solche benannten Entwicklungswerte.
+
 ### Abgedeckte Negativtests (alle 15 grün)
 
 Jede Zeile nennt die Testdatei ausdrücklich — kein „ebd."-Verweis, weil sich beim Ergänzen von Phase 5 die Bezugszeilen verschoben haben und ein solcher Verweis dann still auf die falsche Datei zeigt.
