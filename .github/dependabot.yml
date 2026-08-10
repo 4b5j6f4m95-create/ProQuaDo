@@ -64,6 +64,29 @@ updates:
       - dependency-name: eslint
         versions: ['>=10']
 
+      # archiver 8 ist ESM-only, und das ist hier schon einmal ausprobiert und
+      # zurückgenommen worden (notes.md, "ESM-only Abhängigkeiten brechen Jest
+      # UND den Next-Build"). Beides scheitert sofort: Jest mit "Cannot use
+      # import statement outside a module", der Build mit einem Webpack-Fehler
+      # im selben Paket. Dazu ersetzt v8 die Factory-API `archiver('zip', …)`
+      # durch Klassen, die Anhebung ist also auch kein reiner Versionswechsel.
+      #
+      # Der Typecheck sagt dazu nichts — die Typen von `@types/archiver@8` sind
+      # einwandfrei, nur ließ sich das Paket nirgends laden. Deshalb gehören
+      # beide hierher: getrennt ignoriert, käme sonst der Typ-Teil allein
+      # wieder und passte dann nicht zur Laufzeitversion.
+      #
+      # WIEDER ENTFERNEN, sobald Jest und der Next-Build ESM tragen. Die Probe
+      # ist der Versuch selbst, und zwar gegen BEIDE Läufe — `pnpm run build`
+      # und `pnpm run test:integration`. Ein `pnpm run typecheck` allein
+      # beantwortet die Frage nicht, siehe oben. Seit dem Exporttest
+      # (`dossier-export.spec.ts`) würde ein Bruch zusätzlich auf Byte-Ebene
+      # auffallen, statt erst beim nächsten Export von Hand.
+      - dependency-name: archiver
+        versions: ['>=8']
+      - dependency-name: '@types/archiver'
+        versions: ['>=8']
+
   - package-ecosystem: github-actions
     directory: '/'
     schedule:

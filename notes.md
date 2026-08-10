@@ -370,6 +370,8 @@ Ein Unit-Test für „ClamAV nicht erreichbar → ERROR" lief gegen das echte lo
 
 **Regel:** Neue Server-Abhängigkeiten vor dem Einbau kurz gegen **beide** Läufe prüfen — `pnpm run build` und `pnpm run test:integration`. Ein `pnpm run typecheck` allein sagt darüber nichts: die Typen von `@types/archiver@8` waren einwandfrei, nur ließ sich das Paket nirgends laden.
 
+**Dependabot schlägt es trotzdem jeden Monat wieder vor — deshalb steht `archiver` ab 8 jetzt im `ignore`-Block** von `.github/dependabot.yml`, samt `@types/archiver`: getrennt ignoriert käme der Typ-Teil allein wieder und passte dann nicht zur Laufzeitversion. Dieselbe Überlegung wie bei ESLint 10 (Übergabe Punkt 4): die CI hält den PR ohnehin auf, aber ein Vorschlag, der planmäßig scheitert und monatlich wiederkommt, erzieht dazu, rote Läufe zu überfliegen. Wieder entfernen, sobald Jest und der Next-Build ESM tragen — die Probe ist der Versuch gegen beide Läufe, nicht der Typecheck.
+
 ### Der Abschlussknopf war dauerhaft gesperrt — durch die Bestätigung, die er selbst erzeugt
 
 Beim Browser-Test der PIN-Sperre aufgefallen, und der schwerste UI-Fehler bisher: **kein Arbeitsschritt ließ sich vom Online-Bildschirm abschließen.** Der Knopf stand auf „Abschließen (1 fehlend)" und war deaktiviert, auch nachdem alle Nachweise erfasst waren.
