@@ -84,7 +84,17 @@ Beide Listen pflegen, `redirectUris` **und** `post.logout.redirect.uris`. Fehlt 
 
 **Probe, ausgeführt:** `curl <OIDC_ISSUER>/.well-known/openid-configuration` muss ein JSON mit `end_session_endpoint` liefern — in der Staging-Umgebung tut es das (`…/protocol/openid-connect/logout`).
 
-Dabei fiel auf, was ein neuer Port an dieser Stelle kostet: **beide** Listen brauchen ihn. Die Realm-Datei führt jetzt neben 3000 und 3002 auch 3003, in `redirectUris` **und** in `post.logout.redirect.uris`. Die Anwendung ermittelt den Endpunkt darüber, statt ihn zu bilden (ADR-001); fehlt er in der Discovery, funktioniert die Abmeldung nicht, egal was am Client eingetragen ist.
+**Der Fehler, der beim Aufsetzen die meiste Zeit gekostet hat, sitzt ebenfalls hier:** ein falsches `OIDC_CLIENT_SECRET`. Die Anmeldung führt dann durch Keycloak hindurch und kommt **nicht** zurück; im Browser passiert sichtbar nichts, und der Grund steht ausschließlich im Serverprotokoll:
+
+```
+[auth][cause]: server responded with an error in the response body
+[auth][details]: { "error": "unauthorized_client",
+                   "error_description": "Invalid client or Invalid client credentials" }
+```
+
+Wer eine Umgebung aufsetzt, sollte das Geheimnis deshalb aus der Konfiguration des Anbieters **kopieren**, nicht aus dem Gedächtnis schreiben — und beim ersten fehlgeschlagenen Login zuerst ins Serverprotokoll sehen, nicht in den Browser.
+
+Dabei fiel außerdem auf, was ein neuer Port an dieser Stelle kostet: **beide** Listen brauchen ihn. Die Realm-Datei führt jetzt neben 3000 und 3002 auch 3003, in `redirectUris` **und** in `post.logout.redirect.uris`. Die Anwendung ermittelt den Endpunkt darüber, statt ihn zu bilden (ADR-001); fehlt er in der Discovery, funktioniert die Abmeldung nicht, egal was am Client eingetragen ist.
 
 ---
 
@@ -143,7 +153,7 @@ Null, nicht ein Fehler. Genau das ist RLS (ADR-006): die Rolle darf fragen und b
 
 ---
 
-## Schritt 7 — Rauchtest gegen das, was nur in Produktion greift ⚠️ (Verfahren lokal erprobt)
+## Schritt 7 — Rauchtest gegen das, was nur in Produktion greift ✅
 
 Vier Mechanismen sind in der Entwicklung abgeschaltet, und jeder hat in diesem Projekt schon einmal einen Fehler verdeckt. Alle vier einzeln **benutzen**, nicht nur starten:
 
@@ -152,12 +162,14 @@ Vier Mechanismen sind in der Entwicklung abgeschaltet, und jeder hat in diesem P
 | Readiness ✅     | `GET /api/health/ready`                                              | `status: "ready"`, **`scannerKind: "clamav"`** — nicht `"stub"`   |
 | CSP und Nonce ✅ | eine Seite laden, Header und HTML **derselben** Antwort vergleichen  | alle **12** `<script>`-Tags tragen die Nonce des Headers            |
 | Abgeleitete Adressen ✅ | `connect-src` und `form-action` im Header ansehen              | `connect-src 'self' http://localhost:9020`, `form-action 'self' http://localhost:8091` — die **Staging**-Adressen, nicht die der Entwicklung |
-| Upload ⚠️        | ein Dokument aus dem **Browser** hochladen                           | braucht eine Anmeldung; hier nicht ausgeführt (siehe unten)         |
-| Offline-Rückfall ⚠️ | `/offline` laden, Netz trennen, neu laden                         | braucht eine Anmeldung; hier nicht ausgeführt                       |
+| Upload ✅        | ein Dokument aus dem **Browser** hochladen                           | presignierter `PUT` auf `http://localhost:9020` → **HTTP 200**, keine CSP-Meldung in der Konsole, und der Server hat die Datei **anerkannt** (Hashvergleich plus echter Virenscan) |
+| Offline-Rückfall ✅ | `/offline` laden, Netz trennen, neu laden                         | Worker `activated`, 12 Einträge im Cache, `transferSize: 0` ohne Verbindung, Navigation landet im Offline-Arbeitsbereich, `/api/**` bleibt unerreichbar |
 
 Zur CSP-Probe: die Nonce wird **je Anfrage** neu gezogen. Zwei getrennte `curl`-Aufrufe vergleichen deshalb zwei verschiedene Nonces und schlagen immer fehl — Header und Körper müssen aus einem Aufruf stammen.
 
-**Warum Upload und Offline-Rückfall hier offen blieben:** beide verlangen eine angemeldete Sitzung, und die Sitzung ist mit `AUTH_SECRET` signiert — das Staging hat ein eigenes, die gespeicherten Anmeldungen der E2E-Suite gelten dort also nicht. Wer die beiden Zeilen schließen will, meldet sich einmal von Hand an und lädt ein Dokument hoch; es dauert zwei Minuten und ist der einzige Weg, den die CSP-Direktive `connect-src` wirklich ausreizt.
+**Der Upload kann hier mehr als in der Prüfkette.** `document-upload.spec.ts` bricht bewusst nach dem `PUT` ab: der E2E-Lauf fährt gegen einen Production-Build, und dort wird `MALWARE_SCANNER=stub` mit hartem Fehler abgelehnt — die Anerkennung der Datei ist dort also gar nicht prüfbar. In Staging läuft echtes clamd, und deshalb geht der Weg bis zum Ende: Hashvergleich, Scan, Revision mit Dateiangabe. Die Datei liegt danach im **versionierten** Bucket.
+
+Beide Zeilen brauchten eine angemeldete Sitzung. Die gespeicherten Anmeldungen der E2E-Suite gelten hier nicht — Staging hat ein eigenes `AUTH_SECRET` —, also lief die Anmeldung über denselben automatisierten Weg wie in `auth.setup.ts`, nur gegen Port 3003 und Keycloak auf 8091.
 
 Was die dritte Zeile davon vorwegnimmt: die **Adressen stimmen**. Genau daran ist der Upload in Phase 7 gescheitert — nicht am Speicher, sondern daran, dass die CSP eine andere Origin kannte als der Browser ansprach. Alle drei sind zugleich E2E-Tests (`production-csp`, `document-upload`, `offline-shell`) und gegen den lokalen Production-Build grün; was Staging hinzufügt, sind die echten Adressen, der echte Speicher, der echte Scanner.
 
