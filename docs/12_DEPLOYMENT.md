@@ -157,7 +157,11 @@ Zwei Speicher, die zueinander konsistent sein müssen: PostgreSQL und der Objekt
 
 Vorgaben aus docs/01: RPO ≤ 1 h, RTO ≤ 4 h, Aufbewahrung 7 Jahre, wöchentliche Restore-Probe.
 
-**Die Restore-Probe (docs/09 Ebene 10) ist noch nicht umgesetzt.** Sie ist der letzte offene Punkt aus Gate (c) vor dem Piloten. Was sie leisten muss: Restore in eine isolierte Umgebung, Prüfung der referenziellen Integrität (Audit ↔ Dateien ↔ Datenbank) und ein Vergleich einer Produktionsakte vor und nach dem Restore.
+**Die Restore-Probe gibt es als Kommando:** `pnpm run test:restore` (docs/09 Ebene 10). Sie füllt eine Quellumgebung mit echten Daten, sichert beide Speicher, sichert in eine **zweite, leere** Umgebung zurück und prüft dann Zeilenzahlen, Dateien, Hashes, Audit-Bezüge und — als eigentlichen Beweis — ob dieselbe Produktionsakte zeichengleich herauskommt. `RESTORE_DRILL_FAULT=missing-file|missing-row` schleust einen Schaden ein; beide Läufe müssen rot enden.
+
+Was sie **nicht** ersetzt: den Lauf gegen das echte Backup-Verfahren dieser Umgebung. Das Skript erzeugt sein Backup selbst und beweist damit, dass die Anwendung aus Dump plus Objekten vollständig wiederherstellbar ist — nicht, dass die nächtliche Sicherung tatsächlich läuft, vollständig ist und lesbar bleibt. Für den wöchentlichen Betriebslauf gehört dieselbe Prüfkette hinter das echte Backup gehängt.
+
+**Eine Erkenntnis daraus gehört in jedes Restore-Handbuch:** `pg_dump` sichert eine Datenbank, **keine Rollen**. Ohne vorab angelegte `proquado_app` (siehe §3.1) scheitert das Einspielen am ersten GRANT.
 
 ---
 
