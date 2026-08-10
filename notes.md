@@ -699,6 +699,8 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    npm view eslint-plugin-react peerDependencies
    ```
 
+   **Dependabot ist dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
+
 5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er liegt seit dem Wechsel auf Prisma 7 über dem Ziel aus docs/09 (p95 3,2–3,7 s statt < 3 s). Auf einem Laptop gemessen und deshalb kein Urteil über die reale Anlage — aber der Wert, der beim Schichtwechsel von 200 Tablets zählt, und der einzige aus dem Lasttest, der nicht mit Reserve besteht. Die Reihenfolge der Hebel steht bei den Architekturentscheidungen: zuerst Verbindungsverwaltung, dann alles andere.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
