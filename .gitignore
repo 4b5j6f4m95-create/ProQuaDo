@@ -18,9 +18,17 @@ playwright-report/
 test/e2e/.auth/
 
 # Environment
+#
+# `.env` allein deckt nur die eine Datei ab, und `.env*.local` verlangt die
+# Endung — eine beim Aufsetzen erzeugte `.env.staging` wäre also eingecheckt
+# worden, samt frisch erzeugtem AUTH_SECRET und RELEASE_TOKEN_SECRET. Gefunden
+# beim Durchspielen von docs/13; die Muster fangen jetzt jede Variante.
 .env
-.env*.local
+.env.*
 !.env.example
+
+# Daten der lokalen Staging-Umgebung (infra/staging), wie ./.docker-data/
+.staging-data/
 
 # Prisma
 prisma/dev.db

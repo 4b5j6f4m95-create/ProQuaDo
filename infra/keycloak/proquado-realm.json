@@ -13,14 +13,15 @@
       "secret": "proquado_dev_client_secret",
       "redirectUris": [
         "http://localhost:3000/api/auth/callback/*",
-        "http://localhost:3002/api/auth/callback/*"
+        "http://localhost:3002/api/auth/callback/*",
+        "http://localhost:3003/api/auth/callback/*"
       ],
-      "webOrigins": ["http://localhost:3000", "http://localhost:3002"],
+      "webOrigins": ["http://localhost:3000", "http://localhost:3002", "http://localhost:3003"],
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:3002/*"
+        "post.logout.redirect.uris": "http://localhost:3000/*##http://localhost:3002/*##http://localhost:3003/*"
       }
     }
   ],
