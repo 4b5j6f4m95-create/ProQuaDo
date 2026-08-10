@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import {
   bindDocumentToStepAction,
   unbindDocumentFromStepAction,
@@ -35,7 +36,7 @@ export function BindDocumentForm({
   planStepId: string;
   revisions: readonly BindableRevision[];
 }) {
-  const [state, formAction] = useFormState(bindDocumentToStepAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(bindDocumentToStepAction, INITIAL_STATE);
   const errorId = `bind-error-${planStepId}`;
 
   return (
@@ -83,7 +84,7 @@ export function UnbindDocumentButton({
   planStepId: string;
   bindingId: string;
 }) {
-  const [state, formAction] = useFormState(unbindDocumentFromStepAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(unbindDocumentFromStepAction, INITIAL_STATE);
 
   return (
     <form action={formAction} className="inline-form">

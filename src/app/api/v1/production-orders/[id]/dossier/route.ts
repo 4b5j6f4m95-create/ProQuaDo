@@ -9,8 +9,9 @@ import { assembleProductionDossier } from '@/domain/dossier/assemble-dossier';
 // call; see assemble-dossier.ts on why it is never a stored snapshot.
 export async function GET(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     return NextResponse.json(await assembleProductionDossier(actor, params.id));

@@ -13,8 +13,9 @@ const completeUploadSchema = z.object({
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const body = completeUploadSchema.parse(await request.json());

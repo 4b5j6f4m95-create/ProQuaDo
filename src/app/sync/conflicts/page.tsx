@@ -7,11 +7,10 @@ import { StatusChip } from '@/components/StatusChip';
 /** Konfliktcenter — docs/07 B4. The list; one conflict per row, newest
  *  open ones first, because an open conflict means a step is standing
  *  still on the shop floor. */
-export default async function SyncConflictsPage({
-  searchParams,
-}: {
-  searchParams: { status?: string };
+export default async function SyncConflictsPage(props: {
+  searchParams: Promise<{ status?: string }>;
 }) {
+  const searchParams = await props.searchParams;
   const actor = await requirePageAuth();
   const status =
     searchParams.status === 'RESOLVED' || searchParams.status === 'ALL'

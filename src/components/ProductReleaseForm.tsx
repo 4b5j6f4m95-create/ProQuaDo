@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import {
   decideProductReleaseAction,
   type ProductReleaseFormState,
@@ -26,7 +27,7 @@ export function ProductReleaseForm({
   productionOrderId: string;
   blockers: readonly string[];
 }) {
-  const [state, formAction] = useFormState(decideProductReleaseAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(decideProductReleaseAction, INITIAL_STATE);
   const blocked = blockers.length > 0;
 
   return (

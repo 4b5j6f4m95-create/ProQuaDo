@@ -15,7 +15,8 @@ interface RevisionMismatch {
 }
 
 /** Konfliktdetail und Entscheidung — docs/07 B4. */
-export default async function SyncConflictPage({ params }: { params: { id: string } }) {
+export default async function SyncConflictPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const conflict = await getSyncConflict(actor, params.id);
   const detail = (conflict.detail ?? {}) as Record<string, unknown>;

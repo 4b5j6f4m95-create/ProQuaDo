@@ -16,7 +16,8 @@ import {
  * the state machine — each form is rendered only in the status where its
  * transition is legal, and the server re-checks it anyway.
  */
-export default async function NonConformanceDetailPage({ params }: { params: { id: string } }) {
+export default async function NonConformanceDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const ncr = await getNonConformance(actor, params.id);
   const activeHolds = ncr.holds.filter((hold) => hold.isActive);

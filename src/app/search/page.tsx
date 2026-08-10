@@ -14,7 +14,8 @@ const TYPE_LABEL: Record<string, string> = {
  * on purpose: the query lives in the URL, so a search result is a link an
  * auditor can put in a report.
  */
-export default async function SearchPage({ searchParams }: { searchParams: { q?: string } }) {
+export default async function SearchPage(props: { searchParams: Promise<{ q?: string }> }) {
+  const searchParams = await props.searchParams;
   const actor = await requirePageAuth();
   const term = searchParams.q?.trim() ?? '';
   const results = term.length >= 2 ? await searchTraceability({ actor, q: term }) : [];

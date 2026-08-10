@@ -7,8 +7,9 @@ import { createReworkStep } from '@/domain/quality/ncr-workflow';
  *  to the failed original, released READY with its own token. */
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const result = await createReworkStep({ actor, nonConformanceId: params.id });

@@ -11,7 +11,8 @@ import {
   createDocumentRevisionAction,
 } from '../actions';
 
-export default async function DocumentDetailPage({ params }: { params: { id: string } }) {
+export default async function DocumentDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const document = await getDocument(actor, params.id);
   const latest = document.revisions[0];

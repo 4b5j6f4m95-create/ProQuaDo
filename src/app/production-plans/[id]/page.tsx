@@ -20,7 +20,10 @@ import {
   releasePlanAction,
 } from '../actions';
 
-export default async function ProductionPlanRevisionPage({ params }: { params: { id: string } }) {
+export default async function ProductionPlanRevisionPage(props: {
+  params: Promise<{ id: string }>;
+}) {
+  const params = await props.params;
   const actor = await requirePageAuth();
   const revision = await getProductionPlanRevision(actor, params.id);
   const editable = isPlanStructureEditable(revision.status as PlanRevisionStatus);

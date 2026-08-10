@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { decideSecondApprovalAction, type SecondApprovalFormState } from '@/app/quality/actions';
 
 const INITIAL_STATE: SecondApprovalFormState = { error: null };
@@ -18,7 +19,7 @@ export function SecondApprovalForm({
   workStepInstanceId: string;
   executorLabel: string;
 }) {
-  const [state, formAction] = useFormState(decideSecondApprovalAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(decideSecondApprovalAction, INITIAL_STATE);
 
   return (
     <form action={formAction} className="card">

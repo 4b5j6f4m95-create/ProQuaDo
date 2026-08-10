@@ -10,8 +10,9 @@ const bodySchema = z.object({ reason: z.string().min(1).max(2000) });
 
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } },
+  props: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
     const { reason } = bodySchema.parse(await request.json());

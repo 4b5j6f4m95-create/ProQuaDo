@@ -1,6 +1,7 @@
 'use client';
 
-import { useFormState, useFormStatus } from 'react-dom';
+import { useActionState } from 'react';
+import { useFormStatus } from 'react-dom';
 import { completeWorkStepAction, type CompleteStepFormState } from '@/app/work-steps/actions';
 
 const INITIAL_STATE: CompleteStepFormState = { error: null };
@@ -30,7 +31,7 @@ export function CompleteStepForm({
    *  (Abnahmeszenario C). */
   usedDocumentRevisionIds: readonly string[];
 }) {
-  const [state, formAction] = useFormState(completeWorkStepAction, INITIAL_STATE);
+  const [state, formAction] = useActionState(completeWorkStepAction, INITIAL_STATE);
 
   return (
     <form action={formAction} className="card">
