@@ -4,6 +4,8 @@ import { useActionState } from 'react';
 import { useFormStatus } from 'react-dom';
 import {
   createSiteAction,
+  createDepartmentAction,
+  createWorkCenterAction,
   createCustomerAction,
   inviteUserAction,
   assignRoleAction,
@@ -83,6 +85,76 @@ export function CreateSiteForm() {
       </label>
       <Feedback state={state} id="site-form-error" />
       <Submit label="Standort anlegen" />
+    </form>
+  );
+}
+
+export function CreateDepartmentForm({ sites }: { sites: { id: string; name: string }[] }) {
+  const [state, action] = useActionState(createDepartmentAction, INITIAL_ADMIN_STATE);
+  if (sites.length === 0) {
+    // Ohne Standort gibt es nichts, woran eine Abteilung hängen könnte. Ein
+    // Formular mit leerer Pflicht-Auswahlliste wäre eine Sackgasse.
+    return <p className="empty-state">Erst einen Standort anlegen, dann Abteilungen.</p>;
+  }
+  return (
+    <form action={action} className="card">
+      <h3>Abteilung anlegen</h3>
+      <label>
+        Standort
+        <select name="siteId" required defaultValue={sites[0]?.id}>
+          {sites.map((site) => (
+            <option key={site.id} value={site.id}>
+              {site.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Name
+        <input name="name" required maxLength={255} />
+      </label>
+      <label>
+        Kürzel (optional, organisationsweit eindeutig)
+        <input name="code" maxLength={50} />
+      </label>
+      <Feedback state={state} id="department-form-error" />
+      <Submit label="Abteilung anlegen" />
+    </form>
+  );
+}
+
+export function CreateWorkCenterForm({
+  departments,
+}: {
+  departments: { id: string; name: string; site: { name: string } }[];
+}) {
+  const [state, action] = useActionState(createWorkCenterAction, INITIAL_ADMIN_STATE);
+  if (departments.length === 0) {
+    return <p className="empty-state">Erst eine Abteilung anlegen, dann Arbeitsplätze.</p>;
+  }
+  return (
+    <form action={action} className="card">
+      <h3>Arbeitsplatz anlegen</h3>
+      <label>
+        Abteilung
+        <select name="departmentId" required defaultValue={departments[0]?.id}>
+          {departments.map((department) => (
+            <option key={department.id} value={department.id}>
+              {department.site.name} · {department.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Name
+        <input name="name" required maxLength={255} />
+      </label>
+      <label>
+        Betriebsmittel-Referenz (optional)
+        <input name="equipmentRef" maxLength={255} />
+      </label>
+      <Feedback state={state} id="work-center-form-error" />
+      <Submit label="Arbeitsplatz anlegen" />
     </form>
   );
 }
