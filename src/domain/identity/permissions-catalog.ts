@@ -23,6 +23,17 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   perm('qualification', 'manage', 'Qualifikationen verwalten'),
   perm('delegation', 'create', 'Stellvertretung anlegen'),
 
+  // Stammdaten. Abweichung von docs/04: die Matrix nennt weder Kunden noch
+  // Produkte, weil sie kein Bild davon hat, wie sie in das System kommen —
+  // bis hierher entstanden beide ausschließlich im Seed. Ein bestehendes Atom
+  // still mitzubenutzen (`project.update` für Produkte läge nahe, sie hängen
+  // am Projekt) wäre die schlechtere Wahl: eine zweite, unbenannte Bedeutung
+  // eines Atoms lässt sich nicht prüfen und steht in keiner Matrix. Also
+  // eigene, benannte Atome — dieselbe Art dokumentierter Abweichung wie bei
+  // `product_release.*` und `sync.*`.
+  perm('customer', 'manage', 'Kunden verwalten'),
+  perm('product', 'manage', 'Produkte verwalten'),
+
   // Projects & Documents
   perm('project', 'create', 'Projekt anlegen'),
   perm('project', 'view', 'Projekt ansehen'),

@@ -27,6 +27,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <Link href="/sync/conflicts">Konflikte</Link>
           <Link href="/search">Suche</Link>
           <Link href="/notifications">Benachrichtigungen</Link>
+          <Link href="/admin">Administration</Link>
 
           {/* Who is signed in, and how to stop being them. Both were missing
               until Phase 7: the application had no sign-out at all, so a

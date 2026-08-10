@@ -160,6 +160,9 @@ Benutzer, Rollen, Standorte, Geräte, Integrationen.
 
 ### Was hier gelernt werden muss, weil es sonst niemand tut
 
+- **Die Ersterfassung ist die erste Aufgabe überhaupt.** Unter **Administration**: Standorte, dann Kunden, dann Personen einladen. Ohne Standort und Kunde lässt sich kein Projekt anlegen, ohne eingeladene Person arbeitet niemand. Produkte gehören nicht hierher — sie entstehen im Projekt, bei der Projektleitung.
+- **Einladen heißt einladen, nicht anlegen.** Das System vergibt keine Passwörter; die Anmeldung gehört dem Identitätsanbieter. Die Person muss sich einmal anmelden und danach ihre PIN setzen. In der Personenliste ist beides sichtbar („wartet auf ersten Login", „keine PIN gesetzt") — wer meldet, er könne nichts abschließen, steht meistens genau dort.
+- **Eine vergessene PIN wird gelöscht, nicht neu vergeben.** Mit Begründung, und die steht im Audit-Trail. Eine PIN zu vergeben ist nicht vorgesehen: wer sie vergibt, kennt sie.
 - **Nach jedem Release den Seed laufen lassen** (`pnpm exec prisma db seed`). Neue Berechtigungen kommen nur so in bestehende Organisationen; ohne das antwortet die Anwendung mit `PERMISSION_DENIED` für Rechte, die es im Code längst gibt. Siehe [docs/14 §1.1](14_RUNBOOK.md).
 - **Verlorenes Tablet fernsperren** — sofort, nicht nach Rücksprache. Siehe [docs/14 §3.4](14_RUNBOOK.md).
 - **Höchstens 10 aktive Geräte je Benutzer.** Gesperrte zählen nicht mit; die Grenze wird nicht angehoben, sondern alte Geräte werden gesperrt.

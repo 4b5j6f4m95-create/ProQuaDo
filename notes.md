@@ -408,6 +408,20 @@ Getrennt in zwei Fragen, die vorher eine waren: `openRequirementCount` bleibt, w
 
 **Warum keine andere Kontrolle das sah:** Integrationstests rufen `submitWorkStepCompletion` direkt, der Knopf kommt darin nicht vor. Die Unit-Tests prüften `evaluateStepRequirements`, das korrekt ist. Und der Offline-Weg hat sein eigenes Formular. Es gab keinen Test, der die Frage „darf der Knopf gedrückt werden" überhaupt stellte — jetzt gibt es drei.
 
+### Eine `'use server'`-Datei darf ausschließlich async-Funktionen exportieren
+
+Beim Bau der Stammdatenformulare aufgetreten. Neben den Aktionen stand, was daneben zu stehen scheint:
+
+```ts
+export const INITIAL_PRODUCT_STATE: ProductFormState = { error: null, result: null };
+```
+
+`next build` bricht daran ab — „A `use server` file can only export async functions, found object" —, und zwar nicht beim Kompilieren, sondern beim Einsammeln der Seitenkonfiguration. **Typecheck und Lint sehen nichts**: es ist gültiges TypeScript, die Regel gehört Next.js. Exportierte **Typen** sind unproblematisch, sie werden ohnehin gelöscht.
+
+Behoben, indem der Initialzustand in der Client-Komponente steht — wo die übrigen Formulare dieses Projekts ihn ohnehin schon hatten (`DossierExportForm`). Die Abweichung war meine, das etablierte Muster war richtig.
+
+**Bemerkenswert daran ist die Einordnung:** dieselbe Familie wie „pdfkit findet seine Schriftmetriken nicht" und die CSP-Einträge — ein Fehler, den nur ein vollständiger Build sieht. Wer nach einer Änderung an Server Actions nur `typecheck` und `lint` laufen lässt, hat die Stufe ausgelassen, die ihn findet.
+
 ### Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg
 
 Beim Browser-Test der Dokumentbindung als PL gefunden, und nur dort zu finden: `bindDocumentToStepAction` war eine gewöhnliche Server Action, die den `ValidationError` durchreichte. Ein Doppelklick auf **+ Dokumentbindung** landete damit in `src/app/error.tsx` — „Ein Fehler ist aufgetreten", Planungsbildschirm weg, Arbeitsstand weg. Der Text war korrekt („Revision 01 ist bereits verknüpft"), die Reaktion nicht: das ist eine normale Antwort mit einer offensichtlichen nächsten Handlung, kein Seitenabbruch.
@@ -501,7 +515,7 @@ Ein echter Bug wurde beim Browser-Test gefunden: `PlanStep.predecessors`/`.depen
 - **„Weiterhin gültig" überspringt keine Prüfungen.** Die Entscheidung lautet „die alte Revision ist weiterhin akzeptabel", nicht „Abschluss durchwinken": `acceptAsValid` schickt die Abschlussmeldung durch dieselbe `validateSubmissionWithin`, nur mit der Revisionsfrage als bereits beantwortet markiert. Ein Schritt mit fehlendem Pflichtfoto bleibt auch nach dieser Entscheidung abgelehnt.
 - **`ACCEPT_AS_VALID` gibt es bei `PERMISSION_REVOKED` nicht.** docs/04 sagt, offline erfasste Arbeit nach Rechteentzug werde „nicht automatisch freigegeben" — und sie stellvertretend durchzuwinken ist derselbe Vorgang mit einer anderen Unterschrift darunter. Möglich bleiben Zusatzprüfung oder Verwerfen der Abschlussmeldung; die erfassten Nachweise bleiben in beiden Fällen erhalten.
 - **`devices` hat jetzt `organization_id` und eine RLS-Policy.** Die Phase-1-Migration hatte notiert, Mandantentrennung für `devices`/`sessions` laufe „bis zu einer eigenen Policy" auf Anwendungsebene. Phase 5 ist der erste Verwender und schließt die Lücke für `devices`; `sessions` bleibt offen (kein Verwender).
-- **Berechtigungsatome, die nicht in docs/04 stehen.** `sync.execute`, `sync_conflict.view`, `sync_conflict.decide` und `device.manage` sind in Phase 5 dazugekommen. docs/04 beschreibt das Verhalten („erfordert manuelle Entscheidung durch berechtigte Person"), benennt aber nicht das Atom, das „berechtigt" definiert. Vergabe: `sync.execute` an WORKER und INSPECTOR, `sync_conflict.decide` an die beiden Rollen, die docs/06 bei einem Konflikt benachrichtigt (PROJECT_LEAD, QUALITY_MANAGER), `device.manage` an ADMIN. In Phase 7 kamen `product_release.decide` und `product_release.view` dazu (siehe unten). Dieselbe Art Abweichung wie bei `production_plan.release` weiter oben — dokumentiert, nicht stillschweigend.
+- **Berechtigungsatome, die nicht in docs/04 stehen.** `sync.execute`, `sync_conflict.view`, `sync_conflict.decide` und `device.manage` sind in Phase 5 dazugekommen. docs/04 beschreibt das Verhalten („erfordert manuelle Entscheidung durch berechtigte Person"), benennt aber nicht das Atom, das „berechtigt" definiert. Vergabe: `sync.execute` an WORKER und INSPECTOR, `sync_conflict.decide` an die beiden Rollen, die docs/06 bei einem Konflikt benachrichtigt (PROJECT_LEAD, QUALITY_MANAGER), `device.manage` an ADMIN. In Phase 7 kamen `product_release.decide` und `product_release.view` dazu (siehe unten), zuletzt **`customer.manage` und `product.manage`** für die Stammdatenerfassung. Bei diesen beiden war die Alternative, ein bestehendes Atom still mitzubenutzen — `project.update` für Produkte läge nahe, sie hängen am Projekt. Dagegen sprach, dass eine zweite, unbenannte Bedeutung eines Atoms sich nicht prüfen lässt und in keiner Matrix steht. Vergabe: `customer.manage` an ADMIN (Kunden gelten organisationsweit), `product.manage` an PROJECT_LEAD (das Produkt gehört zum Projekt, und ADMIN hat nicht einmal `project.create`). Dieselbe Art Abweichung wie bei `production_plan.release` weiter oben — dokumentiert, nicht stillschweigend.
 - **`sync_commands.status` kennt ein `PENDING`, das docs/05 nicht hat.** docs/05 definiert vier _Antwort_-Status (ACCEPTED/REJECTED/CONFLICT/DUPLICATE); `PENDING` wird nie an einen Client gesendet. Es ist die Zeile, die **vor** der Ausführung geschrieben wird, damit ein Absturz zwischen „angewendet" und „quittiert" eine Spur hinterlässt statt gar nichts — der Wiederholungsversuch findet sie und führt idempotent erneut aus, statt ein unfertiges Kommando für ein Duplikat zu halten.
 - **`step_document_bindings` bekam erst in Phase 5 einen Service, die UI erst in Phase 7.** docs/10 listet die Schritt-Dokumentbindung unter Phase 2; das Modell entstand dort, der Service nicht. Abnahmeszenario C ist vollständig über diese Bindungen definiert und war ohne ihn aus der Anwendung heraus gar nicht herstellbar — daher `bindDocumentToPlanStep`. Der Planungsbildschirm bietet die Bindung jetzt an (Auswahl, Seite, Markierung) und erlaubt das Entfernen, solange die Revision DRAFT ist.
 - **Zur Auswahl stehen nur freigegebene Revisionen des Projekts, zu dem der Plan gehört** (`listBindableDocumentRevisions`). Nur RELEASED, weil der Service nichts anderes annimmt — alles andere wäre eine Auswahlliste voller Einträge, die der Server ablehnt. Nur das eigene Projekt, weil ein fremdes Dokument für diesen Plan nicht verbindlich sein kann. Wer `document.view` nicht hat, bekommt eine leere Liste statt eines Fehlers, und **nicht** die Anzahl dessen, was er nicht sehen darf — dieselbe Regel wie bei der Suche.
@@ -588,7 +602,7 @@ pnpm run lint
 pnpm run format:check
 pnpm run test:unit          # 209 Tests, keine Infrastruktur nötig
 pnpm run build              # Kompilier- UND Bündelungsprüfung
-pnpm run test:integration   # 126 Tests, echte Postgres+MinIO-Container (Testcontainers)
+pnpm run test:integration   # 138 Tests, echte Postgres+MinIO-Container (Testcontainers)
 ```
 
 Drei Tests laufen zusätzlich gegen ein echtes clamd und sind deshalb ausdrücklich einzuschalten — sie gehen **rot**, wenn keins antwortet (siehe „Jest entscheidet `skip` beim Einlesen" oben):
@@ -605,7 +619,7 @@ Alle Integrationstests laufen gegen **echte** Infrastruktur, nicht gegen Mocks �
 ```bash
 docker compose up -d postgres minio minio-init keycloak
 pnpm exec prisma migrate deploy && pnpm exec prisma db seed              # einmalig
-pnpm run test:e2e                    # 22 Tests (drei davon Anmeldungen), ~2 Min inkl. Build
+pnpm run test:e2e                    # 26 Tests (vier davon Anmeldungen), ~2 Min inkl. Build
 pnpm run test:e2e work-step          # nur eine Datei
 pnpm exec playwright show-trace test-results/<…>/trace.zip        # nach einem Fehlschlag
 ```
@@ -733,9 +747,11 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe; die Testpyramide aus docs/09 ist seit heute vollständig. Was bleibt, ist Betrieb, Erprobung und das Nachziehen von Abhängigkeiten — siehe „Stand" oben.
 
-0. **Stammdaten lassen sich in der Anwendung nicht erfassen — und das ist Programmierarbeit.** Aufgefallen bei der Frage, was ohne Altsystem an die Stelle der Datenmigration tritt: `docs/10` führt sie als „**falls Altsystem vorhanden**" und stellt die andere Hälfte der Frage nie. Standort, Kunde, Produkt, Benutzer, Mitarbeiter und Rollenzuweisung entstehen ausschließlich im Seed mit fest verdrahteten Demo-Werten; es gibt dafür weder Dienst noch Route noch Bildschirm. Das Projektformular bietet Auswahllisten für Standort und Kunde, die ohne diese Zeilen leer bleiben — ein Pilot kann sein erstes echtes Projekt also gar nicht anlegen. Erhoben und im Einzelnen belegt; die Reihenfolge ist Organisation → Standort → Kunde → **Projekt** → Produkt (das Produkt hängt am Projekt, nicht am Standort). Zwei Entscheidungen hängen daran: für Kunde und Produkt gibt es **kein Berechtigungsatom** (der Katalog hat 58, keines davon passt), und Abteilung und Arbeitsplatz haben **keinen Eindeutigkeits-Constraint** — mit einem Formular davor sind Dubletten eine Frage der Zeit.
+0. **Erledigt: Stammdaten lassen sich jetzt in der Anwendung erfassen.** Unter **Administration** (`/admin`, `user.manage`/`site.manage`/`customer.manage`) entstehen Standorte, Kunden und Personen; Produkte legt die Projektleitung im Projekt an (`product.manage`). Die vergessene PIN hat damit ebenfalls ihren Weg: die Administration **löscht** die hinterlegte mit Begründung, ohne je eine zu kennen, und der Inhaber setzt unter „Mein Konto" eine neue. Was bleibt: **Abteilung und Arbeitsplatz** haben weiterhin kein Formular — sie sind am Planschritt optional, und ihnen fehlt ein Eindeutigkeits-Constraint, weshalb ein Formular davor erst eine Migration braucht. Der ursprüngliche Befund, zur Einordnung:
 
-   Der erste Teil davon — die **Bestätigungs-PIN** — ist erledigt: sie lässt sich unter `/account` selbst setzen und ändern. **Offen bleibt das Zurücksetzen einer vergessenen PIN.** Der vorgesehene Weg ist nicht, dass die Administration eine neue vergibt, sondern dass sie die hinterlegte **löscht**, ohne je eine zu kennen; das Konto steht danach wie ein frisches da. Das gehört zur Benutzerverwaltung und kommt mit ihr.
+   **Stammdaten ließen sich in der Anwendung nicht erfassen — und das war Programmierarbeit.** Aufgefallen bei der Frage, was ohne Altsystem an die Stelle der Datenmigration tritt: `docs/10` führt sie als „**falls Altsystem vorhanden**" und stellt die andere Hälfte der Frage nie. Standort, Kunde, Produkt, Benutzer, Mitarbeiter und Rollenzuweisung entstehen ausschließlich im Seed mit fest verdrahteten Demo-Werten; es gibt dafür weder Dienst noch Route noch Bildschirm. Das Projektformular bietet Auswahllisten für Standort und Kunde, die ohne diese Zeilen leer bleiben — ein Pilot kann sein erstes echtes Projekt also gar nicht anlegen. Erhoben und im Einzelnen belegt; die Reihenfolge ist Organisation → Standort → Kunde → **Projekt** → Produkt (das Produkt hängt am Projekt, nicht am Standort). Zwei Entscheidungen hängen daran: für Kunde und Produkt gibt es **kein Berechtigungsatom** (der Katalog hat 58, keines davon passt), und Abteilung und Arbeitsplatz haben **keinen Eindeutigkeits-Constraint** — mit einem Formular davor sind Dubletten eine Frage der Zeit.
+
+   Zwei Entscheidungen daraus sind so gefallen: die neuen Atome heißen `customer.manage` und `product.manage` statt ein bestehendes still mitzubenutzen — eine zweite, unbenannte Bedeutung eines Atoms lässt sich nicht prüfen und steht in keiner Matrix. Und `product.manage` liegt bei der **Projektleitung**, nicht bei der Administration, weil das Produkt am Projekt hängt.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 

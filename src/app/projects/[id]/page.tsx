@@ -4,6 +4,8 @@ import { getProject } from '@/domain/projects/project-queries';
 import { listDocuments } from '@/domain/documents/document-queries';
 import { listProductionPlans } from '@/domain/production-plans/plan-queries';
 import { listProductionOrders } from '@/domain/production-orders/order-queries';
+import { listProductsForProject } from '@/domain/projects/lookup-queries';
+import { CreateProductForm } from '@/components/CreateProductForm';
 import { transitionProjectStatusAction } from '../actions';
 import { isValidProjectTransition, type ProjectStatus } from '@/domain/projects/project-status';
 import { StatusChip } from '@/components/StatusChip';
@@ -20,11 +22,12 @@ const ALL_STATUSES: ProjectStatus[] = [
 export default async function ProjectDetailPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const actor = await requirePageAuth();
-  const [project, documents, plans, orders] = await Promise.all([
+  const [project, documents, plans, orders, products] = await Promise.all([
     getProject(actor, params.id),
     listDocuments(actor, { projectId: params.id }),
     listProductionPlans(actor, { projectId: params.id }),
     listProductionOrders(actor, { projectId: params.id }),
+    listProductsForProject(actor, params.id),
   ]);
 
   const nextStatuses = ALL_STATUSES.filter((s) =>
@@ -88,6 +91,24 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
         </tbody>
       </table>
       <Link href={`/projects/${project.id}/documents/new`}>+ Dokument hochladen</Link>
+
+      {/* Produkte stehen vor den Plänen, weil ein Plan eines braucht. Ohne
+          Formular hier entstanden sie bis Phase 7 ausschließlich im Seed. */}
+      <h2>Produkte</h2>
+      {products.length === 0 ? (
+        <p className="empty-state">
+          Noch kein Produkt. Ohne Produkt lässt sich kein Fertigungsplan anlegen.
+        </p>
+      ) : (
+        <ul>
+          {products.map((product) => (
+            <li key={product.id}>
+              <strong>{product.productNumber}</strong> — {product.name}
+            </li>
+          ))}
+        </ul>
+      )}
+      <CreateProductForm projectId={project.id} />
 
       <h2>Fertigungspläne</h2>
       <table>
