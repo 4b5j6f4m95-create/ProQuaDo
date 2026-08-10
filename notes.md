@@ -22,7 +22,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
   **Bemerkenswert an dieser Phase**: nahezu jeder gefundene Fehler lag **nicht** im Domänendienst, sondern in der Schicht darüber (Server Action, Formular, Client-Zustand) oder in der Kombination einzeln korrekt getesteter Bausteine. Keiner davon war durch Typecheck, Unit-, Integrationstests oder `next build` sichtbar; gefunden hat sie durchweg das Durchspielen im Browser. Die Liste steht unter „Bekannte Stolpersteine", die Konsequenz als Arbeitsregel am Ende.
 
-- **Vor dem Piloten weiterhin offen, und nichts davon ist Programmierarbeit**: (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** setzen — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft; (c) **Restore-Probe** nach docs/09 Ebene 10 — der Lasttest derselben Zeile ist inzwischen umgesetzt und gelaufen, siehe „Lasttest" unter den Test-Kommandos; (d) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt.
+- **Vor dem Piloten weiterhin offen, und nichts davon ist Programmierarbeit**: (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** setzen — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft; (c) **erledigt** — Lasttest und Restore-Probe sind umgesetzt und gelaufen (siehe die gleichnamigen Abschnitte unter den Test-Kommandos); in der Zielumgebung bleibt zu tun, die Probe gegen das **echte** Backup-Verfahren zu fahren statt gegen ein im Test erzeugtes; (d) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt.
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
@@ -575,6 +575,26 @@ Vier Dinge, die aus diesen Zahlen folgen:
 - **Alles bleibt korrekt.** Null Deadlocks, null abgewiesene Kommandos, alle 200 Stapel vollständig angewendet. Unter Last wird das System langsam, nicht falsch.
 
 **Bewusst nicht in der CI.** Messwerte hängen an der Maschine; ein Gate, das je nach Runner-Auslastung rot wird, erzieht dazu, rote Läufe zu ignorieren. Der Lauf prüft die Ziele trotzdem und endet mit Exit-Code 1, wenn eines gerissen wird — für einen Lauf von Hand vor einem Release ist das die richtige Härte.
+
+### Restore-Probe (docs/09 Ebene 10)
+
+```bash
+pnpm run test:restore                                  # ~10 s plus Containerstart
+RESTORE_DRILL_FAULT=missing-file pnpm run test:restore # muss ROT enden
+RESTORE_DRILL_FAULT=missing-row  pnpm run test:restore # muss ROT enden
+```
+
+Der Ablauf ist der aus docs/09 und endet ausdrücklich nicht beim erfolgreichen Einspielen: Quellumgebung mit echten Daten füllen (Dokument mit Datei, Auftrag mit Foto, Messwert, PIN-Bestätigung, Produktfreigabe), sichern (`pg_dump` plus alle Objekte), **zweite, leere** Umgebung starten, zurücksichern, prüfen.
+
+Drei Entscheidungen dahinter:
+
+- **Zwei getrennte Umgebungen, nicht eine.** Ein Restore in dieselbe Datenbank prüft, ob ein Dump lesbar ist — nicht, ob aus dem Backup allein ein arbeitsfähiges System entsteht. Nur die zweite Frage stellt sich am Tag des Ausfalls.
+- **Der Beweis ist die Produktionsakte.** Sie wird nie gespeichert, sondern bei jedem Aufruf aus den Primärdaten abgeleitet (Masterprompt Kap. 10) — stimmt sie zeichengleich überein, stimmt alles, woraus sie besteht. Ausgenommen sind genau zwei Felder, `dataAsOf` und `generatedAt`, die den Zeitpunkt des Lesens festhalten und sich unterscheiden **müssen**. Jede weitere Ausnahme wäre eine Abweichung, die die Probe nicht mehr sieht.
+- **Die Probe kann fehlschlagen, und das ist nachgewiesen.** `RESTORE_DRILL_FAULT` schleust einen Schaden ein: eine gelöschte Datei oder eine gelöschte Zeile. Beide Läufe enden rot, mit Fundstelle — die fehlende Datei melden zwei Prüfungen samt `photo_evidence`-ID, die fehlende Zeile meldet der Zeilenvergleich **und** der Aktenvergleich. Eine Wiederherstellungsprüfung, die noch nie fehlgeschlagen ist, sieht aus wie eine Kontrolle.
+
+**Was die Probe nebenbei belegt:** `pg_dump` sichert eine Datenbank, **keine Rollen**. Ohne vorher angelegte `proquado_app` scheitert das Einspielen am ersten GRANT. Genau diese Reihenfolge steht in docs/12 §3.1 — hier wird sie bei jedem Lauf ausgeführt statt nur behauptet.
+
+**Nicht in der CI**, wie der Lasttest: sie braucht zwei Container-Paare und Docker-Zugriff für `pg_dump`. Vorgesehen ist der wöchentliche Lauf aus docs/01.
 
 ### Abgedeckte Negativtests (alle 15 grün)
 
