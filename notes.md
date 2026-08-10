@@ -52,6 +52,8 @@ Dieser Lauf legte den schwersten Fehler der Phase offen: die CSP verhinderte in 
 
 Eine Beobachtung ohne Fehlerwert: bei totem Server steht dort weiter „🟢 Online", weil `navigator.onLine` den **Verbindungsstatus des Geräts** meldet, nicht die Erreichbarkeit des Servers. In der Halle (WLAN weg) stimmt die Anzeige; bei einem Serverausfall im Netz stimmt sie nicht. Die Synchronisation hängt nicht daran — sie scheitert dann am `fetch` und behält die Warteschlange.
 
+**Betriebsdokumentation:** [docs/12](docs/12_DEPLOYMENT.md) sagt, was ein Server braucht — Komponenten, Umgebungsvariablen, was nur in Produktion greift, Health, Backup, Dimensionierung aus dem Lasttest und eine Checkliste vor dem Piloten. Zwei Dinge daraus sind beim Schreiben erst aufgefallen: dass die Migration die Datenbankrolle mit einem Passwort aus dem Repository anlegt, wenn man sie nicht vorher selbst anlegt, und dass die CSP jeden Upload blockiert hätte (siehe Stolpersteine).
+
 Die ersten 10 Architekturdokumente in `docs/` sind vor der Implementierung entstanden und sollten bei Unklarheiten zuerst konsultiert werden. `docs/11_OFFLINE_INVARIANT_REVIEW.md` ist anderer Art: ein Prüfbericht nach der Implementierung, entstanden aus dem von docs/10 geforderten Phase-5-Gate.
 
 **ADRs:** vollständig — 001 (Auth, mit Nachtrag zur Sitzungsdauer), 002 (Offline-Speicher), 003 (Dateispeicher), 004 (Audit-Härtung), 005 (Signaturverfahren, in Phase 7 nachgeholt, mit Nachtrag zur PIN-Sperre), 006 (Mandantenmodell), 007 (Export-Jobs, in Phase 6 nachgeholt), 008 (ausgehende Integrationen, Phase 7). [ADR-005](docs/adr/ADR-005-signature-method.md) schreibt nur nieder, was seit Phase 3 gilt und worauf Code-Kommentare seither verwiesen (PIN + Audit-Trail, keine qualifizierte elektronische Signatur). Wer daran arbeitet, sollte vor allem einen Punkt daraus kennen: der `signature_data`-Digest ist **keine** Signatur — er ist über keinen geheimen Schlüssel gebildet, die Zurechenbarkeit trägt der append-only Audit-Trail (ADR-004). Die von ADR-005 ursprünglich als größte Lücke benannte fehlende PIN-Fehlversuchssperre ist seit Phase 7 geschlossen (Nachtrag im ADR).
@@ -157,9 +159,9 @@ Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der al
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
 
-Inzwischen 27 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
+Inzwischen 28 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
 
-- **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
+- **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „Dieselbe CSP hätte in Production jeden Upload verhindert", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
 - **Die Anmeldung schlägt fehl oder zeigt den falschen Benutzer**: „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen" (die Meldung lautet „Access Denied" und meint etwas anderes), „Es gab keine Abmeldung", „Der Seed legt nach dem ersten Login Doppelbenutzer an".
 - **Der Offline-/Sync-Pfad verhält sich unerwartet**: „Der Offline-Fluss konnte nie synchronisieren", „Zwei Klicks im selben Tick", „Ein geteiltes Tablet konnte den Benutzer nicht wechseln", „Sitzungsdauer und Access-Token-Dauer".
 - **Eine Schaltfläche tut nichts oder die Seite bricht ab**: „Der Abschlussknopf war dauerhaft gesperrt", „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg".
@@ -197,6 +199,21 @@ Behoben mit einer Nonce je Anfrage (`src/middleware.ts`): Next.js stempelt die N
 - Bei einem Projekt mit `src/`-Verzeichnis gehört die Datei nach **`src/middleware.ts`**. Im Projektwurzelverzeichnis wird sie stillschweigend ignoriert; erkennbar nur daran, dass `.next/server/middleware-manifest.json` nach dem Build `"middleware": {}` enthält.
 
 **Lehre:** Was nur in Production greift, muss auch einmal in Production laufen. Eine Absicherung, die in der gesamten Prüfkette abgeschaltet ist, ist ungeprüft — unabhängig davon, wie grün die Kette aussieht.
+
+### Dieselbe CSP hätte in Production **jeden Upload** verhindert
+
+Aufgefallen beim Zusammenstellen der Betriebsdokumentation, also nicht durch einen Test, sondern durch die Frage „was braucht ein Server eigentlich". Die Antwort führte auf `connect-src 'self'` — und darauf, dass Fotos und Dokumente vom **Browser** direkt in den Objektspeicher gehen (presignierte URL, ADR-003), also auf eine fremde Origin. Diese Direktive verbietet genau das.
+
+Nachgestellt mit einem echten Upload gegen den Production-Build (`test/e2e/document-upload.spec.ts`), im Wortlaut des Browsers:
+
+```
+Connecting to 'http://localhost:9010/…' violates the following Content Security
+Policy directive: "connect-src 'self'". The action has been blocked.
+```
+
+Kein Foto aus der Halle, kein Dokument in die Akte — der Nachweispfad, um den dieses ganze System gebaut ist. Behoben, indem `connect-src` die Origin des Objektspeichers aufnimmt, abgeleitet aus `S3_ENDPOINT` (und ohne den aus Region und Bucket, für echtes AWS). Dieselbe Machart wie beim OIDC-Issuer in `form-action`: aus der Konfiguration abgeleitet, nicht als Domain hineingeschrieben.
+
+**Der eigentliche Punkt ist die Wiederholung.** Es ist derselbe Fehler wie „Dieselbe CSP verhinderte in Production jede Hydration", nur eine Direktive weiter — und er hat den ersten überlebt, obwohl damals eigens ein Production-Lauf gemacht wurde. Der Grund: dieser Lauf hat die Seiten geöffnet, aber keine Datei hochgeladen. Eine Absicherung, die in der Entwicklung abgeschaltet ist, muss in Production nicht einmal _laufen_, sondern in Production **benutzt** werden — jeder Pfad einzeln. Die Konsequenz steht jetzt als Zusicherung da: `production-csp.spec.ts` prüft den Header, `document-upload.spec.ts` lädt tatsächlich hoch.
 
 ### Der Offline-Fluss konnte nie synchronisieren — der optimistische Sperrtest schlug gegen die eigene Änderung an
 

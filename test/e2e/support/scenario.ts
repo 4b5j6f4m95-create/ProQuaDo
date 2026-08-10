@@ -402,6 +402,30 @@ export async function createExecutionScenario(
   };
 }
 
+/**
+ * Ein Dokument mit einer DRAFT-Revision **ohne Datei** — der Zustand, in dem
+ * der Bildschirm das Upload-Feld anbietet.
+ */
+export async function createUploadableDocument(): Promise<{
+  documentId: string;
+  documentNumber: string;
+}> {
+  const context = await getDemoContext();
+  const { projectId } = await createProject(context);
+  const suffix = randomUUID().slice(0, 8);
+  const documentNumber = `E2E-UP-${suffix}`;
+
+  const { document } = await createDocument({
+    actor: context.actors.projectLead,
+    projectId,
+    documentNumber,
+    title: 'E2E Upload-Prüfung',
+    firstRevision: { title: 'E2E Upload-Prüfung Rev. 01' },
+  });
+
+  return { documentId: document.id, documentNumber };
+}
+
 export interface PlanningScenario {
   planRevisionId: string;
   planStepTitle: string;
