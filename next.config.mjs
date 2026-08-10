@@ -27,7 +27,7 @@ const nextConfig = {
   // The Content-Security-Policy is NOT set here. It needs a per-request
   // nonce so that Next.js' own inline scripts (the RSC payload, the
   // hydration bootstrap) are allowed while injected ones are not, and a
-  // static header cannot carry one — see middleware.ts, which also records
+  // static header cannot carry one — see src/proxy.ts, which also records
   // what the previous static `script-src 'self'` did to the production
   // build.
   async headers() {

@@ -1,29 +1,35 @@
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { FlatCompat } from '@eslint/eslintrc';
+import nextCoreWebVitals from 'eslint-config-next/core-web-vitals';
+import typescriptEslint from '@typescript-eslint/eslint-plugin';
+import prettier from 'eslint-config-prettier';
 
 /**
  * ESLint-Konfiguration im Flat-Format. Ersetzt `.eslintrc.json`, weil ESLint
  * ab Version 9 kein anderes Format mehr liest.
  *
- * **`FlatCompat` statt Neuschreiben.** `next/core-web-vitals` und
- * `plugin:@typescript-eslint/recommended` liegen weiterhin als klassische
- * Konfigurationen vor; sie hier von Hand nachzubauen hieße, ihre Regellisten
- * zu kopieren und bei jeder Aktualisierung nachzuziehen. Die Kompatibilitäts-
- * schicht ist die offizielle Brücke dafür und hält die Quelle bei den
- * Paketen, wo sie hingehört.
+ * **Die Regellisten gehören weiterhin den Paketen, nicht uns** — nur der Weg
+ * dorthin hat sich geändert. Bis ESLint 9 kamen `next/core-web-vitals`,
+ * `plugin:@typescript-eslint/recommended` und `prettier` als klassische
+ * Konfigurationen über `FlatCompat` herein. Seit ESLint 10 und
+ * `eslint-config-next` 16 liefern alle drei Pakete Flat-Konfigurationen
+ * unmittelbar; die Kompatibilitätsschicht (und mit ihr `@eslint/eslintrc`)
+ * ist damit überflüssig geworden. Nachgebaut wird nach wie vor nichts.
  *
- * Die Übersetzung wurde nicht geglaubt, sondern verglichen: `eslint
- * --print-config` vor und nach der Umstellung, für je eine Datei aus
+ * **Ein Unterschied, den man kennen muss:** `eslint-config-next/core-web-vitals`
+ * registriert seit v16 zwar Parser und Plugin von `@typescript-eslint`, bringt
+ * aber **keine** Regel daraus mit (`next/typescript` hat null Regeln). Ohne
+ * den ausdrücklichen Eintrag `flat/recommended` unten wäre die halbe
+ * TypeScript-Regelmenge stillschweigend verschwunden — genau die Art
+ * Lockerung, die eine Konfiguration, die bloß „läuft", nicht anzeigt.
+ *
+ * Die Übersetzung wurde deshalb wieder nicht geglaubt, sondern verglichen:
+ * `eslint --print-config` vor und nach der Umstellung, für je eine Datei aus
  * Anwendung, Komponenten, E2E-Tests, Seed und Lasttest. Gleiche Regeln,
- * gleiche Ausnahmen — sonst wäre die Umstellung eine stille Lockerung
- * gewesen.
+ * gleiche Ausnahmen — dasselbe Vorgehen wie bei der Umstellung auf das
+ * Flat-Format selbst.
  *
  * Reihenfolge zählt im Flat-Format: spätere Einträge überschreiben frühere,
  * und `ignores` in einem Eintrag ohne `files` gilt global.
  */
-
-const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta.url)) });
 
 const config = [
   {
@@ -41,7 +47,9 @@ const config = [
     ],
   },
 
-  ...compat.extends('next/core-web-vitals', 'plugin:@typescript-eslint/recommended', 'prettier'),
+  ...nextCoreWebVitals,
+  ...typescriptEslint.configs['flat/recommended'],
+  prettier,
 
   {
     rules: {

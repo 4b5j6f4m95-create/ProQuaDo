@@ -121,7 +121,7 @@ Diese Mechanismen sind in der Entwicklung abgeschaltet. Jeder von ihnen hat in d
 
 | Mechanismus                | Bedingung                | Wirkung                                                                     |
 | -------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
-| Content-Security-Policy    | `NODE_ENV=production`    | Nonce je Anfrage; `src/middleware.ts`                                         |
+| Content-Security-Policy    | `NODE_ENV=production`    | Nonce je Anfrage; `src/proxy.ts`                                              |
 | Verbot des Scanner-Stubs   | `NODE_ENV=production`    | `MALWARE_SCANNER=stub` → harter Fehler                                        |
 | Gemeinsamer Rate-Limit-Speicher | `NODE_ENV=production` | `rate_limit_windows` statt prozesslokal                                       |
 | Service Worker             | Production-Build         | Offline-Rückfall; in `next dev` bewusst nicht registriert                     |
