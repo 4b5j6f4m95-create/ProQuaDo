@@ -135,6 +135,17 @@ model Department {
   employees    Employee[]
   planSteps    PlanStep[]
 
+  // Eindeutigkeit kam erst mit dem Formular. Solange Abteilungen nur im Seed
+  // entstanden, war sie entbehrlich; vor einer Eingabemaske sind Dubletten
+  // eine Frage der Zeit — und eine zweite „Montage" am selben Standort macht
+  // jede Auswahlliste mehrdeutig.
+  //
+  // Der Name gilt je STANDORT, nicht je Organisation: zwei Werke dürfen beide
+  // eine Montage haben. Das Kürzel dagegen ist organisationsweit, damit es als
+  // Kennung taugt — es ist optional, und Postgres behandelt NULL-Werte als
+  // verschieden, mehrere Abteilungen ohne Kürzel bleiben also erlaubt.
+  @@unique([organizationId, siteId, name])
+  @@unique([organizationId, code])
   @@index([organizationId])
   @@index([siteId])
   @@map("departments")
@@ -155,6 +166,9 @@ model WorkCenter {
   department   Department   @relation(fields: [departmentId], references: [id])
   planSteps    PlanStep[]
 
+  // Wie bei der Abteilung: je ABTEILUNG eindeutig, nicht organisationsweit —
+  // „Prüfplatz 1" darf es in jeder Abteilung geben.
+  @@unique([organizationId, departmentId, name])
   @@index([organizationId])
   @@index([departmentId])
   @@map("work_centers")

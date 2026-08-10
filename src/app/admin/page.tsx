@@ -1,8 +1,14 @@
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
-import { listSites, listCustomers } from '@/domain/projects/lookup-queries';
+import {
+  listSites,
+  listCustomers,
+  listDepartmentsWithWorkCenters,
+} from '@/domain/projects/lookup-queries';
 import { listUsersForAdministration } from '@/domain/identity/user-administration';
 import {
   CreateSiteForm,
+  CreateDepartmentForm,
+  CreateWorkCenterForm,
   CreateCustomerForm,
   InviteUserForm,
   RoleForms,
@@ -23,10 +29,11 @@ import {
  */
 export default async function AdminPage() {
   const actor = await requirePageAuth();
-  const [users, sites, customers] = await Promise.all([
+  const [users, sites, customers, departments] = await Promise.all([
     listUsersForAdministration(actor),
     listSites(actor),
     listCustomers(actor),
+    listDepartmentsWithWorkCenters(actor),
   ]);
 
   return (
@@ -49,6 +56,34 @@ export default async function AdminPage() {
         </ul>
       )}
       <CreateSiteForm />
+
+      {/* Abteilung und Arbeitsplatz stehen direkt hinter dem Standort, weil
+          sie an ihm hängen — und der Planschritt verweist optional auf beide. */}
+      <h2>Abteilungen und Arbeitsplätze</h2>
+      {departments.length === 0 ? (
+        <p className="empty-state">
+          Noch keine Abteilung. Ein Planschritt kann ohne sie auskommen — wer Zuständigkeiten
+          abbilden will, legt hier an.
+        </p>
+      ) : (
+        <ul>
+          {departments.map((department) => (
+            <li key={department.id}>
+              <strong>{department.site.name}</strong> · {department.name}
+              {department.code ? ` (${department.code})` : ''}
+              {department.workCenters.length > 0 && (
+                <ul>
+                  {department.workCenters.map((workCenter) => (
+                    <li key={workCenter.id}>{workCenter.name}</li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <CreateDepartmentForm sites={sites} />
+      <CreateWorkCenterForm departments={departments} />
 
       <h2>Kunden</h2>
       {customers.length === 0 ? (

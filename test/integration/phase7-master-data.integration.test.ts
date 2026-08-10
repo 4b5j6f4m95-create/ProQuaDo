@@ -27,6 +27,8 @@ let seedDemoUsers: typeof import('@/domain/identity/seed-organization').seedDemo
 let createSite: typeof import('@/domain/master-data/master-data').createSite;
 let createCustomer: typeof import('@/domain/master-data/master-data').createCustomer;
 let createProduct: typeof import('@/domain/master-data/master-data').createProduct;
+let createDepartment: typeof import('@/domain/master-data/master-data').createDepartment;
+let createWorkCenter: typeof import('@/domain/master-data/master-data').createWorkCenter;
 let inviteUser: typeof import('@/domain/identity/user-administration').inviteUser;
 let assignRole: typeof import('@/domain/identity/user-administration').assignRole;
 let revokeRole: typeof import('@/domain/identity/user-administration').revokeRole;
@@ -58,7 +60,7 @@ beforeAll(async () => {
   process.env.SERVER_NODE_ID = 'integration-test';
 
   ({ seedOrganizationRbac, seedDemoUsers } = await import('@/domain/identity/seed-organization'));
-  ({ createSite, createCustomer, createProduct } =
+  ({ createSite, createCustomer, createProduct, createDepartment, createWorkCenter } =
     await import('@/domain/master-data/master-data'));
   ({ inviteUser, assignRole, revokeRole, clearConfirmationPin } =
     await import('@/domain/identity/user-administration'));
@@ -152,6 +154,84 @@ describe('Standort und Kunde', () => {
     });
     await expect(
       createCustomer({ actor: worker, customerNumber: 'X', name: 'X' }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+  });
+});
+
+describe('Abteilung und Arbeitsplatz', () => {
+  it('gliedert einen Standort — und derselbe Name ist an einem anderen Standort erlaubt', async () => {
+    const { admin } = await seedFixtures('org-structure');
+    const werkNord = await createSite({ actor: admin, code: 'N', name: 'Werk Nord' });
+    const werkSued = await createSite({ actor: admin, code: 'S', name: 'Werk Süd' });
+
+    const montageNord = await createDepartment({
+      actor: admin,
+      siteId: werkNord.id,
+      name: 'Montage',
+      code: 'MO-N',
+    });
+    expect(montageNord.siteId).toBe(werkNord.id);
+
+    // Der Name gilt je Standort: in einem Mehrwerksbetrieb wäre alles andere
+    // schlicht falsch.
+    await expect(
+      createDepartment({ actor: admin, siteId: werkSued.id, name: 'Montage', code: 'MO-S' }),
+    ).resolves.toBeTruthy();
+
+    // Am selben Standort nicht.
+    await expect(
+      createDepartment({ actor: admin, siteId: werkNord.id, name: 'Montage' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('hält das Kürzel organisationsweit eindeutig, lässt es aber weg', async () => {
+    const { admin } = await seedFixtures('dept-code');
+    const site = await createSite({ actor: admin, code: 'W', name: 'Werk' });
+
+    await createDepartment({ actor: admin, siteId: site.id, name: 'Montage', code: 'MO' });
+    await expect(
+      createDepartment({ actor: admin, siteId: site.id, name: 'Prüfung', code: 'MO' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+
+    // Zwei ohne Kürzel bleiben erlaubt — der Unique-Index behandelt NULL-Werte
+    // als verschieden, und das ist hier die gewollte Auslegung.
+    await createDepartment({ actor: admin, siteId: site.id, name: 'Lager' });
+    await expect(
+      createDepartment({ actor: admin, siteId: site.id, name: 'Versand' }),
+    ).resolves.toBeTruthy();
+  });
+
+  it('legt Arbeitsplätze je Abteilung an, mit demselben Namen in einer anderen', async () => {
+    const { admin } = await seedFixtures('work-centers');
+    const site = await createSite({ actor: admin, code: 'W', name: 'Werk' });
+    const montage = await createDepartment({ actor: admin, siteId: site.id, name: 'Montage' });
+    const pruefung = await createDepartment({ actor: admin, siteId: site.id, name: 'Prüfung' });
+
+    await createWorkCenter({ actor: admin, departmentId: montage.id, name: 'Platz 1' });
+    await expect(
+      createWorkCenter({ actor: admin, departmentId: pruefung.id, name: 'Platz 1' }),
+    ).resolves.toBeTruthy();
+    await expect(
+      createWorkCenter({ actor: admin, departmentId: montage.id, name: 'Platz 1' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('verlangt einen vorhandenen Standort beziehungsweise eine vorhandene Abteilung', async () => {
+    const { admin } = await seedFixtures('structure-missing');
+    const nichtVorhanden = '00000000-0000-4000-8000-000000000000';
+    await expect(
+      createDepartment({ actor: admin, siteId: nichtVorhanden, name: 'Montage' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      createWorkCenter({ actor: admin, departmentId: nichtVorhanden, name: 'Platz 1' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('lässt einen Worker nichts davon anlegen', async () => {
+    const { admin, worker } = await seedFixtures('structure-denied');
+    const site = await createSite({ actor: admin, code: 'W', name: 'Werk' });
+    await expect(
+      createDepartment({ actor: worker, siteId: site.id, name: 'Montage' }),
     ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
   });
 });

@@ -2,7 +2,12 @@
 
 import { revalidatePath } from 'next/cache';
 import { requireAuthContext } from '@/lib/authz/require-permission';
-import { createSite, createCustomer } from '@/domain/master-data/master-data';
+import {
+  createSite,
+  createCustomer,
+  createDepartment,
+  createWorkCenter,
+} from '@/domain/master-data/master-data';
 import {
   inviteUser,
   assignRole,
@@ -50,6 +55,40 @@ export async function createSiteAction(
       timezone: String(formData.get('timezone') ?? '') || undefined,
     });
     return `Standort ${site.code} angelegt.`;
+  });
+}
+
+export async function createDepartmentAction(
+  _prev: AdminFormState,
+  formData: FormData,
+): Promise<AdminFormState> {
+  return guarded(async () => {
+    const actor = await requireAuthContext();
+    const department = await createDepartment({
+      actor,
+      siteId: String(formData.get('siteId') ?? ''),
+      name: String(formData.get('name') ?? ''),
+      code: String(formData.get('code') ?? '') || undefined,
+      description: String(formData.get('description') ?? '') || undefined,
+    });
+    return `Abteilung ${department.name} angelegt.`;
+  });
+}
+
+export async function createWorkCenterAction(
+  _prev: AdminFormState,
+  formData: FormData,
+): Promise<AdminFormState> {
+  return guarded(async () => {
+    const actor = await requireAuthContext();
+    const workCenter = await createWorkCenter({
+      actor,
+      departmentId: String(formData.get('departmentId') ?? ''),
+      name: String(formData.get('name') ?? ''),
+      description: String(formData.get('description') ?? '') || undefined,
+      equipmentRef: String(formData.get('equipmentRef') ?? '') || undefined,
+    });
+    return `Arbeitsplatz ${workCenter.name} angelegt.`;
   });
 }
 

@@ -20,6 +20,23 @@ export async function listCustomers(actor: Actor) {
   );
 }
 
+/**
+ * Abteilungen mit ihren Arbeitsplätzen, für die Administration und für die
+ * Auswahl am Planschritt. `site.manage`, weil beides zum Standort gehört.
+ */
+export async function listDepartmentsWithWorkCenters(actor: Actor) {
+  await assertPermission(actor, 'site.manage');
+  return withOrgContext(actor.organizationId, (tx) =>
+    tx.department.findMany({
+      include: {
+        site: { select: { name: true } },
+        workCenters: { select: { id: true, name: true }, orderBy: { name: 'asc' } },
+      },
+      orderBy: [{ site: { name: 'asc' } }, { name: 'asc' }],
+    }),
+  );
+}
+
 export async function listProductsForProject(actor: Actor, projectId: string) {
   await assertPermission(actor, 'project.view');
   return withOrgContext(actor.organizationId, (tx) =>

@@ -37,13 +37,13 @@ test.describe('als Administration', () => {
     await page.goto('/admin');
     await expect(page.getByRole('heading', { name: 'Administration' })).toBeVisible();
 
-    await page.getByRole('heading', { name: 'Standort anlegen' }).scrollIntoViewIfNeeded();
-    await page.getByLabel('Kürzel').fill(code);
-    await page
-      .locator('form')
-      .filter({ hasText: 'Standort anlegen' })
-      .getByLabel('Name')
-      .fill('E2E-Werk');
+    // Jedes Feld auf sein Formular eingegrenzt: „Kürzel" gibt es auch bei der
+    // Abteilung, „Name" in fast jedem. Ein Locator, der zwei Felder trifft,
+    // scheitert in Playwright zwar laut — aber erst, wenn jemand ein zweites
+    // Formular hinzufügt, und dann sieht es nach einem Fehler der Seite aus.
+    const siteForm = page.locator('form').filter({ hasText: 'Standort anlegen' });
+    await siteForm.getByLabel('Kürzel', { exact: true }).fill(code);
+    await siteForm.getByLabel('Name').fill('E2E-Werk');
     await page.getByRole('button', { name: 'Standort anlegen' }).click();
     await expect(page.getByText(`Standort ${code} angelegt`)).toBeVisible();
 
