@@ -106,10 +106,12 @@ Fehlt die zweite, scheitert die Abmeldung mit „Invalid redirect uri". Sie wird
 pnpm install --frozen-lockfile
 pnpm exec prisma generate
 pnpm exec prisma migrate deploy       # nutzt DIRECT_DATABASE_URL
-pnpm exec tsx prisma/seed.ts          # legt Rollen und Berechtigungsatome an
+pnpm exec prisma db seed              # legt Rollen und Berechtigungsatome an
 pnpm run build
 pnpm run start                        # oder über einen Prozessmanager
 ```
+
+**`prisma db seed`, nicht `tsx prisma/seed.ts`.** Beide führen dasselbe Skript aus, aber `prisma/seed.ts` liest `DIRECT_DATABASE_URL` unmittelbar aus der Prozessumgebung und lädt selbst kein dotenv — das tut `prisma.config.ts`, und das sieht nur die Prisma-CLI. Stehen die Variablen bereits in der Umgebung (der Normalfall in einer Pipeline), funktionieren beide. Liegt die Konfiguration in einer Datei, scheitert die direkte Form mit `SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string` — einer Meldung, die nach einem Datenbankproblem aussieht und keines ist. Der Weg über die CLI funktioniert in beiden Fällen.
 
 **Der Seed ist kein einmaliger Schritt.** Neue Berechtigungsatome gelangen ausschließlich über einen erneuten Lauf in bestehende Organisationen — nichts im Deployment-Pfad ruft `seedOrganizationRbac` automatisch auf. Wer ein Release einspielt, das ein Atom ergänzt hat, und den Seed auslässt, bekommt `PERMISSION_DENIED` für Rechte, die im Code längst vergeben sind. Der Seed ist idempotent und darf jederzeit erneut laufen.
 

@@ -105,7 +105,7 @@ Dazu `DATABASE_POOL_MAX` **ausdrücklich setzen**: ohne die Variable nimmt der T
 pnpm install --frozen-lockfile
 pnpm exec prisma generate
 pnpm exec prisma migrate deploy       # DIRECT_DATABASE_URL
-pnpm exec tsx prisma/seed.ts          # Rollen und Berechtigungsatome
+pnpm exec prisma db seed              # Rollen und Berechtigungsatome
 pnpm run build
 pnpm run start
 ```
