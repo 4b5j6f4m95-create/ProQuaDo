@@ -31,7 +31,13 @@ Dieses Projekt hat einmal eine Betriebsanweisung veröffentlicht, die beim Aufsc
 | ✅ **ausgeführt**     | genau so gelaufen, mit dem angegebenen Ergebnis                                  |
 | ⚠️ **nicht ausgeführt** | aus docs/12 abgeleitet, in einer echten Zielumgebung noch nicht durchgespielt |
 
-Die ✅-Schritte liefen gegen zwei Wegwerf-Container (PostgreSQL 16) und gegen den lokalen Production-Build. Was Zielhardware, echten Objektspeicher, einen anderen OIDC-Anbieter als Keycloak oder einen TLS-Proxy voraussetzt, konnte hier nicht laufen und ist entsprechend gekennzeichnet.
+Die ✅-Schritte sind gegen eine **eigene Staging-Umgebung** gelaufen, die zu diesem Zweck aufgesetzt wurde: [`infra/staging/docker-compose.staging.yml`](../infra/staging/docker-compose.staging.yml). Sie ist bewusst keine zweite Entwicklungsumgebung — eigener Projektname, eigenes Netz, eigene Ports und Volumes, zwei getrennte Datenbankrollen, `clamd` fest dabei statt optional, Bucket mit Versionierung, und Geheimnisse, die nicht aus `.env.example` stammen.
+
+```bash
+docker compose -f infra/staging/docker-compose.staging.yml up -d
+```
+
+Was Zielhardware, echten Objektspeicher, einen anderen OIDC-Anbieter als Keycloak oder einen TLS-Proxy voraussetzt, konnte auch dort nicht laufen und bleibt gekennzeichnet.
 
 ---
 
@@ -58,9 +64,11 @@ Der Unterschied ist also real und nicht theoretisch. Nachgemessen wurde von **au
 
 ---
 
-## Schritt 2 — Objektspeicher ⚠️
+## Schritt 2 — Objektspeicher ✅ (teilweise)
 
 Bucket aus `S3_BUCKET` anlegen, mit Versionierung und serverseitiger Verschlüsselung; die Anwendung erzeugt ihn nicht.
+
+**Versionierung ausgeführt** — der `minio-init`-Dienst der Staging-Compose legt den Bucket an und schaltet sie ein (`mc version enable`), und meldet den Zustand im Protokoll. **Serverseitige Verschlüsselung nicht**: MinIO verlangt dafür einen KMS, und was ein echter Objektspeicher an dieser Stelle bietet, ist Sache der Zielumgebung.
 
 **Die eine Falle, die docs/12 §5 beschreibt und die hier zuschlägt:** der Browser lädt Fotos und Dokumente mit einer presignierten URL **direkt** in den Objektspeicher, und die CSP leitet `connect-src` aus `S3_ENDPOINT` ab. Steht davor ein Proxy oder CDN mit anderer Adresse, blockiert der Browser jeden Upload — bei grünem Server und grünen Tests. Also: die Adresse, unter der der Browser den Speicher erreicht, **ist** die, die in `S3_ENDPOINT` gehört.
 
@@ -70,30 +78,40 @@ Probe: kommt in Schritt 7, weil sie einen laufenden Server braucht.
 
 ---
 
-## Schritt 3 — OIDC-Client ⚠️
+## Schritt 3 — OIDC-Client ✅ (gegen Keycloak)
 
 Beide Listen pflegen, `redirectUris` **und** `post.logout.redirect.uris`. Fehlt die zweite, scheitert die Abmeldung mit „Invalid redirect uri" — und die Abmeldung ist auf einem geteilten Hallentablet der einzige Weg, den Benutzer zu wechseln.
 
-Probe: `curl <OIDC_ISSUER>/.well-known/openid-configuration` muss ein JSON mit `end_session_endpoint` liefern. Die Anwendung ermittelt den Endpunkt darüber, statt ihn zu bilden (ADR-001); fehlt er in der Discovery, funktioniert die Abmeldung nicht, egal was am Client eingetragen ist.
+**Probe, ausgeführt:** `curl <OIDC_ISSUER>/.well-known/openid-configuration` muss ein JSON mit `end_session_endpoint` liefern — in der Staging-Umgebung tut es das (`…/protocol/openid-connect/logout`).
+
+Dabei fiel auf, was ein neuer Port an dieser Stelle kostet: **beide** Listen brauchen ihn. Die Realm-Datei führt jetzt neben 3000 und 3002 auch 3003, in `redirectUris` **und** in `post.logout.redirect.uris`. Die Anwendung ermittelt den Endpunkt darüber, statt ihn zu bilden (ADR-001); fehlt er in der Discovery, funktioniert die Abmeldung nicht, egal was am Client eingetragen ist.
 
 ---
 
-## Schritt 4 — clamd ⚠️
+## Schritt 4 — clamd ✅
 
 Über TCP erreichbar machen, `MALWARE_SCANNER=clamav`, `CLAMAV_HOST`, `CLAMAV_PORT` setzen. Der Stub wird bei `NODE_ENV=production` mit hartem Fehler abgelehnt.
 
 **Auf den Containerstatus ist kein Verlass** — clamd nimmt Verbindungen an, bevor seine Signaturen geladen sind. Verlässlich ist erst die Probe aus Schritt 7.
 
+Ausgeführt: der Container brauchte **30 Sekunden bis `healthy`**, mit bereits vorhandenen Signaturen (das Volume ist mit der Entwicklungsumgebung geteilt). Beim allerersten Start sind es Minuten und ~250 MB Download; wer den Startvorgang einer Umgebung terminiert, sollte damit rechnen.
+
 ---
 
-## Schritt 5 — Geheimnisse ⚠️
+## Schritt 5 — Geheimnisse ✅
 
 Alle aus einem Secret-Store, keines aus `.env.example`. Zwei Werte werden gern verwechselt:
 
 - `AUTH_SECRET` signiert die Sitzung.
 - `RELEASE_TOKEN_SECRET` ist der HMAC-Schlüssel der Release Tokens (docs/06) und muss **ein eigener Wert** sein.
 
-Beide erzeugt `openssl rand -base64 32`.
+Beide erzeugt `openssl rand -base64 32`. Ausgeführt und nachgesehen: die beiden Werte sind verschieden und stehen in keiner `.env.example`.
+
+**Ein Fund dabei, der jede Umgebung betrifft, die ihre Konfiguration in eine Datei schreibt:** `.gitignore` deckte `.env.staging` **nicht** ab. Dort standen `.env` (ein exakter Treffer) und `.env*.local` (verlangt die Endung) — eine frisch erzeugte `.env.staging` samt beider Geheimnisse wäre also eingecheckt worden. Korrigiert zu `.env.*`; nachgeprüft mit `git check-ignore`, und `.env.example` bleibt verfolgt. Wer eine Umgebungsdatei anlegt, sollte das **vor** dem ersten `git add` prüfen:
+
+```bash
+git check-ignore -v .env.<name>
+```
 
 Dazu `DATABASE_POOL_MAX` **ausdrücklich setzen**: ohne die Variable nimmt der Treiber-Adapter zehn Verbindungen, und `connection_limit` in der URL wirkt seit Prisma 7 nicht mehr. Der Lasttest weist die Verbindungszahl als härteste Grenze des Sync aus — das ist kein Feinschliff.
 
@@ -110,7 +128,7 @@ pnpm run build
 pnpm run start
 ```
 
-`migrate deploy` und der Seed sind gegen eine frische Datenbank gelaufen: alle Migrationen angewendet, fünf Demo-Konten und das Demo-Projekt angelegt. `build` und `start` liefen lokal, nicht auf Zielhardware.
+Vollständig gegen die Staging-Umgebung gelaufen: alle 20 Migrationen angewendet, Seed durch, `build` und `start` mit `NODE_ENV=production` auf Port 3003. Nicht auf Zielhardware — das bleibt Schritt 8.
 
 **Der Seed ist kein einmaliger Schritt.** Neue Berechtigungsatome gelangen nur über einen erneuten Lauf in bestehende Organisationen; er ist idempotent und darf jederzeit wieder laufen. Wer ein Release einspielt, das ein Atom ergänzt hat, und den Seed auslässt, bekommt `PERMISSION_DENIED` für Rechte, die im Code längst vergeben sind.
 
@@ -129,16 +147,19 @@ Null, nicht ein Fehler. Genau das ist RLS (ADR-006): die Rolle darf fragen und b
 
 Vier Mechanismen sind in der Entwicklung abgeschaltet, und jeder hat in diesem Projekt schon einmal einen Fehler verdeckt. Alle vier einzeln **benutzen**, nicht nur starten:
 
-| Prüfung          | Vorgehen                                                             | Erwartung                                                        |
+| Prüfung          | Vorgehen                                                             | Ergebnis in dieser Umgebung                                       |
 | ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Readiness        | `GET /api/health/ready`                                              | `status: "ready"`, **`scannerKind: "clamav"`** — nicht `"stub"`   |
-| CSP und Nonce    | eine Seite laden, Header und HTML **derselben** Antwort vergleichen  | die Nonce aus `Content-Security-Policy` steht an den `<script>`-Tags |
-| Upload           | ein Dokument aus dem **Browser** hochladen                           | landet im Objektspeicher; keine `connect-src`-Meldung in der Konsole |
-| Offline-Rückfall | `/offline` laden, Netz trennen, neu laden                            | Seite rendert aus dem Cache, Navigation landet im Offline-Bereich   |
+| Readiness ✅     | `GET /api/health/ready`                                              | `status: "ready"`, **`scannerKind: "clamav"`** — nicht `"stub"`   |
+| CSP und Nonce ✅ | eine Seite laden, Header und HTML **derselben** Antwort vergleichen  | alle **12** `<script>`-Tags tragen die Nonce des Headers            |
+| Abgeleitete Adressen ✅ | `connect-src` und `form-action` im Header ansehen              | `connect-src 'self' http://localhost:9020`, `form-action 'self' http://localhost:8091` — die **Staging**-Adressen, nicht die der Entwicklung |
+| Upload ⚠️        | ein Dokument aus dem **Browser** hochladen                           | braucht eine Anmeldung; hier nicht ausgeführt (siehe unten)         |
+| Offline-Rückfall ⚠️ | `/offline` laden, Netz trennen, neu laden                         | braucht eine Anmeldung; hier nicht ausgeführt                       |
 
 Zur CSP-Probe: die Nonce wird **je Anfrage** neu gezogen. Zwei getrennte `curl`-Aufrufe vergleichen deshalb zwei verschiedene Nonces und schlagen immer fehl — Header und Körper müssen aus einem Aufruf stammen.
 
-Die letzten drei sind zugleich E2E-Tests (`production-csp`, `document-upload`, `offline-shell`) und dort gegen den lokalen Production-Build grün. In der Zielumgebung geht es um das, was die Tests nicht kennen: die echten Adressen, den echten Speicher, den echten Scanner.
+**Warum Upload und Offline-Rückfall hier offen blieben:** beide verlangen eine angemeldete Sitzung, und die Sitzung ist mit `AUTH_SECRET` signiert — das Staging hat ein eigenes, die gespeicherten Anmeldungen der E2E-Suite gelten dort also nicht. Wer die beiden Zeilen schließen will, meldet sich einmal von Hand an und lädt ein Dokument hoch; es dauert zwei Minuten und ist der einzige Weg, den die CSP-Direktive `connect-src` wirklich ausreizt.
+
+Was die dritte Zeile davon vorwegnimmt: die **Adressen stimmen**. Genau daran ist der Upload in Phase 7 gescheitert — nicht am Speicher, sondern daran, dass die CSP eine andere Origin kannte als der Browser ansprach. Alle drei sind zugleich E2E-Tests (`production-csp`, `document-upload`, `offline-shell`) und gegen den lokalen Production-Build grün; was Staging hinzufügt, sind die echten Adressen, der echte Speicher, der echte Scanner.
 
 ---
 

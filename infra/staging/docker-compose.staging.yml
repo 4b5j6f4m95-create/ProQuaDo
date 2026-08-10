@@ -1,0 +1,120 @@
+name: proquado-staging
+
+# Eine Umgebung, die **keine** Entwicklungsumgebung ist.
+#
+# Zweck: die Schrittfolge aus docs/13 wirklich ausführen zu können, statt sie
+# zu behaupten — und die drei Prüfungen zu ermöglichen, die auf keinem
+# Entwicklungsrechner gehen (Sync-Durchsatz, Restore-Probe gegen ein echtes
+# Backup, Penetrationstest).
+#
+# Unterschiede zur Entwicklungs-Compose, und jeder hat einen Grund:
+#
+#   * **Eigener Projektname, eigenes Netz, eigene Ports, eigene Volumes.**
+#     Staging und Entwicklung dürfen sich nicht in die Daten fassen; ein
+#     Restore-Versuch, der die Entwicklungsdatenbank trifft, wäre schlimmer
+#     als keiner.
+#   * **Zwei Datenbankrollen.** Der Container legt `proquado_owner` an;
+#     `proquado_app` wird in docs/13 Schritt 1 **von Hand vor der ersten
+#     Migration** angelegt, denn genau das verhindert, dass die Migration sie
+#     mit dem Passwort aus dem Repository erzeugt.
+#   * **clamd läuft mit**, nicht optional. `MALWARE_SCANNER=stub` wird bei
+#     NODE_ENV=production hart abgelehnt, und das soll hier auch so sein.
+#   * **Bucket mit Versionierung.** docs/12 §3.2 verlangt sie; ohne sie ist
+#     ein überschriebener Nachweis weg.
+#
+# Die Geheimnisse hier sind Staging-Werte und stehen deshalb im Klartext.
+# Für eine echte Umgebung gilt docs/12: alles aus einem Secret-Store.
+#
+# Hochfahren:
+#   docker compose -f infra/staging/docker-compose.staging.yml up -d
+#
+# Der Rest der Schrittfolge steht in docs/13.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # Bewusst NICHT `proquado_app`: die schemabesitzende Rolle ist eine
+      # andere als die, mit der die Anwendung verbindet (ADR-006).
+      POSTGRES_USER: proquado_owner
+      POSTGRES_PASSWORD: staging_owner_secret
+      POSTGRES_DB: proquado
+    ports:
+      - '5443:5432'
+    volumes:
+      - ./.staging-data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U proquado_owner -d proquado']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: proquado_staging
+      MINIO_ROOT_PASSWORD: staging_minio_secret
+    ports:
+      - '9020:9000'
+      - '9021:9001'
+    volumes:
+      - ./.staging-data/minio:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Legt den Bucket an **und schaltet die Versionierung ein** — anders als in
+  # der Entwicklung, wo der Bucket genügt. Ohne Versionierung überschreibt ein
+  # zweiter Upload denselben Nachweis spurlos, und die Akte verweist danach
+  # auf Bytes, die niemand mehr prüfen kann.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set staging http://minio:9000 proquado_staging staging_minio_secret &&
+      mc mb --ignore-existing staging/proquado-documents &&
+      mc version enable staging/proquado-documents &&
+      mc version info staging/proquado-documents
+      "
+
+  clamav:
+    image: clamav/clamav:1.4
+    platform: linux/amd64
+    restart: unless-stopped
+    ports:
+      - '3320:3310'
+    volumes:
+      # Dieselben Signaturen wie die Entwicklungsumgebung: sie sind ~250 MB,
+      # und sie ein zweites Mal zu laden ist weder schneller noch ehrlicher.
+      - ../../.docker-data/clamav:/var/lib/clamav
+    healthcheck:
+      test: ['CMD', 'clamdcheck.sh']
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: staging_keycloak_secret
+      KC_DB: dev-file
+    ports:
+      - '8091:8080'
+    volumes:
+      - ../keycloak:/opt/keycloak/data/import
+
+networks:
+  default:
+    name: proquado_staging
