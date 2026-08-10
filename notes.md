@@ -16,9 +16,12 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
   - _Sicherheit_: **manuelle Überprüfung der Offline-Invariante durchgeführt und protokolliert** ([docs/11](docs/11_OFFLINE_INVARIANT_REVIEW.md)); Geräteidentität wird überall verifiziert statt nur angenommen; Obergrenze aktiver Geräte je Benutzer; `STANDARD_API` erstmals durchgesetzt; Rate Limits instanzübergreifend (`rate_limit_windows`); **PIN-Fehlversuchssperre** ([ADR-005](docs/adr/ADR-005-signature-method.md)-Nachtrag); echter ClamAV mit EICAR-Nachweis und Readiness-Meldung; 17 Angriffstests gegen die Invariante; **CSP auf Nonce umgestellt**, weil die bisherige in Production die Hydration verhinderte.
   - _Funktion_: **Produktfreigabe als eigener Vorgang** — Abschnitt 9 der Akte nennt jetzt eine Entscheidung mit Person, Zeitpunkt, Begründung und kopierter Grundlage, statt nur zusammenzurechnen, ob etwas offen ist; **UI für die Schritt-Dokumentbindung**; **Abmeldung** samt Benutzerwechsel auf geteilten Geräten.
   - _Integration_: **ERP-/Webhook-Anbindung** — Outbox-Ereignisse signiert an registrierte Endpunkte, mit SSRF-Schutz, Wiederholungen und sichtbarem Scheitern ([ADR-008](docs/adr/ADR-008-outbound-integrations.md)).
-  - _Prüfbarkeit_: **E2E-Tests nach docs/09 Ebene 6** — Playwright, und zwar gegen den **Production-Build**, nicht gegen `next dev`. Damit ist die Schicht, in der fast jeder Fehler dieser Phase saß (Server Action, Formularzustand, Hydration), erstmals automatisiert geprüft statt nur von Hand durchgespielt. Dazu **Ebene 9** (axe-core) über dieselben Bildschirme: keine Verstöße bis WCAG 2.2 AA, einschließlich `target-size` — die Zielgrößenregel, an der eine Tablet-Oberfläche für Handschuhe am ehesten scheitern würde.
+  - _Prüfbarkeit_: **E2E-Tests nach docs/09 Ebene 6** — Playwright, und zwar gegen den **Production-Build**, nicht gegen `next dev`. Damit ist die Schicht, in der fast jeder Fehler dieser Phase saß (Server Action, Formularzustand, Hydration), erstmals automatisiert geprüft statt nur von Hand durchgespielt. Dazu **Ebene 9** (axe-core) über dieselben Bildschirme: keine Verstöße bis WCAG 2.2 AA, einschließlich `target-size` — die Zielgrößenregel, an der eine Tablet-Oberfläche für Handschuhe am ehesten scheitern würde. Inzwischen stehen auch **Ebene 8** (Lasttest) und **Ebene 10** (Restore-Probe) als eigene Kommandos — damit ist die Testpyramide aus docs/09 vollständig.
   - _Dokumentation_: ADR-005 nachgeholt, ADR-001 um die Sitzungsdauer ergänzt, ADR-008 neu.
   - Der Rest von Phase 7 ist überwiegend keine Programmierarbeit (Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe, kontrollierter Rollout).
+
+  - _Werkzeugkette_: Node **≥ 22.13**, **Next 15** mit React 19, **Prisma 7** (Treiber-Adapter statt Rust-Engine), **ESLint 9** im Flat-Format, pino 10. Alles an einem Tag angehoben, jedes für sich geprüft — die Begründungen stehen unter „Architekturentscheidungen mit Nachwirkung", die Messwerte beim Lasttest.
+  - _Repository_: **öffentlich**, mit Branch Protection auf `main` (alle fünf CI-Jobs erforderlich, `enforce_admins`), CodeQL, Dependabot und Secret Scanning samt Push Protection. Direkte Pushes auf `main` gehen nicht mehr; alles läuft über PRs.
 
   **Bemerkenswert an dieser Phase**: nahezu jeder gefundene Fehler lag **nicht** im Domänendienst, sondern in der Schicht darüber (Server Action, Formular, Client-Zustand) oder in der Kombination einzeln korrekt getesteter Bausteine. Keiner davon war durch Typecheck, Unit-, Integrationstests oder `next build` sichtbar; gefunden hat sie durchweg das Durchspielen im Browser. Die Liste steht unter „Bekannte Stolpersteine", die Konsequenz als Arbeitsregel am Ende.
 
@@ -70,7 +73,11 @@ pnpm exec tsx prisma/seed.ts
 pnpm run dev
 ```
 
+**Node ≥ 22.13.** Nicht optional und nicht 20: das `packageManager`-Feld schreibt pnpm 11 vor, und das lädt `node:sqlite`. Mit Node 20 scheitert schon `pnpm install` — siehe „Die CI war sieben Phasen lang nie gelaufen".
+
 **Ports:** Postgres `5433`, MinIO `9010`/`9011` (Console), Keycloak `8081`, clamd `3310`, App `3000` (Standard) — siehe unten zu Portkonflikten.
+
+**Verbindungen seit Prisma 7:** Die URLs stehen nicht mehr im Schema. Die Anwendung baut ihren Client mit `DATABASE_URL` (Rolle `proquado_app`, RLS gilt), `prisma migrate` und der Seed lesen `DIRECT_DATABASE_URL` über `prisma.config.ts` (schemabesitzend). Die Poolgröße steuert `DATABASE_POOL_MAX`, **nicht** mehr `connection_limit` in der URL.
 
 `clamav` startet bewusst **nicht** mit — der erste Start lädt ~250 MB Signaturen und braucht Minuten. Wer am Upload-Pfad arbeitet oder den echten Scan sehen will:
 
@@ -122,9 +129,9 @@ Für die Akte: **Suche** öffnen, Seriennummer eingeben, beim Auftrag auf **Prod
 
 Für den Offline-Fluss: **Offline** öffnen (registriert das Gerät beim ersten Aufruf mit Verbindung), **Für Offline vorbereiten** laden, Netzwerk trennen (DevTools → Network → Offline), Schritt starten/erfassen/lokal abschließen, Netzwerk wieder verbinden, **Jetzt synchronisieren**. Konflikte landen unter **Konflikte** (PL/QM entscheiden mit PIN). Der Service Worker läuft nur im Production-Build — in `next dev` würde er HMR-Antworten cachen, siehe `src/components/ServiceWorkerRegistration.tsx`.
 
-### Zustand der lokalen Demo-Daten (Stand Ende Phase 7)
+### Zustand der lokalen Demo-Daten
 
-**Die Container sind gestoppt** (`docker compose down`). Die Daten sind da: Postgres und MinIO liegen unter `./.docker-data/`, ein `docker compose up -d` bringt alles unverändert zurück. Einzige Ausnahme ist **Keycloak**, das kein Volume hat (`KC_DB: dev-file`) und den Realm bei jedem Start neu aus `infra/keycloak/proquado-realm.json` aufbaut — seit die Benutzer-IDs dort festgeschrieben sind, ist das folgenlos, die Anmeldungen funktionieren weiter (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen").
+**Ob die Container laufen, sagt `docker compose ps` — verlass dich nicht auf diesen Absatz.** Die Daten überleben beides: Postgres und MinIO liegen unter `./.docker-data/`, ein `docker compose up -d` bringt alles unverändert zurück. Die Daten sind da: Postgres und MinIO liegen unter `./.docker-data/`, ein `docker compose up -d` bringt alles unverändert zurück. Einzige Ausnahme ist **Keycloak**, das kein Volume hat (`KC_DB: dev-file`) und den Realm bei jedem Start neu aus `infra/keycloak/proquado-realm.json` aufbaut — seit die Benutzer-IDs dort festgeschrieben sind, ist das folgenlos, die Anmeldungen funktionieren weiter (siehe „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen").
 
 Wer die Umgebung übernimmt, findet die Daten darin **nicht** im Auslieferungszustand vor — das ist kein Fehler, aber gut zu wissen:
 
@@ -133,6 +140,7 @@ Wer die Umgebung übernimmt, findet die Daten darin **nicht** im Auslieferungszu
 - Zusätzlich liegen ein Fertigungsplan (`FP-…`, DRAFT) und eine freigegebene Zeichnung (`ZG-…`) im Demo-Projekt, angelegt für den Test der Dokumentbindung.
 - `MALWARE_SCANNER` steht in der lokalen `.env` auf `stub`. Der clamd-Container ist mit heruntergefahren worden; seine Signaturen liegen in `./.docker-data/clamav` und müssen nicht erneut geladen werden.
 - **Jeder E2E-Lauf hinterlässt ein eigenes Projekt** mit Plan, Auftrag und Nachweisen, alles unter dem Präfix `E2E-` (Projektnummer `E2E-PROJ-…`). Absichtlich nicht aufgeräumt: Ausführungsdaten hängen an einem append-only Audit-Trail, und ein Testaufräumen, das genau die Zeilen löscht, deren Unlöschbarkeit die Zusicherung ist, wäre die falsche Übung. Es ginge auch nicht nebenbei — die Fremdschlüssel auf `projects` stehen sämtlich auf `RESTRICT` (nachgesehen in `pg_constraint`), ein `DELETE FROM projects …` scheitert also an Plänen, Aufträgen und Dokumenten. Wenn die Liste wirklich stört, ist der Weg `prisma migrate reset` plus Seed, nicht ein Aufräum-SQL.
+- **Der Lasttest hinterlässt deutlich mehr**: je Lauf ein Projekt `LOAD-P-…` mit einem Plan, bis zu 200 Aufträgen (`LOAD-A-…`), ebenso vielen Geräten und einer großen Akte mit 500 Schritten und 2000 Fotos. Die Projekt- und Auftragslisten sind danach lang. Gleiche Überlegung wie beim E2E-Präfix: nicht aufgeräumt, weil an den Daten ein append-only Audit-Trail hängt. Wer eine aufgeräumte Umgebung braucht, setzt sie zurück (`prisma migrate reset` plus Seed), statt einzelne Zeilen zu löschen.
 - Der Seed ist zuletzt nach dem Hinzukommen von `integration.manage` gelaufen; das Atom ist in der Demo-Organisation vorhanden. **Webhook-Abonnements gibt es keine** — wer die Zustellung ausprobieren will, legt eines an und ruft den Dispatch-Endpunkt von Hand auf (oben unter „Für die ERP-/Webhook-Anbindung").
 
 **Offline-Durchlauf wiederholen** — Ausführungsdaten zurücksetzen, Audit-Trail bleibt (er ist append-only und soll es sein):
@@ -658,7 +666,7 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe. Was bleibt, ist Betrieb und Erprobung — siehe „Stand" oben. Zwei Punkte, die beim nächsten Anlass fällig werden:
+Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe; die Testpyramide aus docs/09 ist seit heute vollständig. Was bleibt, ist Betrieb, Erprobung und das Nachziehen von Abhängigkeiten — siehe „Stand" oben.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 
@@ -669,6 +677,10 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - **Der Testlauf dauert auf dem Runner das Fünffache** (1,6 min gegen 17 s lokal), im Wesentlichen der Production-Build. Wer Tests ergänzt, sollte das einrechnen, bevor er sich über die Wartezeit wundert.
 
    Bis dahin war die Stufe zweimal gescheitert, beide Male vor dem ersten Test — siehe „Die CI war sieben Phasen lang nie gelaufen".
+
+4. **Next 16 und ESLint 10 stehen offen**, beide als Dependabot-PR. Sie hängen zusammen: `eslint-config-next` folgt der Next-Hauptversion, weshalb der ESLint-10-PR den Next-16-Sprung mit einpackt und so nicht mergbar ist. Das Vorgehen, das sich heute bei Next 15 und Prisma 7 bewährt hat: erst auflisten, was im Code bricht, dann die offiziellen Codemods, dann die vollständige Kette **einschließlich E2E** — bei Next 15 waren es 82 Dateien, und Typecheck plus Build hätten dort nicht gereicht.
+
+5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er liegt seit dem Wechsel auf Prisma 7 über dem Ziel aus docs/09 (p95 3,2–3,7 s statt < 3 s). Auf einem Laptop gemessen und deshalb kein Urteil über die reale Anlage — aber der Wert, der beim Schichtwechsel von 200 Tablets zählt, und der einzige aus dem Lasttest, der nicht mit Reserve besteht. Die Reihenfolge der Hebel steht bei den Architekturentscheidungen: zuerst Verbindungsverwaltung, dann alles andere.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
