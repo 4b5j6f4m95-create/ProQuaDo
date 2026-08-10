@@ -47,7 +47,6 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@prisma/adapter-pg": "^7.9.1",
     "@testcontainers/postgresql": "^12.1.0",
