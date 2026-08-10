@@ -15,14 +15,14 @@
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**", "test/e2e/**"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**", "test/e2e/**", "test/load/**"],
       "rules": {
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-non-null-assertion": "off"
       }
     },
     {
-      "files": ["prisma/seed.ts", "scripts/**"],
+      "files": ["prisma/seed.ts", "scripts/**", "test/load/**"],
       "rules": {
         "no-console": "off"
       }
