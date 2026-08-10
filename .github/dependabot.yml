@@ -35,6 +35,34 @@ updates:
           - 'prettier'
       # Next, React und Prisma bleiben einzeln: hier ist eine
       # Hauptversionsanhebung ein Vorgang mit eigenen Folgen, kein Sammelposten.
+    ignore:
+      # ESLint 10 ist blockiert, und zwar nicht bei uns. ESLint 10 entfernt die
+      # alten `context`-Methoden; `eslint-config-next` 16 bringt
+      # `eslint-plugin-react@7.37.5` mit, das `context.getFilename()` weiterhin
+      # aufruft. Der Lauf stirbt sofort und für jede Datei:
+      #
+      #   TypeError: Error while loading rule 'react/display-name':
+      #   contextOrFilename.getFilename is not a function
+      #
+      # Ausweichen geht nicht: 7.37.5 ist der aktuelle Stand des Plugins und
+      # nennt als Peer `^9.7` als Obergrenze. Die Alternativen wären, die
+      # React-Regeln abzuschalten oder die Konfiguration von Hand nachzubauen —
+      # beides tauscht eine Versionsnummer gegen einen Teil der Prüfung.
+      #
+      # Der Eintrag steht hier statt in einem geschlossenen PR, weil ein PR,
+      # der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert,
+      # dazu erzieht, rote Läufe zu übersehen. Die Branch Protection würde ihn
+      # ohnehin nicht durchlassen; das hier spart die Wiederholung.
+      #
+      # WIEDER ENTFERNEN, sobald das Plugin nachzieht — die Probe ist ein
+      # Einzeiler:
+      #
+      #   npm view eslint-plugin-react peerDependencies
+      #
+      # Nennt die Antwort ESLint 10, gehört dieser Block weg. Patch- und
+      # Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter.
+      - dependency-name: eslint
+        versions: ['>=10']
 
   - package-ecosystem: github-actions
     directory: '/'
