@@ -1,0 +1,44 @@
+name: CodeQL
+
+# `sast_scan` aus der Pipeline-Skizze in docs/09_TEST_PYRAMID.md. Eigener
+# Workflow und **kein** erforderlicher Check auf `main`: eine statische
+# Analyse findet Hinweise, keine Beweise, und ein Gate, das an einem
+# Falschbefund hängt, wird über kurz oder lang abgeschaltet statt gelesen.
+# Befunde landen unter Security → Code scanning.
+#
+# Läuft nur, wenn sich Code ändert — nicht bei einer Änderung an notes.md.
+# Dazu wöchentlich, weil neue Regeln auch alten Code betreffen.
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'prisma/**', 'test/**', '.github/workflows/codeql.yml']
+  pull_request:
+    paths: ['src/**', 'prisma/**', 'test/**', '.github/workflows/codeql.yml']
+  schedule:
+    - cron: '17 4 * * 1'
+
+jobs:
+  analyze:
+    name: JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # `security-and-quality` statt der Vorgabe: dieses Projekt lebt von
+          # Zusicherungen, die einzuhalten sind, nicht nur von der Abwesenheit
+          # bekannter Lücken.
+          queries: security-and-quality
+
+      # Kein eigener Build-Schritt: für JavaScript/TypeScript analysiert CodeQL
+      # den Quelltext direkt. Ein `next build` hier wäre dieselbe Arbeit wie im
+      # CI-Workflow, nur ein zweites Mal.
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:javascript-typescript'

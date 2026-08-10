@@ -1,0 +1,44 @@
+version: 2
+
+# `dependency_scan` aus der Pipeline-Skizze in docs/09_TEST_PYRAMID.md.
+# Sicherheitswarnungen und -korrekturen sind am Repository eingeschaltet; hier
+# stehen die *regelmäßigen* Aktualisierungen.
+#
+# Monatlich und gebündelt, nicht täglich und einzeln: jeder Aktualisierungs-PR
+# löst die vollständige Pipeline aus, inklusive E2E-Lauf mit drei Containern.
+# Ein Strom einzelner Patch-PRs kostet mehr Aufmerksamkeit, als er Sicherheit
+# bringt — und Aufmerksamkeit ist das, was am Ende darüber entscheidet, ob
+# jemand hinsieht. Dringendes kommt ohnehin über die Sicherheitswarnungen,
+# unabhängig von diesem Zeitplan.
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # Ein PR je Themengebiet statt einer je Paket. Die Testwerkzeuge
+      # aktualisieren sich fast immer gemeinsam, und ein gescheiterter Lauf
+      # zeigt dann sofort, welche Ecke betroffen ist.
+      test-tooling:
+        patterns:
+          - '@playwright/*'
+          - '@axe-core/*'
+          - 'jest*'
+          - '@types/jest'
+          - 'testcontainers'
+          - '@testcontainers/*'
+      typescript-eslint:
+        patterns:
+          - '@typescript-eslint/*'
+          - 'eslint*'
+          - 'prettier'
+      # Next, React und Prisma bleiben einzeln: hier ist eine
+      # Hauptversionsanhebung ein Vorgang mit eigenen Folgen, kein Sammelposten.
+
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: monthly
+    # Die Node-20-Abkündigung der Actions steht seit dem ersten CI-Lauf als
+    # Warnung in jedem Protokoll. Genau dafür ist dieser Eintrag da.
