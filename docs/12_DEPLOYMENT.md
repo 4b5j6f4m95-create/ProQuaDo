@@ -184,8 +184,8 @@ Gemessen mit `pnpm run test:load` (docs/09 Ebene 8) auf einem Entwicklungsrechne
 
 | Größe                                        | Messwert                            |
 | -------------------------------------------- | ------------------------------------- |
-| Sync-Durchsatz                               | 54–62 Stapel/s (Prisma 7; ~64 unter Prisma 5) |
-| 200 Tablets, Schichtwechsel gleichzeitig     | p95 **3,2–3,7 s** — Ziel docs/09 ist < 3 s und wird gerissen |
+| Sync-Durchsatz                               | 51–62 Stapel/s (Prisma 7 und zod 4; ~64 unter Prisma 5) |
+| 200 Tablets, Schichtwechsel gleichzeitig     | p95 **3,2–3,9 s** — Ziel docs/09 ist < 3 s und wird gerissen |
 | Akte mit 500 Schritten, PDF                  | 0,2 s                                 |
 | Dashboard, 50 gleichzeitig                   | p95 84 ms                             |
 | Speicherbedarf                               | 10–50 GB/Jahr, fotolastig (docs/01)   |

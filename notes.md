@@ -677,14 +677,14 @@ Stellschrauben, alle mit der Vorgabe aus docs/09: `LOAD_DEVICES=200`, `LOAD_STEP
 
 **Ergebnis (MacBook, Postgres im Container, drei Läufe):**
 
-| Szenario                        | Ziel docs/09 | Gemessen                                           |
-| ------------------------------- | ------------ | -------------------------------------------------- |
-| Schichtwechsel-Sync, 200 Geräte | p95 < 3 s    | **3,0–3,1 s** (Prisma 5), **3,2–3,7 s** (Prisma 7) |
-| Deadlocks                       | 0            | 0                                                  |
-| Nicht angenommene Kommandos     | 0            | 0                                                  |
-| Große Akte, PDF (500/2000)      | < 30 s       | 0,2 s                                              |
-| ZIP-Export (innerhalb Grenze)   | < 60 s       | 0,04 s                                             |
-| Dashboard, 50 gleichzeitig      | p95 < 500 ms | 84 ms                                              |
+| Szenario                        | Ziel docs/09 | Gemessen                                                  |
+| ------------------------------- | ------------ | --------------------------------------------------------- |
+| Schichtwechsel-Sync, 200 Geräte | p95 < 3 s    | **3,0–3,1 s** (Prisma 5), **3,2–3,9 s** (Prisma 7, zod 4) |
+| Deadlocks                       | 0            | 0                                                         |
+| Nicht angenommene Kommandos     | 0            | 0                                                         |
+| Große Akte, PDF (500/2000)      | < 30 s       | 0,2 s                                                     |
+| ZIP-Export (innerhalb Grenze)   | < 60 s       | 0,04 s                                                    |
+| Dashboard, 50 gleichzeitig      | p95 < 500 ms | 84 ms                                                     |
 
 Vier Dinge, die aus diesen Zahlen folgen:
 
@@ -694,6 +694,10 @@ Vier Dinge, die aus diesen Zahlen folgen:
 - **Alles bleibt korrekt.** Null Deadlocks, null abgewiesene Kommandos, alle 200 Stapel vollständig angewendet. Unter Last wird das System langsam, nicht falsch.
 
 **Nachtrag zum Wechsel auf Prisma 7:** derselbe Lauf auf derselben Maschine ist mit dem Treiber-Adapter durchweg langsamer als mit der alten Rust-Engine — p95 3,2/3,5/3,7 s gegen 3,0/3,06/3,08 s, Durchsatz 54–62 statt rund 64 Stapel/s. Damit wird das 3-Sekunden-Ziel hier **gerissen**, wo es vorher knapp gehalten wurde. Die naheliegende Erklärung wurde geprüft und trägt nicht: die Poolgröße ausdrücklich auf 25 zu setzen statt der stillen Vorgabe 10 des Adapters ändert an den Zahlen nichts. Die Ursache liegt im Adapter selbst, nicht in seiner Konfiguration. Für den Piloten gilt unverändert, was oben steht — auf der Zielhardware nachmessen, und wenn es dort eng bleibt, zuerst an der Verbindungsverwaltung arbeiten.
+
+**Nachgemessen nach zod 4** (drei Läufe, dieselbe Maschine): p95 **3899 / 3321 / 3171 ms**, Durchsatz 50,6 / 59,0 / 62,0 Stapel/s. zod validiert jedes Sync-Kommando, die Anhebung hätte also durchschlagen können — sie tut es nicht: die Zahlen liegen in demselben Band wie unter zod 3. Der Sync ist damit weiterhin der einzige gerissene Zielwert, und die Ursache liegt nicht bei der Validierung.
+
+**Der erste Lauf ist zugleich die lehrreichste Zahl.** Er lag mit 3899 ms deutlich über den beiden folgenden, und der Unterschied war nicht der Code, sondern die Maschine: acht Container liefen, die Systemlast stand bei 2,9. Wer diesen Wert misst, misst zu einem guten Teil, was sonst noch läuft — ein weiteres Argument dafür, dass er **nicht** in die CI gehört (siehe unten) und dass die Messung auf der Zielhardware kein Formalismus ist. Für eine belastbare lokale Zahl: andere Container stoppen und mehrfach laufen lassen.
 
 **Bewusst nicht in der CI.** Messwerte hängen an der Maschine; ein Gate, das je nach Runner-Auslastung rot wird, erzieht dazu, rote Läufe zu ignorieren. Der Lauf prüft die Ziele trotzdem und endet mit Exit-Code 1, wenn eines gerissen wird — für einen Lauf von Hand vor einem Release ist das die richtige Härte.
 
@@ -791,7 +795,7 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Dependabot ist dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
 
-5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er liegt seit dem Wechsel auf Prisma 7 über dem Ziel aus docs/09 (p95 3,2–3,7 s statt < 3 s). Auf einem Laptop gemessen und deshalb kein Urteil über die reale Anlage — aber der Wert, der beim Schichtwechsel von 200 Tablets zählt, und der einzige aus dem Lasttest, der nicht mit Reserve besteht. Die Reihenfolge der Hebel steht bei den Architekturentscheidungen: zuerst Verbindungsverwaltung, dann alles andere.
+5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er liegt seit dem Wechsel auf Prisma 7 über dem Ziel aus docs/09 (p95 3,2–3,9 s statt < 3 s; zod 4 hat daran nichts geändert, nachgemessen). Auf einem Laptop gemessen und deshalb kein Urteil über die reale Anlage — aber der Wert, der beim Schichtwechsel von 200 Tablets zählt, und der einzige aus dem Lasttest, der nicht mit Reserve besteht. Die Reihenfolge der Hebel steht bei den Architekturentscheidungen: zuerst Verbindungsverwaltung, dann alles andere.
 
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
