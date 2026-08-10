@@ -28,11 +28,16 @@ function createClient(): PrismaClient {
   // `connection_limit`-Parameter wertete die Rust-Engine aus, der
   // Treiber-Adapter überliest ihn und nimmt die Vorgabe von `pg` (10).
   //
-  // Das ist keine Kosmetik. Der Lasttest (docs/09 Ebene 8) misst den
-  // Schichtwechsel-Sync als durchsatzbegrenzt, und die Zahl der Verbindungen
-  // ist dabei die härteste Grenze — mit stillschweigend 10 statt 25 fiel der
-  // p95 bei 200 Geräten von 3,0 s auf 3,2–3,7 s. Wer die URL anpasst und sich
-  // über ausbleibende Wirkung wundert: hier ist die Stelle.
+  // Wer die URL anpasst und sich über ausbleibende Wirkung wundert: hier ist
+  // die Stelle.
+  //
+  // Hier stand, die Verbindungszahl sei die härteste Grenze des Sync und 10
+  // statt 25 hebe den p95 bei 200 Geräten von 3,0 auf 3,2–3,7 s. Das ist
+  // verschränkt nachgemessen und trifft nicht zu: zwischen 10 und 25 ist kein
+  // Unterschied messbar, oberhalb von 25 auch nicht. Begrenzend sind die 22,6
+  // Datenbanktransaktionen, die ein Sync-Stapel auslöst. Die Messreihe steht
+  // in notes.md unter „welcher Hebel wirklich wirkt"; 25 bleibt, weil die
+  // Zahl unauffällig ist und nicht, weil sie etwas bewirkt.
   const poolMax = Number(process.env.DATABASE_POOL_MAX ?? 25);
 
   return new PrismaClient({

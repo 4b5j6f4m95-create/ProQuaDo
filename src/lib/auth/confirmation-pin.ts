@@ -16,8 +16,17 @@ const scrypt = promisify(scryptCallback) as (
  * only this scrypt hash lives in `users.confirmation_pin_hash`, and the
  * plaintext exists solely for the duration of one verify() call. PINs are
  * short by nature, so the KDF cost matters more here than for passwords:
- * scrypt with N=2^15 makes offline guessing of a 4–6 digit PIN expensive
- * rather than instantaneous.
+ * scrypt makes offline guessing of a 4–6 digit PIN expensive rather than
+ * instantaneous.
+ *
+ * COST PARAMETER — this comment used to claim N=2^15. It is not: the calls
+ * below pass no options, so Node's defaults apply (N=2^14, r=8, p=1). One
+ * derivation measures ~21 ms on a 2026 laptop. Raising it is a decision
+ * nobody has taken, and it is NOT a one-line change: the stored format
+ * `scrypt$salt$hash` carries no cost parameters, so every existing hash
+ * would become unverifiable the moment N changes. Whoever raises it has to
+ * add the parameters to the stored string first and verify against the value
+ * found there — otherwise every user in the plant loses their PIN on deploy.
  */
 
 const SCRYPT_KEY_LENGTH = 64;
