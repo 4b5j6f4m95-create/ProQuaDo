@@ -191,6 +191,8 @@ Auf dieser Maschine liefen parallel andere Next.js-Projekte auf Port 3000/3001. 
 
 **Beim Sprung auf pino 10 nachgeprüft, weil keine Prüfstufe hier hinsieht:** die CI baut und testet ausschließlich mit `NODE_ENV=production`, wo der Pretty-Stream gar nicht entsteht — ein Bruch an dieser Stelle wäre also grün durchgelaufen und erst auf dem nächsten Entwicklungsrechner aufgefallen. Geprüft wurde deshalb von Hand: Pretty-Ausgabe und Redaction (`pin`, verschachteltes `token`) unter `NODE_ENV=development`, und ein laufender `next dev`, der `/login` und `/api/health/ready` mit 200 beantwortet, ohne die Worker-Meldung von damals.
 
+**Bei pino-pretty 13 dieselbe Prüfung, aus demselben Grund** — und sie ist die einzige, die diese Anhebung überhaupt belegt. Die Kette wäre auch grün gewesen, wenn der Dev-Logger zerbrochen wäre. Ergebnis: Pretty-Ausgabe mit Farben, `pin`, verschachteltes `token` und `password` jeweils `[REDACTED]`, unter `NODE_ENV=production` unverändert JSON in einer Zeile; `next dev` antwortet auf `/login` und `/api/health/ready` mit 200, ohne Worker-Meldung. Inhaltlich brachten 12 und 13 nur das Anheben der Node-Untergrenze und den Wechsel von `readable-stream` auf Nodes eingebautes Stream-Modul — nichts an der Aufrufform, die `src/lib/logger/index.ts` benutzt.
+
 ### CSP blockiert Dev-Tooling und OAuth-Redirect
 
 Eine strikte `Content-Security-Policy` (`script-src 'self'`, `form-action 'self'`) verhindert sowohl Next.js' HMR (inline Scripts) als auch den Redirect zu Keycloak (`form-action` erlaubt nur die eigene Origin). Erste Fassung: CSP nur in Production, `form-action` schließt dort die OIDC-Issuer-Origin ein. Die Hälfte davon war falsch — siehe den nächsten Eintrag.
@@ -324,7 +326,11 @@ Nach `prisma generate` (z. B. nach Schema-Änderungen) muss der laufende `next d
 error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'
 ```
 
-Aufgetreten beim Anheben auf TypeScript 6 — direkt nach einem `pnpm add -D typescript@6`, also genau dort, wo man den Fehler der neuen Compilerversion zuschreibt. Er kam von `node_modules/.prisma/client`, das nicht mehr existierte. Die Probe ist ein `ls` darauf, die Behebung ein `pnpm exec prisma generate`. **Regel:** Nach einer Abhängigkeitsänderung, deren Folgefehler mit `@prisma/client` zu tun haben, zuerst neu generieren und dann urteilen.
+Aufgetreten beim Anheben auf TypeScript 6 — direkt nach einem `pnpm add -D typescript@6`, also genau dort, wo man den Fehler der neuen Compilerversion zuschreibt. Behoben mit `pnpm exec prisma generate`. Beim nächsten `pnpm add` (pino-pretty) trat er sofort wieder auf; es ist also kein Einzelfall, sondern die Regel.
+
+**Wonach man dabei nicht sucht:** `node_modules/.prisma/client`. Unter Prisma 7 mit pnpm liegt das Generat im Store, beim Paket selbst — der Pfad im Projektwurzelverzeichnis existiert auch nach einem erfolgreichen `generate` nicht. Ein `ls` darauf beantwortet die Frage also nie, egal wie plausibel er aussieht (hier stand eine Weile genau diese falsche Probe). Die Probe ist der Typecheck, oder schlicht `prisma generate` selbst: es ist idempotent und dauert eine Drittelsekunde.
+
+**Regel:** Nach einer Abhängigkeitsänderung, deren Folgefehler `@prisma/client` betreffen, erst neu generieren und dann urteilen.
 
 ### Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften
 
