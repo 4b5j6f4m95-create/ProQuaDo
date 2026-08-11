@@ -157,32 +157,8 @@ async function processOne(
     outcome = await classifyFailure(actor, command, error);
   }
 
-  await finalizeCommand(actor, claim.commandId, outcome);
-  // Whatever the command did to the step's version, the rest of THIS batch
-  // may be unaware of it without that being a conflict.
-  await rememberBatchVersion(actor, command, batchVersions);
+  await finalizeCommand(actor, claim.commandId, command, outcome, batchVersions);
   return outcome;
-}
-
-async function rememberBatchVersion(
-  actor: Actor,
-  command: SyncCommandEnvelope,
-  batchVersions: BatchVersions,
-): Promise<void> {
-  const stepId =
-    typeof command.payload.workStepInstanceId === 'string'
-      ? command.payload.workStepInstanceId
-      : undefined;
-  if (!stepId) return;
-
-  const instance = await withOrgContext(actor.organizationId, (tx) =>
-    tx.workStepInstance.findFirst({ where: { id: stepId }, select: { version: true } }),
-  );
-  if (!instance) return;
-
-  const known = batchVersions.get(stepId) ?? new Set<number>();
-  known.add(instance.version);
-  batchVersions.set(stepId, known);
 }
 
 type Claim =
@@ -237,12 +213,36 @@ async function claimCommand(
   });
 }
 
+/**
+ * Everything that happens after a command has run: the outcome is persisted,
+ * a conflict becomes a row for a person, and the step's resulting version is
+ * noted for the rest of the batch.
+ *
+ * **Why these three share one transaction.** They used to be two, and the
+ * second one existed to read a single column. At 200 devices a batch of four
+ * commands cost 22.6 database transactions, each with its own `BEGIN`,
+ * `set_config` for the tenant context and `COMMIT` — measured against
+ * `pg_stat_database`, see notes.md. The version read has no ordering
+ * relationship to the outcome write, so keeping them apart bought nothing.
+ *
+ * What is NOT merged in is `claimCommand`. Its row is deliberately committed
+ * *before* the command executes, so that a crash in between leaves a PENDING
+ * trace instead of no trace at all; folding it in here would trade that
+ * property for a round trip.
+ */
 async function finalizeCommand(
   actor: Actor,
   commandId: string,
+  command: SyncCommandEnvelope,
   outcome: SyncCommandResult,
+  batchVersions: BatchVersions,
 ): Promise<void> {
-  await withOrgContext(actor.organizationId, async (tx) => {
+  const stepId =
+    typeof command.payload.workStepInstanceId === 'string'
+      ? command.payload.workStepInstanceId
+      : undefined;
+
+  const stepVersion = await withOrgContext(actor.organizationId, async (tx) => {
     await tx.syncCommand.update({
       where: { id: commandId },
       data: {
@@ -255,6 +255,14 @@ async function finalizeCommand(
         version: { increment: 1 },
       },
     });
+
+    // Whatever the command did to the step's version, the rest of THIS batch
+    // may be unaware of it without that being a conflict. Read here rather
+    // than applied here: `batchVersions` is an in-memory map and would not be
+    // rolled back with the transaction if the conflict handling below throws.
+    const instance = stepId
+      ? await tx.workStepInstance.findFirst({ where: { id: stepId }, select: { version: true } })
+      : null;
 
     // A conflict is not an error to be logged and forgotten — it is work for
     // a person, so it becomes a row in the conflict centre. Linked to the
@@ -269,7 +277,7 @@ async function finalizeCommand(
         where: { id: outcome.conflictId },
         data: { syncCommandId: commandId, version: { increment: 1 } },
       });
-      return;
+      return instance?.version;
     }
 
     if (outcome.status === 'CONFLICT' && outcome.conflictType) {
@@ -287,7 +295,16 @@ async function finalizeCommand(
       });
       outcome.conflictId = conflict.id;
     }
+
+    return instance?.version;
   });
+
+  // Outside the transaction on purpose — see the comment at the read.
+  if (stepId && stepVersion !== undefined) {
+    const known = batchVersions.get(stepId) ?? new Set<number>();
+    known.add(stepVersion);
+    batchVersions.set(stepId, known);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
