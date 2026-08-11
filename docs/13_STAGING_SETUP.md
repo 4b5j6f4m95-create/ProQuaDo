@@ -177,7 +177,9 @@ Was die dritte Zeile davon vorwegnimmt: die **Adressen stimmen**. Genau daran is
 
 ## Schritt 8 — Die drei Messungen, für die Staging existiert ⚠️
 
-**Sync-Durchsatz.** `pnpm run test:load` auf der Zielhardware. Der Harness ruft die Domänendienste direkt auf, misst also die Arbeit des Servers ohne HTTP und Netzweg. Bleibt p95 über 3 s: **zuerst an der Verbindungsverwaltung** arbeiten (pgbouncer, `max_connections`, `DATABASE_POOL_MAX`), erst danach an feinerer Sequenzierung. Die umgekehrte Reihenfolge ist gemessen und bringt ein Drittel.
+**Sync-Durchsatz.** `pnpm run test:load` auf der Zielhardware. Der Harness ruft die Domänendienste direkt auf, misst also die Arbeit des Servers ohne HTTP und Netzweg. Bleibt p95 über 3 s, steht die Reihenfolge der Hebel in [docs/12 §8.4](12_DEPLOYMENT.md#84-wenn-beschleunigt-werden-muss): zuerst `UV_THREADPOOL_SIZE=16`, dann die Commit-Latenz der Datenbank, dann ein feinerer Outbox-Zähler. **Nicht** die Verbindungsverwaltung — der Rat stand hier bis zur Messung und ist widerlegt: zwischen `DATABASE_POOL_MAX=10` und `25` ist kein Unterschied messbar.
+
+**Und messt mehrfach und verschränkt, nicht einmal.** Derselbe Lauf schwankt auf einer beschäftigten Maschine zwischen p95 2856 und 3446 ms — beidseits der Zielmarke. Wer eine Konfiguration blockweise gegen eine andere stellt, vergleicht die Tagesform der Maschine (notes.md, „Blockweise verglichene Konfigurationen messen die Maschine").
 
 Der Lauf hinterlässt Daten: je Durchgang ein Projekt `LOAD-P-…` mit bis zu 200 Aufträgen, ebenso vielen Geräten und einer Akte mit 500 Schritten und 2000 Fotos. In Staging ist das unproblematisch — in einer Umgebung, die später produktiv wird, ist es das nicht.
 

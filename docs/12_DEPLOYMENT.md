@@ -18,7 +18,7 @@ Ergänzt docs/01 (Zieltopologie, nichtfunktionale Anforderungen) und docs/08 (Be
 | PostgreSQL                     | 15+ (erprobt: 16)               | Datenbankname **muss `proquado`** sein — er steht fest in einer Migration (`GRANT CONNECT ON DATABASE`). |
 | S3-kompatibler Objektspeicher  | Bucket muss vorab existieren    | MinIO, AWS S3, Ceph. Die Anwendung legt keinen Bucket an.                                                |
 | OIDC-Provider                  | Discovery-Endpunkt erreichbar   | Generisch (ADR-001). Keycloak ist das Entwicklungsbeispiel, keine Voraussetzung.                         |
-| clamd (ClamAV)                 | über TCP erreichbar             | Pflicht: `MALWARE_SCANNER=stub` wird in Produktion mit hartem Fehler abgelehnt.                          |
+| clamd (ClamAV)                 | über TCP erreichbar, **x86-64** | Pflicht: `MALWARE_SCANNER=stub` wird in Produktion mit hartem Fehler abgelehnt. Das gepinnte `clamav/clamav:1.4` gibt es **nur für amd64** — siehe §8. |
 | Reverse Proxy                  | TLS 1.3                         | Auch zuständig für unauthentifizierte Fluten — die App drosselt erst nach der Anmeldung (docs/08).       |
 | Scheduler (cron o. ä.)         | nur bei genutzten Webhooks      | Ruft den Dispatch-Endpunkt auf, siehe §6.                                                                |
 
@@ -52,6 +52,7 @@ Ergänzt docs/01 (Zieltopologie, nichtfunktionale Anforderungen) und docs/08 (Be
 | `CLAMAV_TIMEOUT_MS`             | `30000`                       |                                                                                         |
 | `LOG_LEVEL`                     | `info`                        |                                                                                         |
 | `SERVER_NODE_ID`                | —                             | Je Instanz unterschiedlich setzen; steht im Audit-Trail.                                |
+| `UV_THREADPOOL_SIZE`            | `4` (Node-Vorgabe)            | Auf **16** setzen. Nodes Threadpool bearbeitet jede `scrypt`-Ableitung der PIN-Prüfung; mit vier Plätzen stehen sie beim Schichtwechsel Schlange. Gemessene 5 % Durchsatz, kein Risiko — siehe §8. |
 | `ALLOW_PRIVATE_WEBHOOK_TARGETS` | —                             | Nur Entwicklung. In Produktion bedingungslos ignoriert.                                 |
 
 ---
@@ -180,22 +181,70 @@ Was sie **nicht** ersetzt: den Lauf gegen das echte Backup-Verfahren dieser Umge
 
 ## 8. Dimensionierung
 
+### 8.1 Durchsatz
+
 Gemessen mit `pnpm run test:load` (docs/09 Ebene 8) auf einem Entwicklungsrechner, Postgres im Container:
 
 | Größe                                        | Messwert                            |
 | -------------------------------------------- | ------------------------------------- |
-| Sync-Durchsatz                               | 51–62 Stapel/s (Prisma 7 und zod 4; ~64 unter Prisma 5) |
-| 200 Tablets, Schichtwechsel gleichzeitig     | p95 **3,2–3,9 s** — Ziel docs/09 ist < 3 s und wird gerissen |
+| Sync-Durchsatz                               | 57–70 Stapel/s (Prisma 7, zod 4)      |
+| 200 Tablets, Schichtwechsel gleichzeitig     | p95 **2,9–3,4 s** — Ziel docs/09 ist < 3 s und wird je nach Maschinenzustand gehalten oder gerissen |
 | Akte mit 500 Schritten, PDF                  | 0,2 s                                 |
 | Dashboard, 50 gleichzeitig                   | p95 84 ms                             |
-| Speicherbedarf                               | 10–50 GB/Jahr, fotolastig (docs/01)   |
+| Objektspeicher                               | 10–50 GB/Jahr, fotolastig (docs/01)   |
 
-Der Sync liegt **auf** der Zielgrenze, nicht darunter. Vor einem Piloten mit 200 Geräten gehört diese Messung auf die Zielhardware wiederholt. Wenn beschleunigt werden muss: **zuerst die Verbindungsverwaltung** (pgbouncer, `max_connections`, Poolgröße). Die naheliegende Vermutung, die Outbox-Serialisierung je Organisation sei der Engpass, ist gemessen und bringt aufgeteilt nur ein Drittel — die Verbindungen sind die härtere Wand.
+Der Sync liegt **auf** der Zielgrenze, nicht darunter — dieselbe Konfiguration lieferte in einer Messreihe p95 zwischen 2856 und 3446 ms. Auf einem Entwicklungsrechner ist der Wert damit nicht entscheidbar, und genau deshalb steht die Messung auf der Zielhardware in §9.
+
+Weil alle Geräte einer Schicht gleichzeitig synchronisieren, ist der p95 praktisch die Gesamtdauer: **das 3-Sekunden-Ziel ist bei 200 Geräten arithmetisch ein Durchsatzziel von ≥ 67 Stapel/s.**
+
+### 8.2 Hardware ⚠️ abgeleitet
+
+Die folgenden Größen sind **nicht** auf Zielhardware gemessen, sondern aus dem Lasttest hochgerechnet. Der Aufschlag darin ist Absicht: der Harness ruft die Domänendienste direkt auf, **ohne** HTTP, TLS, Next.js und React-SSR. Der echte Server leistet je Anfrage strikt mehr als das Gemessene; wie viel mehr, sagt erst der Lauf vor Ort.
+
+Gemessener Spitzenverbrauch während des Schichtwechsels von 200 Geräten:
+
+| Komponente                             | Spitze                        |
+| -------------------------------------- | ------------------------------- |
+| Anwendung (Node)                       | 213–425 % CPU, 741 MB RSS       |
+| PostgreSQL                             | 171 % CPU                       |
+| clamd (`clamav/clamav:1.4`, Signaturen geladen) | 429 MB RSS im Ruhezustand |
+
+Daraus abgeleitet für einen Piloten mit 200 Tablets, **eine Maschine**:
+
+| Anteil        | vCPU | RAM   |
+| ------------- | ---- | ----- |
+| Anwendung     | 4    | 4 GB  |
+| PostgreSQL    | 2    | 8 GB  |
+| clamd         | 1    | 2 GB  |
+| Proxy, Rest   | 1    | 2 GB  |
+| **Summe**     | **8** | **16 GB** |
+
+Getrennte Maschinen gehen genauso: Anwendung 4 vCPU / 8 GB, Datenbank 4 vCPU / 16 GB. Systemplatte 100 GB; der Objektspeicher wird getrennt gebucht und wächst nach der Zeile in §8.1.
+
+### 8.3 Zwei Eigenschaften, die wichtiger sind als die Kernzahl
+
+**Erstens: x86-64, nicht ARM.** Das in `docker-compose.yml` gepinnte `clamav/clamav:1.4` hat für **keinen** Tag ein arm64-Manifest — ClamAV veröffentlicht ausschließlich amd64. Auf einem Ampere- oder Graviton-Server läuft clamd deshalb nur unter Emulation oder gar nicht, und `MALWARE_SCANNER=stub` lehnt die Anwendung in Produktion hart ab. Ein ARM-Server ist damit keine Sparoption, sondern ein Blocker. Wer ihn trotzdem will, braucht clamd auf einer eigenen x86-Maschine.
+
+**Zweitens: lokale NVMe für die Datenbank, kein netzgebundener Blockspeicher.** Der Outbox-Zähler serialisiert je Organisation (`sync_sequences`, ADR-006 und docs/06): jedes Ereignis ist eine Zeilensperre plus Commit, und ein Schichtwechsel erzeugt gut 1000 Ereignisse. Diese Kette ist **nicht parallelisierbar** — mehr Kerne helfen ihr nicht, die Commit-Latenz bestimmt sie allein. Bei 1 ms kostet sie rund eine Sekunde des Drei-Sekunden-Budgets; bei den 2–5 ms, die günstige Netzvolumes typisch liefern, wäre der Zielwert allein daran gerissen.
+
+Dass der **Schwanz** der Verteilung serialisiert ist, ist gemessen: 15 % weniger Datenbanktransaktionen je Stapel bewegten den p95 nicht, dieselben Geräte auf vier Organisationen verteilt dagegen um 15 %. Dass die Commit-Latenz die Größe dieser Serialisierung bestimmt, ist daraus abgeleitet und gehört zu dem, was die Messung vor Ort beantwortet.
+
+### 8.4 Wenn beschleunigt werden muss
+
+Reihenfolge nach Messung (die vollständige Reihe steht in notes.md unter „welcher Hebel wirklich wirkt"):
+
+1. **`UV_THREADPOOL_SIZE=16`** — eine Umgebungsvariable, 5 %, kein Risiko. Zuerst, weil kostenlos.
+2. **Commit-Latenz der Datenbank** — siehe §8.3. Vor jedem Codeeingriff prüfen, worauf die Datenbank schreibt.
+3. **Zähler je Produktionsauftrag statt je Organisation** — der einzige gemessene Hebel, der den **p95** bewegt statt nur den Median. Viel Umbau; `src/domain/sync/outbox-sequence.ts` benennt diesen Weg als den vorgesehenen und die Rückkehr zu einer Postgres-Sequenz ausdrücklich als den falschen.
+
+**Nicht** die Poolgröße: zwischen `DATABASE_POOL_MAX=10` und `25` ist kein Unterschied messbar, oberhalb von 25 auch nicht. Der frühere Rat „zuerst die Verbindungsverwaltung" stand hier bis zur Messung und war falsch.
 
 ---
 
 ## 9. Checkliste vor dem Piloten
 
+- [ ] **x86-64**, nicht ARM — clamd hat kein arm64-Image (§8.3)
+- [ ] Datenbank auf **lokaler NVMe**, nicht auf netzgebundenem Blockspeicher (§8.3)
 - [ ] Node ≥ 22.13, Datenbank heißt `proquado`
 - [ ] `proquado_app` mit eigenem Passwort angelegt, **vor** der ersten Migration
 - [ ] Bucket existiert, Versionierung und Verschlüsselung aktiv
@@ -206,7 +255,8 @@ Der Sync liegt **auf** der Zielgrenze, nicht darunter. Vor einem Piloten mit 200
 - [ ] Seed nach dem Deployment gelaufen
 - [ ] Ein Upload aus dem Browser tatsächlich ausgeführt (CSP, presignierte URL, Scan)
 - [ ] `DATABASE_POOL_MAX` gesetzt (sonst still 10 Verbindungen — siehe §2.1)
-- [ ] Sync-Durchsatz auf der **Zielhardware** gemessen, nicht auf einem Entwicklungsrechner (§8)
+- [ ] `UV_THREADPOOL_SIZE=16` gesetzt (§8.4)
+- [ ] Sync-Durchsatz auf der **Zielhardware** gemessen, **mehrfach und verschränkt**, nicht auf einem Entwicklungsrechner (§8.1)
 - [ ] Backup für Datenbank **und** Objektspeicher, Restore-Probe **gegen das echte Backup** durchgeführt
 - [ ] Scheduler eingerichtet, falls Webhooks genutzt werden
 - [ ] Externer Penetrationstest (docs/11 §5 ersetzt ihn ausdrücklich nicht)
