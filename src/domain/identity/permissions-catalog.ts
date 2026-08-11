@@ -54,6 +54,13 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   perm('production_plan', 'release', 'Fertigungsplan freigeben'),
   perm('work_step_definition', 'create', 'Arbeitsschritt definieren'),
   perm('work_step_definition', 'update', 'Arbeitsschrittdefinition bearbeiten'),
+  // Abweichung von docs/04 derselben Art wie `customer.manage` darüber: die
+  // Matrix kennt keinen Import, weil sie Pläne nur von Hand entstehen sah.
+  // `production_plan.create` still mitzubenutzen läge nahe und wäre falsch —
+  // ein Import legt nicht nur einen Plan an, sondern übernimmt die
+  // Reihenfolge der Fertigungsstraße aus einer fremden Datei. Wer das darf,
+  // ist eine eigene Frage, und sie gehört beantwortbar zu sein.
+  perm('ifc_import', 'execute', 'Gebäudemodell (IFC) importieren'),
 
   // Production Execution
   perm('production_order', 'create', 'Produktionsauftrag anlegen'),

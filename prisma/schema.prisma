@@ -86,6 +86,8 @@ model Organization {
   productReleases      ProductRelease[]
   webhookSubscriptions WebhookSubscription[]
   webhookDeliveries    WebhookDelivery[]
+  ifcImports           IfcImport[]
+  ifcComponents        IfcComponent[]
   syncSequence         SyncSequence?
   syncCursors          SyncCursor[]
   syncCommands         SyncCommand[]
@@ -212,6 +214,7 @@ model User {
   documentApprovals  DocumentApproval[]
   orderAssignments   OrderAssignment[]
   notifications      Notification[]
+  ifcImports         IfcImport[]
 
   @@unique([organizationId, externalId])
   // Added in Phase 7. Two accounts with the same address inside one
@@ -563,6 +566,7 @@ model Project {
   products         Product[]
   documents        Document[]
   productionPlans  ProductionPlan[]
+  ifcImports       IfcImport[]
   productionOrders ProductionOrder[]
   nonConformances  NonConformance[]
   productionHolds  ProductionHold[]
@@ -609,6 +613,7 @@ model Product {
   productionPlans  ProductionPlan[]
   productionOrders ProductionOrder[]
   nonConformances  NonConformance[]
+  ifcImports       IfcImport[]
 
   @@unique([organizationId, productNumber])
   @@index([organizationId])
@@ -795,6 +800,7 @@ model ProductionPlanRevision {
   supersededBy     ProductionPlanRevision[] @relation("PlanRevisionHistory")
   steps            PlanStep[]
   productionOrders ProductionOrder[]
+  ifcImport        IfcImport?
 
   @@unique([organizationId, productionPlanId, revisionNumber])
   @@index([organizationId])
@@ -842,6 +848,7 @@ model PlanStep {
   inspectionCharacteristics InspectionCharacteristic[]
   photoRequirements         PhotoRequirement[]
   workStepInstances         WorkStepInstance[]
+  ifcComponents             IfcComponent[]
 
   @@unique([organizationId, productionPlanRevisionId, stepNumber])
   @@index([organizationId])
@@ -1944,4 +1951,83 @@ model WebhookDelivery {
   @@unique([subscriptionId, outboxEventId])
   @@index([organizationId, status, nextAttemptAt])
   @@map("webhook_deliveries")
+}
+
+/// Ein IFC-Import: die Herkunft eines Fertigungsplans, der nicht von Hand
+/// entstanden ist.
+///
+/// Warum die Datei ihre eigene Zeile bekommt und nicht bloß ein Dokument
+/// wird: ein Plan, dessen Schritte aus einer Datei stammen, muss sagen
+/// können, aus welcher. Sonst steht in der Produktionsakte eine Reihenfolge,
+/// die niemand mehr auf ihre Quelle zurückführen kann — und genau das ist die
+/// Frage, die bei einer Reklamation als Erstes gestellt wird. Der Hash ist
+/// dabei der Beweis, nicht der Dateiname: derselbe Name mit anderem Inhalt
+/// ist der Regelfall, wenn ein Planer zweimal exportiert.
+model IfcImport {
+  id                       String   @id @default(uuid())
+  organizationId           String   @map("organization_id")
+  projectId                String   @map("project_id")
+  productId                String   @map("product_id")
+  productionPlanRevisionId String   @unique @map("production_plan_revision_id")
+  fileName                 String   @map("file_name")
+  fileSizeBytes            Int      @map("file_size_bytes")
+  /// SHA-256 der hochgeladenen Datei, hex.
+  fileHash                 String   @map("file_hash")
+  /// Schlüssel im Objektspeicher — die Datei selbst bleibt erhalten.
+  storageKey               String   @map("storage_key")
+  /// Aus FILE_SCHEMA, z. B. IFC2X3.
+  ifcSchema                String   @map("ifc_schema")
+  sourceApplication        String?  @map("source_application")
+  /// Merkmal RAUMNUMMER. Bei einem Modulexport genau einer.
+  moduleNumbers            String[] @map("module_numbers")
+  stepCount                Int      @map("step_count")
+  componentCount           Int      @map("component_count")
+  /// Was beim Lesen auffiel und nicht zugeordnet werden konnte. Bleibt
+  /// erhalten, damit „erfolgreich importiert" nachprüfbar bleibt.
+  warnings                 String[]
+  importedById             String   @map("imported_by_id")
+  importedAt               DateTime @default(now()) @map("imported_at")
+  version                  Int      @default(1)
+
+  organization           Organization           @relation(fields: [organizationId], references: [id])
+  project                Project                @relation(fields: [projectId], references: [id])
+  product                Product                @relation(fields: [productId], references: [id])
+  productionPlanRevision ProductionPlanRevision @relation(fields: [productionPlanRevisionId], references: [id])
+  importedBy             User                   @relation(fields: [importedById], references: [id])
+  components             IfcComponent[]
+
+  @@index([organizationId])
+  @@index([organizationId, fileHash])
+  @@map("ifc_imports")
+}
+
+/// Ein Bauteil aus dem Modell, zugeordnet zu dem Arbeitsschritt, in dem es
+/// verbaut wird. Die Zeile, die den Werker am Schritt wissen lässt, welche
+/// Teile dazugehören, und die Akte bauteilgenau rückverfolgbar macht.
+model IfcComponent {
+  id              String  @id @default(uuid())
+  organizationId  String  @map("organization_id")
+  ifcImportId     String  @map("ifc_import_id")
+  planStepId      String  @map("plan_step_id")
+  /// IFC-GlobalId, 22 Zeichen. Stabil über Exporte desselben Modells und
+  /// deshalb der Schlüssel, an dem ein Re-Import wiedererkennt, was schon
+  /// da war.
+  globalId        String  @map("global_id")
+  ifcType         String  @map("ifc_type")
+  /// Merkmal Allright_Bauteil_ID — die Kennung des Fertigers.
+  componentNumber String? @map("component_number")
+  objectName      String? @map("object_name")
+  material        String?
+  /// Merkmal Gewerk, z. B. „36 Holzbau".
+  trade           String?
+  version         Int     @default(1)
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  ifcImport    IfcImport    @relation(fields: [ifcImportId], references: [id])
+  planStep     PlanStep     @relation(fields: [planStepId], references: [id])
+
+  @@unique([ifcImportId, globalId])
+  @@index([organizationId])
+  @@index([planStepId])
+  @@map("ifc_components")
 }

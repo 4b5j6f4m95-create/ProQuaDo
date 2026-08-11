@@ -139,6 +139,7 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
         </tbody>
       </table>
       <Link href={`/projects/${project.id}/plans/new`}>+ Fertigungsplan anlegen</Link>
+      <Link href={`/projects/${project.id}/plans/import-ifc`}>+ Aus Gebäudemodell (IFC)</Link>
 
       <h2>Produktionsaufträge</h2>
       <table>
