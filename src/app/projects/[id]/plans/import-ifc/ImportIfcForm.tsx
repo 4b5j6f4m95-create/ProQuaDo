@@ -1,7 +1,9 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
+
+import { suggestPlanIdentity } from '@/lib/ifc/plan-naming';
 
 /**
  * **Warum `fetch` gegen die Route und keine Server Action.** Server Actions
@@ -35,6 +37,46 @@ export function ImportIfcForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [planNumber, setPlanNumber] = useState('');
+  const [name, setName] = useState('');
+  const [moduleNumber, setModuleNumber] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+
+  /**
+   * Liest die gewählte Datei einmal lokal, nur um die Modulnummer zu finden.
+   *
+   * Nicht über den Server: das hieße dieselben 23 MB zweimal zu übertragen,
+   * einmal für den Vorschlag und einmal für den Import. Der Browser hat die
+   * Datei bereits.
+   *
+   * Die Norm schreibt ISO-8859-1 vor, deshalb `windows-1252` statt der
+   * Vorgabe UTF-8 — sonst wird aus jedem Umlaut ein Ersatzzeichen. Für die
+   * Modulnummer selbst spielt das selten eine Rolle, für einen Vorschlag,
+   * den jemand als Namen übernimmt, schon.
+   */
+  async function onFileChange(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+
+    setReading(true);
+    try {
+      const text = new TextDecoder('windows-1252').decode(await file.arrayBuffer());
+      const suggestion = suggestPlanIdentity(text);
+      setModuleNumber(suggestion?.moduleNumber ?? null);
+      // Nur füllen, was leer ist — eine getippte Nummer wird nicht
+      // überschrieben, weil jemand die Datei noch einmal auswählt.
+      if (suggestion) {
+        setPlanNumber((current) => current || suggestion.planNumber);
+        setName((current) => current || suggestion.name);
+      }
+    } catch {
+      // Ein misslungener Vorschlag ist kein Fehler: die Felder bleiben leer
+      // und werden von Hand gefüllt. Der Server liest die Datei ohnehin neu.
+      setModuleNumber(null);
+    } finally {
+      setReading(false);
+    }
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -109,15 +151,36 @@ export function ImportIfcForm({
     <form onSubmit={onSubmit}>
       <label>
         IFC-Datei
-        <input type="file" name="file" accept=".ifc" required />
+        <input type="file" name="file" accept=".ifc" required onChange={onFileChange} />
       </label>
+
+      {reading && <p aria-live="polite">Datei wird gelesen …</p>}
+      {moduleNumber && (
+        <p aria-live="polite">
+          Modul <strong>{moduleNumber}</strong> erkannt — Plannummer und Name sind daraus
+          vorgeschlagen und lassen sich ändern.
+        </p>
+      )}
+
       <label>
         Plannummer
-        <input name="planNumber" required maxLength={50} />
+        <input
+          name="planNumber"
+          required
+          maxLength={50}
+          value={planNumber}
+          onChange={(e) => setPlanNumber(e.currentTarget.value)}
+        />
       </label>
       <label>
         Name
-        <input name="name" required maxLength={255} />
+        <input
+          name="name"
+          required
+          maxLength={255}
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+        />
       </label>
       <label>
         Produkt

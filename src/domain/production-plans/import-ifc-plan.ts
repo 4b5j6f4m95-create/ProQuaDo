@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { NotFoundError, ValidationError } from '@/lib/domain-errors';
+import { AlreadyExistsError, NotFoundError, ValidationError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 import { parseIfc, IfcParseError, type IfcParseResult } from '@/lib/ifc/parse-ifc';
 
@@ -108,6 +108,21 @@ export async function importIfcPlan(command: ImportIfcPlanCommand): Promise<Impo
         `Diese Datei wurde bereits importiert (${duplicate.fileName}, ` +
           `${duplicate.importedAt.toISOString().slice(0, 10)}). ` +
           'Für eine geänderte Fassung eine neue Revision des Plans anlegen.',
+      );
+    }
+
+    // Je Datei ein eigener Plan heißt: Plannummern werden im Dutzend
+    // vergeben, und eine doppelte ist eine Frage der Zeit. Dieselbe Prüfung
+    // wie in createProductionPlan, aus demselben Grund — die Zusicherung
+    // trägt der Unique-Index, die Meldung dieser Blick.
+    const taken = await tx.productionPlan.findFirst({
+      where: { planNumber: command.planNumber },
+      select: { id: true, name: true },
+    });
+    if (taken) {
+      throw new AlreadyExistsError(
+        `Die Plannummer „${command.planNumber}" ist bereits vergeben („${taken.name}"). ` +
+          'Bitte eine andere wählen.',
       );
     }
 

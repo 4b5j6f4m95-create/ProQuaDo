@@ -283,6 +283,25 @@ describe('IFC-Import', () => {
     expect(plans).toHaveLength(1);
   });
 
+  /**
+   * Je Datei ein eigener Plan heißt: Plannummern werden im Dutzend vergeben.
+   * Ohne diese Prüfung antwortet der Weg mit „Ein unerwarteter Fehler ist
+   * aufgetreten" — P2002 nennt mit dem Treiber-Adapter von Prisma 7 nicht
+   * einmal das verletzte Feld.
+   */
+  it('nennt eine bereits vergebene Plannummer beim Namen, statt 500 zu antworten', async () => {
+    const f = await seedFixtures('planno');
+    await doImport(f, 'FP-IFC-DUP');
+
+    // Andere Datei, damit nicht die Hash-Prüfung zuerst greift.
+    const other = Buffer.from(sampleIfc().toString('latin1').replace('B-0001', 'B-9999'), 'latin1');
+
+    await expect(doImport(f, 'FP-IFC-DUP', other)).rejects.toMatchObject({
+      code: 'ALREADY_EXISTS',
+      status: 409,
+    });
+  });
+
   it('schreibt den Import samt Warnungen in den Audit-Trail', async () => {
     const f = await seedFixtures('audit');
     const result = await doImport(f, 'FP-IFC-9');
