@@ -98,6 +98,10 @@ export const SYSTEM_ROLES = {
       'document.view',
       'production_plan.create',
       'production_plan.update',
+      // Der Import erzeugt einen Plan im Entwurf und ersetzt die Genehmigung
+      // nicht: was aus der Datei kommt, geht denselben Weg über QM wie ein
+      // von Hand geschriebener Plan.
+      'ifc_import.execute',
       'production_plan.release',
       'work_step_definition.create',
       'work_step_definition.update',
