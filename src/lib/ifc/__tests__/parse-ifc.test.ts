@@ -191,6 +191,25 @@ describe('parseIfc', () => {
     expect(result.warnings.join(' ')).toContain('zwei Bezeichnungen');
   });
 
+  /**
+   * Der Fall, den erst der Browser zeigte: Next 16 kappt Request-Körper bei
+   * 10 MB, still und ohne Fehler. Eine so gekappte Datei hat gültigen Kopf
+   * und gültige Bauteile — ohne diese Prüfung entstünde daraus ein Plan, dem
+   * die hinteren Arbeitsschritte fehlen, und am Ende der Straße stehen
+   * „Verpacken" und „Verladen".
+   */
+  it('weist eine abgeschnittene Datei ab, statt einen halben Plan zu erzeugen', () => {
+    const vollstaendig = ifc(element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'));
+    const abgeschnitten = vollstaendig.slice(0, Math.floor(vollstaendig.length * 0.8));
+
+    // Die Vorbedingung des Falls: die gekappte Datei ist für sich genommen
+    // weiterhin auswertbar — Kopf und mindestens ein Bauteil stehen darin.
+    expect(abgeschnitten).toContain('FILE_SCHEMA');
+    expect(abgeschnitten).toContain('Arbeitsvorgang');
+
+    expect(() => parseIfc(abgeschnitten)).toThrow(/unvollständig/);
+  });
+
   it('weist eine Datei ohne FILE_SCHEMA ab', () => {
     expect(() => parseIfc('irgendein Text')).toThrow(IfcParseError);
   });

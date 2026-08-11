@@ -19,7 +19,35 @@ const nextConfig = {
   serverExternalPackages: ['pdfkit', 'archiver'],
 
   poweredByHeader: false,
+
+  // Der IFC-Import nimmt eine ganze Modelldatei entgegen; das Beispielmodul
+  // eines einzigen Raummoduls misst 23 MB. Die Vorgabe von Next 16 liegt bei
+  // 10 MB, und sie **schneidet ab, statt abzulehnen**: im Protokoll steht
+  // „Only the first 10MB will be available", die Route bekommt einen
+  // verstümmelten Körper.
+  //
+  // Das ist die gefährlichere Hälfte der Vorgabe. Eine gekappte IFC-Datei hat
+  // weiterhin einen gültigen Kopf und gültige Bauteile — sie hätte klaglos
+  // einen unvollständigen Fertigungsplan erzeugt, dem die späteren
+  // Arbeitsschritte fehlen. Gegen genau das prüft `parseIfc` zusätzlich auf
+  // den Schlussmarker `END-ISO-10303-21;`; diese Grenze hier sorgt dafür,
+  // dass es gar nicht erst dazu kommt.
+  //
+  // Gefunden beim Hochladen im Browser. Weder Unit- noch Integrationstests
+  // konnten es sehen: sie rufen den Domänendienst direkt auf, ohne HTTP.
+  //
+  // Der Schlüssel heißt `proxyClientMaxBodySize`, nicht
+  // `middlewareClientMaxBodySize` — Next 16 hat `middleware` in `proxy`
+  // umbenannt (dieses Projekt hat `src/proxy.ts`), und die beiden Namen
+  // zugleich zu setzen lehnt der Start ausdrücklich ab. Die Fehlermeldung im
+  // Protokoll nennt allerdings weiterhin den alten Namen; wer ihr folgt,
+  // bekommt „Unrecognized key".
+  //
+  // Der Wert liegt über der 128-MB-Grenze aus `import-ifc-plan.ts`, damit
+  // eine zu große Datei die dortige, verständliche Meldung bekommt statt
+  // wortlos gekappt zu werden.
   experimental: {
+    proxyClientMaxBodySize: '160mb',
     serverActions: {
       bodySizeLimit: '2mb',
     },

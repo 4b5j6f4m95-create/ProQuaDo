@@ -46,6 +46,21 @@ export class ValidationError extends DomainError {
   }
 }
 
+/**
+ * Der Körper der Anfrage war größer, als die Übertragung zulässt — und kam
+ * deshalb **gekappt** an, nicht abgelehnt.
+ *
+ * Eigener Code, weil dieser Fall sonst als „Ein unerwarteter Fehler ist
+ * aufgetreten" beim Hochladenden ankommt und im Protokoll als
+ * `Failed to parse body as FormData`. Beides sagt nicht, was zu tun ist. Wer
+ * eine 200-MB-Datei schickt, soll lesen, dass sie zu groß ist.
+ */
+export class PayloadTooLargeError extends DomainError {
+  constructor(message: string) {
+    super('PAYLOAD_TOO_LARGE', message, 413);
+  }
+}
+
 // ── Execution errors (Phase 3) ───────────────────────────────
 // Codes and HTTP statuses are taken verbatim from the "Standard Error
 // Codes" table in docs/05_API_CONTRACTS.md — offline clients pattern-match

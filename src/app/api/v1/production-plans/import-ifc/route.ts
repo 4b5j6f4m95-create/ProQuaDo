@@ -8,7 +8,7 @@ import { requireAuthContext } from '@/lib/authz/require-permission';
 import { importIfcPlan } from '@/domain/production-plans/import-ifc-plan';
 import { putObjectBytes } from '@/lib/storage/object-storage';
 import { getMalwareScanner } from '@/lib/storage/malware-scan';
-import { ValidationError } from '@/lib/domain-errors';
+import { PayloadTooLargeError, ValidationError } from '@/lib/domain-errors';
 
 /**
  * `POST /api/v1/production-plans/import-ifc` — ein Gebäudemodell hochladen und
@@ -40,7 +40,22 @@ export async function POST(request: Request): Promise<NextResponse> {
   return withErrorHandling(request, async () => {
     const actor = await requireAuthContext();
 
-    const form = await request.formData();
+    // Ein zu großer Körper wird von Next **gekappt, nicht abgelehnt** — die
+    // Multipart-Grenze fehlt dann am Ende und `formData()` wirft
+    // „expected boundary after body". Ohne diese Übersetzung liest der
+    // Hochladende „Ein unerwarteter Fehler ist aufgetreten" und der Betrieb
+    // sucht nach einem Fehler, den es nicht gibt. Die Grenze selbst steht in
+    // `next.config.mjs` (`experimental.proxyClientMaxBodySize`).
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      throw new PayloadTooLargeError(
+        'Die Datei ist zu groß für die Übertragung und kam unvollständig an. ' +
+          'Sie wurde nicht verarbeitet.',
+      );
+    }
+
     const file = form.get('file');
     if (!(file instanceof File)) {
       throw new ValidationError('Es wurde keine Datei übermittelt.');
