@@ -7,6 +7,7 @@ import {
   requirementsBlockingCompletion,
 } from '@/domain/execution/step-requirements';
 import { listMeasuringEquipment } from '@/domain/quality/measuring-equipment';
+import { IfcComponentList } from './IfcComponentList';
 import { StatusChip } from '@/components/StatusChip';
 import { CompleteStepForm } from '@/components/CompleteStepForm';
 import { PhotoCaptureWidget } from '@/components/PhotoCaptureWidget';
@@ -175,6 +176,8 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
           </ul>
         </section>
       )}
+
+      <IfcComponentList components={step.planStep.ifcComponents} />
 
       {!canWork && (
         <p className="notice">

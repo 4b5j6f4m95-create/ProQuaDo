@@ -141,6 +141,22 @@ export function parseIfc(content: string): IfcParseResult {
       'Keine FILE_SCHEMA-Angabe gefunden — die Datei ist kein IFC im STEP-Format.',
     );
   }
+  // **Vollständigkeitsprüfung, und sie ist keine Förmlichkeit.** Eine auf
+  // halber Strecke abgeschnittene IFC-Datei hat weiterhin einen gültigen Kopf
+  // und gültige Bauteile — sie würde anstandslos einen Fertigungsplan
+  // erzeugen, dem die hinteren Arbeitsschritte fehlen. Und „Verpacken" und
+  // „Verladen" stehen am Ende der Straße. Der Schlussmarker der Norm ist das
+  // einzige, woran sich das erkennen lässt.
+  //
+  // Der Fall ist nicht ausgedacht: Next 16 kappt Request-Körper bei 10 MB
+  // still, und das Beispielmodul misst 23 MB (siehe next.config.mjs).
+  if (!/END-ISO-10303-21\s*;\s*$/.test(content.trimEnd())) {
+    throw new IfcParseError(
+      'Die Datei endet nicht mit „END-ISO-10303-21;" und ist damit unvollständig — ' +
+        'vermutlich beim Übertragen abgeschnitten. Ein Import daraus hätte Arbeitsschritte verloren.',
+    );
+  }
+
   const sourceApplication = firstMatch(content, /FILE_NAME\s*\([^)]*?'([^']*)'\s*,\s*'[^']*'\s*\)/);
 
   // Erster Durchlauf: die vier Entitätstypen einsammeln, die zählen.

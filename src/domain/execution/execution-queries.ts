@@ -116,6 +116,19 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
                 },
               },
             },
+            // Nur vorhanden, wenn der Plan aus einem Gebäudemodell entstanden
+            // ist. Nach Bauteilnummer sortiert, weil das die Kennung ist, die
+            // auf dem Teil steht — nicht die GlobalId, die niemand ablesen kann.
+            ifcComponents: {
+              orderBy: { componentNumber: 'asc' },
+              select: {
+                id: true,
+                componentNumber: true,
+                objectName: true,
+                material: true,
+                ifcType: true,
+              },
+            },
           },
         },
         checklistResponses: {
