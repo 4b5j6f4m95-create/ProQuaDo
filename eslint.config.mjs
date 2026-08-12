@@ -35,7 +35,17 @@ const config = [
   {
     ignores: [
       'node_modules/',
-      '.next/',
+      // `**/` ist hier nicht schmückend. Im Flat-Format ist ein Muster ohne
+      // Voranstellung **wurzelrelativ** — anders als in `.gitignore`, wo
+      // `.next/` auf jeder Ebene greift. Wer mit einem Arbeitsverzeichnis
+      // unter `.claude/worktrees/` arbeitet, hatte deshalb ein sauberes
+      // `git status` und einen roten `pnpm run lint`: ESLint lief in das
+      // Bauverzeichnis des zweiten Arbeitsverzeichnisses hinein und
+      // beanstandete Nexts erzeugten Code. In der CI fiel das nie auf, weil
+      // es dort keine Arbeitsverzeichnisse gibt.
+      '**/node_modules/',
+      '**/.next/',
+      '.claude/worktrees/',
       'dist/',
       'coverage/',
       'prisma/migrations/',
