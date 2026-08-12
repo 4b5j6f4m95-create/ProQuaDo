@@ -896,7 +896,11 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Ausgeführt** gegen die Entwicklungsumgebung: 8 Objekte gelöscht, 90 MB; die referenzierte Datei blieb, die beiden zu jungen ebenfalls.
 
-   **Was offen bleibt, und es ist kein Nebensatz:** der Lauf kann _nicht_ entscheiden, ob eine Waise zu einem Import gehört, der im Audit-Trail noch verzeichnet ist. Der Eintrag `ifc_import.executed` hält Dateiname und Hash fest, **nicht** den Schlüssel im Objektspeicher. Wer diese Zuordnung braucht — und ADR-004 legt nahe, dass sie irgendwann gebraucht wird — ergänzt zuerst den Schlüssel im Audit-Eintrag; rückwirkend geht es nicht. Bis dahin ist die Liste des Berichts der Ausgangspunkt einer menschlichen Entscheidung und nicht ihr Ersatz.
+   **Der Lauf unterscheidet zwei Arten von Waisen**, und das war die eigentliche Arbeit. Eine Datei **ohne Spur im Audit-Trail** gehört zu einem abgewiesenen Versuch: nie ein Plan, nichts zugerechnet, Abfall. Eine mit Eintrag `ifc_import.executed` gehört zu einem Import, der stattgefunden hat und dessen Plan später verschwand — nach ADR-004 bleibt der Vorgang zugerechnet, und seine Datei wegzuwerfen macht daraus einen unbelegbaren. Solche Funde werden **nie** automatisch gelöscht, sondern getrennt ausgewiesen und einem Menschen vorgelegt.
+
+   Möglich wurde das erst, indem der Audit-Eintrag den **Speicherschlüssel** mitführt. Dateiname und Hash trugen es nicht: beide sagen nichts darüber, wo die Datei liegt. **Rückwirkend lässt es sich nicht nachtragen** — für Importe davor bleibt die Zuordnung unmöglich, und ältere Funde erscheinen als „ohne Spur", obwohl sie es womöglich nicht sind. Wer eine Umgebung mit Importhistorie aufräumt, sollte das wissen.
+
+   **Am lebenden System durchgespielt**: importieren, Plan löschen, Lauf mit `--delete --min-age-hours=0`. Ergebnis — zwei Waisen ohne Spur gelöscht, die dritte mit dem Vermerk „im Audit-Trail verzeichnet — von Hand entscheiden" stehen geblieben.
 
    Der zweite Weg zu einer Waise besteht ebenfalls fort: wer eine Plan-Revision löscht, löst die Zeile, nicht das Objekt. Solange es dafür keine Oberfläche gibt, betrifft das nur, wer von Hand in der Datenbank arbeitet.
 

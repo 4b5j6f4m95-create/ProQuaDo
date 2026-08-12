@@ -259,6 +259,21 @@ export async function importIfcPlan(command: ImportIfcPlanCommand): Promise<Impo
         planNumber: plan.planNumber,
         fileName: command.fileName,
         fileHash,
+        // Der Schlüssel im Objektspeicher, und er steht hier aus einem
+        // bestimmten Grund. Der Aufräumlauf für verwaiste Uploads
+        // (`scripts/ifc-orphans.ts`) findet Dateien ohne Zeile in
+        // `ifc_imports` — konnte aber nicht unterscheiden, ob eine davon zu
+        // einem abgewiesenen Versuch gehört (nie verzeichnet, gefahrlos zu
+        // löschen) oder zu einem Import, der stattgefunden hat und dessen Plan
+        // später verschwand. Der zweite Fall ist nach ADR-004 ein anderer: der
+        // Vorgang bleibt im Audit-Trail zugerechnet, und seine Datei
+        // wegzuwerfen macht daraus einen unbelegbaren.
+        //
+        // Dateiname und Hash allein trugen das nicht — beide sagen nichts
+        // darüber, wo die Datei liegt. **Rückwirkend lässt sich das nicht
+        // nachtragen**: für Importe vor dieser Zeile bleibt die Zuordnung
+        // unmöglich.
+        storageKey: command.storageKey,
         ifcSchema: parsed.schema,
         moduleNumbers: parsed.moduleNumbers,
         stepCount: parsed.steps.length,
