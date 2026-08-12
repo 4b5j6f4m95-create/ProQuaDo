@@ -1,7 +1,7 @@
 import { withOrgContext } from '@/lib/db/tenant-context';
 import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
-import { NotFoundError } from '@/lib/domain-errors';
+import { AlreadyExistsError, NotFoundError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
 
 export interface CreateProductionPlanCommand {
@@ -19,6 +19,23 @@ export async function createProductionPlan(command: CreateProductionPlanCommand)
   await assertPermission(command.actor, 'production_plan.create');
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
+    // Vorher nachsehen, nur um eine verständliche Meldung geben zu können.
+    // Die Zusicherung selbst trägt der Unique-Index — dieser Blick kann sie
+    // nicht ersetzen, weil zwischen Lesen und Schreiben ein zweiter Aufruf
+    // liegen kann. Ohne ihn kommt beim Anlegenden „Ein unerwarteter Fehler
+    // ist aufgetreten" an, denn P2002 nennt mit dem Treiber-Adapter von
+    // Prisma 7 nicht einmal das verletzte Feld.
+    const taken = await tx.productionPlan.findFirst({
+      where: { planNumber: command.planNumber },
+      select: { id: true, name: true },
+    });
+    if (taken) {
+      throw new AlreadyExistsError(
+        `Die Plannummer „${command.planNumber}" ist bereits vergeben („${taken.name}"). ` +
+          'Bitte eine andere wählen.',
+      );
+    }
+
     const plan = await tx.productionPlan.create({
       data: {
         organizationId: command.actor.organizationId,

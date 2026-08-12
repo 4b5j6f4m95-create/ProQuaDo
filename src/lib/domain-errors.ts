@@ -47,6 +47,20 @@ export class ValidationError extends DomainError {
 }
 
 /**
+ * Ein Datensatz mit dieser Kennung gibt es schon.
+ *
+ * Getrennt von `ValidationError` (422), weil es keine formale Frage ist: die
+ * Eingabe ist wohlgeformt, sie kollidiert nur mit dem Bestand. 409 sagt das,
+ * 422 nicht — und ein Client, der auf `code` prüft, kann „nimm eine andere
+ * Nummer" anbieten statt „prüfe deine Eingabe".
+ */
+export class AlreadyExistsError extends DomainError {
+  constructor(message: string) {
+    super('ALREADY_EXISTS', message, 409);
+  }
+}
+
+/**
  * Der Körper der Anfrage war größer, als die Übertragung zulässt — und kam
  * deshalb **gekappt** an, nicht abgelehnt.
  *

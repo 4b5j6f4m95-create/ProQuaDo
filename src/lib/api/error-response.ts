@@ -86,6 +86,33 @@ export function toErrorResponse(
     );
   }
 
+  // Eine verletzte Eindeutigkeit ist die Angabe des Aufrufers, nicht ein
+  // Fehler des Servers. Ohne diesen Zweig kam sie als „Ein unerwarteter
+  // Fehler ist aufgetreten" (500) an — nachgemessen an einer doppelten
+  // Plannummer.
+  //
+  // Die Meldung bleibt allgemein: mit dem Treiber-Adapter von Prisma 7 trägt
+  // P2002 kein `target` mehr („Unique constraint failed on the (not
+  // available)"), das verletzte Feld ist hier also nicht bekannt. Wo eine
+  // genaue Auskunft möglich ist, prüft der Dienst selbst vorher und wirft
+  // `AlreadyExistsError` mit Klartext — siehe createProductionPlan. Dieser
+  // Zweig ist das Netz darunter, kein Ersatz dafür.
+  if (isUniqueConstraintViolation(error)) {
+    logger.warn({ err: error, correlationId }, 'Unique constraint violation');
+    return NextResponse.json(
+      {
+        type: '/errors/already-exists',
+        title: 'ALREADY_EXISTS',
+        status: 409,
+        code: 'ALREADY_EXISTS',
+        detail: 'Ein Eintrag mit diesen Werten existiert bereits.',
+        instance: new URL(request.url).pathname,
+        correlationId,
+      },
+      { status: 409 },
+    );
+  }
+
   logger.error({ err: error, correlationId }, 'Unhandled error in API route');
   return NextResponse.json(
     {
@@ -98,5 +125,23 @@ export function toErrorResponse(
       correlationId,
     },
     { status: 500 },
+  );
+}
+
+/**
+ * Erkennt Prismas P2002 (verletzte Eindeutigkeit) ohne Typimport.
+ *
+ * `instanceof PrismaClientKnownRequestError` wäre der saubere Weg und ist es
+ * hier nicht: die Klasse aus `@prisma/client` in diese Datei zu ziehen hinge
+ * den generierten Client an jede Fehlerantwort — auch an die von Routen, die
+ * gar keine Datenbank anfassen. Der Code ist Teil von Prismas öffentlicher
+ * Schnittstelle und stabiler als der Importpfad.
+ */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code: unknown }).code === 'P2002'
   );
 }
