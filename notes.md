@@ -874,19 +874,31 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
 **Nach dem Piloten gehören drei Dokumente nachgezogen**, und sie sagen das selbst: die ⚠️-Kennzeichen in [docs/13](docs/13_STAGING_SETUP.md) und [docs/14](docs/14_RUNBOOK.md) durch das, was tatsächlich gelaufen ist; die neun `[FESTZULEGEN]`-Punkte in [docs/16](docs/16_ON_CALL.md) durch eure Festlegungen — bis dahin ist es eine Vorlage und kein Verfahren; und die fünf Missverständnisse in [docs/15](docs/15_TRAINING.md) durch die, die wirklich angerufen haben, denn sie sind aus der Konstruktion abgeleitet und nicht aus Beobachtung.
 
-0. **Verwaiste Uploads im Objektspeicher — die Hälfte ist behoben, die andere nicht.**
+0. **Verwaiste Uploads im Objektspeicher — erledigt, mit einer verbliebenen Lücke.**
 
-   Nachgemessen in der Entwicklungsumgebung: **11 Objekte unter `ifc/`, eine einzige Zeile in `ifc_imports`, 156 MB.** Zehn davon gehörten zu Importen, die abgewiesen wurden — dieselbe Datei ein zweites Mal, eine belegte Plannummer, ein gekappter Körper. Jeder dieser Versuche hatte 23 MB abgelegt und nie wieder angefasst.
+   Der Befund war: **11 Objekte unter `ifc/`, eine einzige Zeile in `ifc_imports`, 156 MB.** Zehn davon aus Importen, die abgewiesen wurden — dieselbe Datei ein zweites Mal, eine belegte Plannummer, ein gekappter Körper. Jeder Versuch hatte 23 MB abgelegt und nie wieder angefasst.
 
-   **Behoben ist der laufende Fall.** Die Route räumt eine hochgeladene Datei jetzt weg, sobald der Import nicht durchläuft, und schreibt eine Warnung mit Grund ins Protokoll. Die Reihenfolge Ablegen → Scannen → Lesen bleibt dabei unangetastet: der Virenscanner arbeitet auf dem Objektspeicher und nicht auf einem Puffer, „erst ablegen" ist also richtig und darf nicht umgedreht werden. Nachgemessen im Browser — ein abgewiesener Import lässt die Objektzahl unverändert, ein erfolgreicher erhöht sie um eins.
+   **Der laufende Fall ist behoben:** die Route räumt eine hochgeladene Datei weg, sobald der Import nicht durchläuft, und schreibt eine Warnung mit Grund ins Protokoll. Die Reihenfolge Ablegen → Scannen → Lesen bleibt unangetastet — der Virenscanner arbeitet auf dem Objektspeicher und nicht auf einem Puffer.
 
-   **Offen bleiben zwei Dinge.**
+   **Für die Altlast gibt es ein Kommando:**
 
-   Erstens die **Altlast**: die zehn Objekte aus der Zeit davor liegen weiterhin dort, und in jeder Umgebung, die schon Importe gesehen hat, ebenso. Dafür braucht es einen Lauf, der Objekte unter `ifc/` ohne Zeile in `ifc_imports` findet und **meldet, bevor er etwas löscht**. **Bevor jemand hier automatisch löscht**, sollte er sich ansehen, was ADR-004 über den Audit-Trail sagt: der Import bleibt dort verzeichnet, auch wenn der Plan verschwindet, und ein Aufräumen, das die Datei zu einem noch verzeichneten Vorgang wegwirft, macht aus einem nachlesbaren Vorgang einen unbelegbaren.
+   ```bash
+   pnpm run ifc:orphans                     # nur berichten
+   pnpm run ifc:orphans -- --delete         # nach dem Bericht auch löschen
+   pnpm run ifc:orphans -- --min-age-hours=48
+   ```
 
-   Zweitens der Weg über das **Löschen eines Plans**: wer eine Plan-Revision entfernt, löst die Zeile in `ifc_imports`, nicht das Objekt. Solange es keine Oberfläche zum Löschen von Plänen gibt, betrifft das nur den, der von Hand in der Datenbank arbeitet — mit einer Oberfläche wird es ein Fall für dieselbe Aufräumroutine.
+   Drei Sicherungen darin, und die erste ist die wichtigste — sie ist auch der Grund, warum dieses Werkzeug nicht in fünf Zeilen zu haben war:
 
-   Und eine Frage, die dabei offen geblieben ist: ein **abgewiesener** Upload hinterlässt nur eine Protokollzeile, keinen Audit-Eintrag — es gibt keine Ressource, an der er hinge. Für den Fall `INFECTED` ist das dünn. Wer eine Antwort darauf sucht, findet die Vorlage im Dokumentenpfad, wo `malwareScanStatus` an der Revision steht.
+   1. **Es läuft über `DIRECT_DATABASE_URL`, nicht über die Anwendungsrolle.** `proquado_app` unterliegt RLS und sieht ohne gesetzten Organisationskontext **null** Zeilen (docs/13 Schritt 6 misst das nach). Mit dieser Rolle hielte der Lauf jedes Objekt für verwaist. **Nachgestellt**: mit der Anwendungsrolle gestartet, meldete er alle 11 Objekte als Waisen — und brach vor dem Löschen ab.
+   2. **Objekte unter 24 Stunden bleiben unangetastet.** Zwischen `putObject` und dem `INSERT` liegen bei 23 MB einige Sekunden; ein Lauf in diesem Fenster löschte eine Datei, deren Import gerade läuft. Sie werden im Bericht als „geschützt, zu jung" ausgewiesen, nicht verschwiegen.
+   3. **Null bekannte Schlüssel bei vorhandenen Objekten bricht ab.** Leere Tabelle und RLS-verborgene Zeilen sehen von dort aus gleich aus, und raten ist hier die teuerste Option.
+
+   **Ausgeführt** gegen die Entwicklungsumgebung: 8 Objekte gelöscht, 90 MB; die referenzierte Datei blieb, die beiden zu jungen ebenfalls.
+
+   **Was offen bleibt, und es ist kein Nebensatz:** der Lauf kann _nicht_ entscheiden, ob eine Waise zu einem Import gehört, der im Audit-Trail noch verzeichnet ist. Der Eintrag `ifc_import.executed` hält Dateiname und Hash fest, **nicht** den Schlüssel im Objektspeicher. Wer diese Zuordnung braucht — und ADR-004 legt nahe, dass sie irgendwann gebraucht wird — ergänzt zuerst den Schlüssel im Audit-Eintrag; rückwirkend geht es nicht. Bis dahin ist die Liste des Berichts der Ausgangspunkt einer menschlichen Entscheidung und nicht ihr Ersatz.
+
+   Der zweite Weg zu einer Waise besteht ebenfalls fort: wer eine Plan-Revision löscht, löst die Zeile, nicht das Objekt. Solange es dafür keine Oberfläche gibt, betrifft das nur, wer von Hand in der Datenbank arbeitet.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 
