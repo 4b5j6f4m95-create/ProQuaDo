@@ -6,9 +6,10 @@ import { z } from 'zod';
 import { withErrorHandling } from '@/lib/api/handler';
 import { requireAuthContext } from '@/lib/authz/require-permission';
 import { importIfcPlan } from '@/domain/production-plans/import-ifc-plan';
-import { putObjectBytes } from '@/lib/storage/object-storage';
+import { deleteObjects, putObjectBytes } from '@/lib/storage/object-storage';
 import { getMalwareScanner } from '@/lib/storage/malware-scan';
-import { PayloadTooLargeError, ValidationError } from '@/lib/domain-errors';
+import { DomainError, PayloadTooLargeError, ValidationError } from '@/lib/domain-errors';
+import { logger } from '@/lib/logger';
 
 /**
  * `POST /api/v1/production-plans/import-ifc` — ein Gebäudemodell hochladen und
@@ -81,23 +82,80 @@ export async function POST(request: Request): Promise<NextResponse> {
     const storageKey = `ifc/${actor.organizationId}/${randomUUID()}.ifc`;
     await putObjectBytes({ storageKey, body: content, mimeType: 'application/x-step' });
 
-    const status = await getMalwareScanner().scan(storageKey);
-    if (status !== 'CLEAN') {
-      throw new ValidationError(
-        status === 'INFECTED'
-          ? 'Die Datei wurde vom Virenscanner abgelehnt.'
-          : 'Die Datei konnte nicht auf Schadsoftware geprüft werden und wird deshalb nicht verarbeitet.',
-      );
+    // Ab hier liegt eine Datei im Speicher, auf die noch nichts zeigt. Jeder
+    // Ausgang außer dem erfolgreichen muss sie wieder wegräumen — sonst
+    // bleibt sie für immer liegen, und zwar nicht selten: abgewiesen wird
+    // regelmäßig (dieselbe Datei ein zweites Mal, eine belegte Plannummer,
+    // eine unvollständige Übertragung). Gemessen waren es in der Entwicklung
+    // 11 Objekte zu einer einzigen Zeile in `ifc_imports`, 156 MB.
+    try {
+      const status = await getMalwareScanner().scan(storageKey);
+      if (status !== 'CLEAN') {
+        throw new ValidationError(
+          status === 'INFECTED'
+            ? 'Die Datei wurde vom Virenscanner abgelehnt.'
+            : 'Die Datei konnte nicht auf Schadsoftware geprüft werden und wird deshalb nicht verarbeitet.',
+        );
+      }
+
+      const result = await importIfcPlan({
+        actor,
+        ...metadata,
+        fileName: file.name,
+        content,
+        storageKey,
+      });
+
+      return NextResponse.json(result, { status: 201 });
+    } catch (error) {
+      await discardUpload(storageKey, file.name, actor.organizationId, error);
+      throw error;
     }
-
-    const result = await importIfcPlan({
-      actor,
-      ...metadata,
-      fileName: file.name,
-      content,
-      storageKey,
-    });
-
-    return NextResponse.json(result, { status: 201 });
   });
+}
+
+/**
+ * Räumt eine hochgeladene Datei weg, deren Import nicht durchgelaufen ist.
+ *
+ * **Warum hier gelöscht wird und nicht wie bei Dokumenten aufbewahrt.** Der
+ * Dokumentenpfad behält auch eine infizierte Datei — dort trägt die
+ * Revisionszeile den Scan-Status, das Objekt ist also referenziert und der
+ * Vorgang nachlesbar. Bei einem abgewiesenen IFC-Import entsteht überhaupt
+ * keine Zeile: was bliebe, wäre eine Datei, auf die nichts zeigt und die
+ * niemand mehr zuordnen kann.
+ *
+ * **Der ursprüngliche Fehler bleibt der Fehler.** Scheitert das Löschen,
+ * wird es protokolliert und nicht geworfen — sonst bekäme der Hochladende
+ * statt „diese Datei wurde bereits importiert" eine Meldung über den
+ * Objektspeicher, und die Ursache seines Problems wäre verdeckt.
+ *
+ * Die Zeile im Protokoll ist zugleich die einzige Spur, die ein abgelehnter
+ * Upload hinterlässt — es gibt für ihn keinen Audit-Eintrag, weil es keine
+ * Ressource gibt, an der er hinge. Für den Fall INFECTED ist das dünn und
+ * in notes.md als offene Frage vermerkt.
+ */
+async function discardUpload(
+  storageKey: string,
+  fileName: string,
+  organizationId: string,
+  cause: unknown,
+): Promise<void> {
+  try {
+    await deleteObjects([storageKey]);
+    logger.warn(
+      { storageKey, fileName, organizationId, reason: describe(cause) },
+      'IFC-Import abgewiesen, hochgeladene Datei entfernt',
+    );
+  } catch (deleteError) {
+    logger.error(
+      { err: deleteError, storageKey, fileName, organizationId },
+      'IFC-Import abgewiesen, die hochgeladene Datei konnte nicht entfernt werden',
+    );
+  }
+}
+
+function describe(cause: unknown): string {
+  if (cause instanceof DomainError) return `${cause.code}: ${cause.message}`;
+  if (cause instanceof Error) return cause.message;
+  return String(cause);
 }

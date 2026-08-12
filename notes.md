@@ -874,15 +874,19 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
 **Nach dem Piloten gehören drei Dokumente nachgezogen**, und sie sagen das selbst: die ⚠️-Kennzeichen in [docs/13](docs/13_STAGING_SETUP.md) und [docs/14](docs/14_RUNBOOK.md) durch das, was tatsächlich gelaufen ist; die neun `[FESTZULEGEN]`-Punkte in [docs/16](docs/16_ON_CALL.md) durch eure Festlegungen — bis dahin ist es eine Vorlage und kein Verfahren; und die fünf Missverständnisse in [docs/15](docs/15_TRAINING.md) durch die, die wirklich angerufen haben, denn sie sind aus der Konstruktion abgeleitet und nicht aus Beobachtung.
 
-0. **Ein abgewiesener IFC-Import lässt seine Datei im Objektspeicher liegen** — und das ist der einzige Punkt dieser Liste, der Programmierarbeit ist und keine Zielumgebung braucht.
+0. **Verwaiste Uploads im Objektspeicher — die Hälfte ist behoben, die andere nicht.**
 
-   Nachgemessen in der Entwicklungsumgebung: **11 Objekte unter `ifc/`, eine einzige Zeile in `ifc_imports`, 156 MB.** Zehn davon gehören zu Importen, die abgewiesen wurden — dieselbe Datei ein zweites Mal, eine belegte Plannummer, ein gekappter Körper. Jeder dieser Versuche hat 23 MB abgelegt und nie wieder angefasst.
+   Nachgemessen in der Entwicklungsumgebung: **11 Objekte unter `ifc/`, eine einzige Zeile in `ifc_imports`, 156 MB.** Zehn davon gehörten zu Importen, die abgewiesen wurden — dieselbe Datei ein zweites Mal, eine belegte Plannummer, ein gekappter Körper. Jeder dieser Versuche hatte 23 MB abgelegt und nie wieder angefasst.
 
-   Die Ursache steht in `src/app/api/v1/production-plans/import-ifc/route.ts` und ist **kein Versehen**: die Datei wird erst abgelegt, dann gescannt, dann gelesen. Der Virenscanner arbeitet auf dem Objektspeicher und nicht auf einem Puffer, „erst ablegen" ist also die richtige Reihenfolge und darf nicht umgedreht werden. Was fehlt, ist das Aufräumen danach — die Route hat kein `finally`, das ein Objekt entfernt, dessen Import gescheitert ist.
+   **Behoben ist der laufende Fall.** Die Route räumt eine hochgeladene Datei jetzt weg, sobald der Import nicht durchläuft, und schreibt eine Warnung mit Grund ins Protokoll. Die Reihenfolge Ablegen → Scannen → Lesen bleibt dabei unangetastet: der Virenscanner arbeitet auf dem Objektspeicher und nicht auf einem Puffer, „erst ablegen" ist also richtig und darf nicht umgedreht werden. Nachgemessen im Browser — ein abgewiesener Import lässt die Objektzahl unverändert, ein erfolgreicher erhöht sie um eins.
 
-   Dazu kommt der zweite Weg: wer einen Plan wieder löscht, löst die Zeile in `ifc_imports`, nicht das Objekt. Für einen Fertigungsplan aus einem 23-MB-Modell ist das kein Rundungsfehler.
+   **Offen bleiben zwei Dinge.**
 
-   Zwei Teile also, und der erste ist klein: das Objekt entfernen, wenn der Import nicht durchläuft. Der zweite ist eine Betriebsaufgabe — ein Lauf, der Objekte ohne Datenbankzeile findet und meldet, bevor er etwas löscht. **Bevor jemand hier automatisch löscht**, sollte er sich ansehen, was ADR-004 über den Audit-Trail sagt: der Import bleibt dort verzeichnet, auch wenn der Plan verschwindet, und ein Aufräumen, das die Datei zu einem noch verzeichneten Vorgang wegwirft, macht aus einem nachlesbaren Vorgang einen unbelegbaren.
+   Erstens die **Altlast**: die zehn Objekte aus der Zeit davor liegen weiterhin dort, und in jeder Umgebung, die schon Importe gesehen hat, ebenso. Dafür braucht es einen Lauf, der Objekte unter `ifc/` ohne Zeile in `ifc_imports` findet und **meldet, bevor er etwas löscht**. **Bevor jemand hier automatisch löscht**, sollte er sich ansehen, was ADR-004 über den Audit-Trail sagt: der Import bleibt dort verzeichnet, auch wenn der Plan verschwindet, und ein Aufräumen, das die Datei zu einem noch verzeichneten Vorgang wegwirft, macht aus einem nachlesbaren Vorgang einen unbelegbaren.
+
+   Zweitens der Weg über das **Löschen eines Plans**: wer eine Plan-Revision entfernt, löst die Zeile in `ifc_imports`, nicht das Objekt. Solange es keine Oberfläche zum Löschen von Plänen gibt, betrifft das nur den, der von Hand in der Datenbank arbeitet — mit einer Oberfläche wird es ein Fall für dieselbe Aufräumroutine.
+
+   Und eine Frage, die dabei offen geblieben ist: ein **abgewiesener** Upload hinterlässt nur eine Protokollzeile, keinen Audit-Eintrag — es gibt keine Ressource, an der er hinge. Für den Fall `INFECTED` ist das dünn. Wer eine Antwort darauf sucht, findet die Vorlage im Dokumentenpfad, wo `malwareScanStatus` an der Revision steht.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 
