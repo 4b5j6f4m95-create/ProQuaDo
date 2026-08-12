@@ -58,6 +58,36 @@ export interface IfcComponent {
   trade?: string;
 }
 
+/**
+ * Ein Verweis auf eine Zeichnung oder ein anderes Dokument, wie er in der
+ * Datei steht.
+ *
+ * **Ein Verweis ist keine Zeichnung.** IFC bettet keine Zeichnungsdateien ein;
+ * `IfcDocumentReference` nennt Nummer, Titel und höchstens einen Ablageort.
+ * Was hier herauskommt, ist deshalb ein Anhaltspunkt, kein Inhalt — die PDF
+ * selbst kommt weiterhin über den Dokumentenweg ins System, und der Import
+ * verbindet beides, wo es sich zuordnen lässt.
+ */
+export interface IfcDrawing {
+  /** `Name` — die sprechende Bezeichnung, z. B. „Grundriss Modulboden". */
+  name?: string;
+  /**
+   * `Identification` (IFC4) bzw. `ItemReference` (IFC2X3) — die Nummer, unter
+   * der die Zeichnung geführt wird. Der Schlüssel für die Zuordnung zu einem
+   * bereits hochgeladenen Dokument.
+   */
+  identification?: string;
+  /** `Location` — Dateiname, Pfad oder URL, falls angegeben. */
+  location?: string;
+  description?: string;
+  /**
+   * Die Arbeitsvorgänge, an deren Objekten der Verweis hängt, aufsteigend.
+   * Leer, wenn er am Projekt oder Gebäude hängt und damit für den ganzen Plan
+   * gilt — das ist kein Fehler, aber auch keine Zuordnung zu einem Schritt.
+   */
+  stepNumbers: number[];
+}
+
 export interface IfcParseResult {
   /** Aus `FILE_SCHEMA`, z. B. `IFC2X3`. */
   schema: string;
@@ -68,6 +98,13 @@ export interface IfcParseResult {
   /** Nach `stepNumber` aufsteigend, also in der Reihenfolge der Straße. */
   steps: IfcWorkStep[];
   components: IfcComponent[];
+  /**
+   * Dokumentverweise aus der Datei, nach Nummer bzw. Name sortiert. In den
+   * Exporten, die bisher geprüft wurden, ist diese Liste leer — Allplan
+   * schreibt keine `IfcDocumentReference`. Sie steht hier für die Dateien
+   * anderer Fertiger, die es tun.
+   */
+  drawings: IfcDrawing[];
   /**
    * Alles, was gelesen wurde und nicht zugeordnet werden konnte. Bewusst
    * kein stiller Verlust: eine Datei, aus der 119 von 1287 Bauteilen
@@ -165,6 +202,10 @@ export function parseIfc(content: string): IfcParseResult {
   /** PropertySet-Id → Element-Ids, die darauf zeigen. */
   const setToElements = new Map<number, number[]>();
   const elements = new Map<number, { globalId: string; ifcType: string }>();
+  /** `IfcDocumentReference` und `IfcDocumentInformation`, nach Entitäts-Id. */
+  const documents = new Map<number, ParsedDocumentEntity>();
+  /** Was `IfcRelAssociatesDocument` verbindet: Dokument → Objekte. */
+  const documentToElements: Array<{ documentId: number; elementIds: number[] }> = [];
 
   for (const line of content.split('\n')) {
     if (line.length === 0 || line.charCodeAt(0) !== 35 /* '#' */) continue;
@@ -194,6 +235,23 @@ export function parseIfc(content: string): IfcParseResult {
         const existing = setToElements.get(setRef);
         if (existing) existing.push(...related);
         else setToElements.set(setRef, related);
+      }
+      continue;
+    }
+
+    if (type === 'IFCDOCUMENTREFERENCE' || type === 'IFCDOCUMENTINFORMATION') {
+      documents.set(id, parseDocumentEntity(type, args));
+      continue;
+    }
+
+    if (type === 'IFCRELASSOCIATESDOCUMENT') {
+      // (GlobalId, OwnerHistory, Name, Description, RelatedObjects, RelatingDocument)
+      // — dieselbe Form wie IfcRelDefinesByProperties: die Beziehung steht
+      // zuletzt, die Objekte in der letzten Klammergruppe davor.
+      const documentId = lastRef(args);
+      const elementIds = collectRefs(lastGroup(args));
+      if (documentId !== undefined && elementIds.length > 0) {
+        documentToElements.push({ documentId, elementIds });
       }
       continue;
     }
@@ -248,6 +306,8 @@ export function parseIfc(content: string): IfcParseResult {
   const components: IfcComponent[] = [];
   const stepsByNumber = new Map<number, IfcWorkStep>();
   const moduleNumbers = new Set<string>();
+  /** Element-Id → Arbeitsvorgang, für die Zuordnung der Dokumentverweise. */
+  const stepByElement = new Map<number, number>();
   let withoutStep = 0;
   const malformed = new Set<string>();
   const excludedByType = new Map<string, number>();
@@ -270,6 +330,12 @@ export function parseIfc(content: string): IfcParseResult {
 
     if (NON_PHYSICAL_TYPES.has(element.ifcType)) {
       excludedByType.set(element.ifcType, (excludedByType.get(element.ifcType) ?? 0) + 1);
+      // Kein Bauteil — aber wenn eine Zeichnung an dieser Beschriftung hängt,
+      // gehört sie trotzdem zu dem Arbeitsvorgang, den sie nennt. Im
+      // Beispielmodul tragen genau diese Objekte („KBS_Fenster") einen
+      // Arbeitsvorgang; sie hier zu vergessen hieße, den Verweis zu verlieren.
+      const excludedStep = parseWorkStepLabel(raw);
+      if (excludedStep) stepByElement.set(elementId, excludedStep.stepNumber);
       continue;
     }
 
@@ -293,6 +359,8 @@ export function parseIfc(content: string): IfcParseResult {
         );
       }
     }
+
+    stepByElement.set(elementId, step.stepNumber);
 
     components.push({
       globalId: element.globalId,
@@ -327,14 +395,228 @@ export function parseIfc(content: string): IfcParseResult {
     );
   }
 
+  const drawings = collectDrawings({
+    documents,
+    documentToElements,
+    stepByElement,
+    knownSteps: stepsByNumber,
+    warnings,
+  });
+
   return {
     schema,
     ...(sourceApplication ? { sourceApplication } : {}),
     moduleNumbers: [...moduleNumbers].sort(),
     steps: [...stepsByNumber.values()].sort((a, b) => a.stepNumber - b.stepNumber),
     components,
+    drawings,
     warnings,
   };
+}
+
+interface ParsedDocumentEntity {
+  name?: string;
+  identification?: string;
+  location?: string;
+  description?: string;
+  /** `ReferencedDocument` — der Verweis zeigt auf eine Dokumentangabe. */
+  referencedDocument?: number;
+}
+
+/**
+ * `IfcDocumentReference` und `IfcDocumentInformation` in einer Funktion, weil
+ * ihre ersten Stellen dasselbe bedeuten und eine Beziehung auf beide zeigen
+ * darf.
+ *
+ * **IFC2X3 und IFC4 unterscheiden sich an genau einer Stelle**, und die wird
+ * am Inhalt erkannt statt an der Schemaangabe im Kopf: bei
+ * `IfcDocumentInformation` steht an vierter Stelle in IFC2X3 die Liste der
+ * zugehörigen Verweise `(#1,#2)`, in IFC4 der Ablageort als Zeichenkette. Ein
+ * Anführungszeichen dort heißt also Ablageort. Am Schema festzumachen wäre
+ * unzuverlässig: Dateien mit `FILE_SCHEMA(('IFC4'))` und Entitäten in
+ * 2X3-Form kommen vor, wenn der Exporteur nachlässig ist.
+ */
+function parseDocumentEntity(type: string, args: string): ParsedDocumentEntity {
+  const parts = splitArgs(args);
+  const entity: ParsedDocumentEntity = {};
+
+  if (type === 'IFCDOCUMENTREFERENCE') {
+    // (Location, ItemReference|Identification, Name [, Description, ReferencedDocument])
+    setIfString(entity, 'location', parts[0]);
+    setIfString(entity, 'identification', parts[1]);
+    setIfString(entity, 'name', parts[2]);
+    setIfString(entity, 'description', parts[3]);
+    const referenced = parts[4] !== undefined ? refValue(parts[4]) : undefined;
+    if (referenced !== undefined) entity.referencedDocument = referenced;
+    return entity;
+  }
+
+  // (Identification|DocumentId, Name, Description, Location|DocumentReferences, …)
+  setIfString(entity, 'identification', parts[0]);
+  setIfString(entity, 'name', parts[1]);
+  setIfString(entity, 'description', parts[2]);
+  setIfString(entity, 'location', parts[3]);
+  return entity;
+}
+
+function collectDrawings(input: {
+  documents: Map<number, ParsedDocumentEntity>;
+  documentToElements: Array<{ documentId: number; elementIds: number[] }>;
+  stepByElement: Map<number, number>;
+  knownSteps: Map<number, IfcWorkStep>;
+  warnings: string[];
+}): IfcDrawing[] {
+  const { documents, documentToElements, stepByElement, knownSteps, warnings } = input;
+  if (documentToElements.length === 0) return [];
+
+  /** Entitäts-Id des Dokuments → gesammelte Arbeitsvorgänge. */
+  const stepsByDocument = new Map<number, Set<number>>();
+  let unresolvedDocuments = 0;
+
+  for (const association of documentToElements) {
+    if (!documents.has(association.documentId)) {
+      unresolvedDocuments += 1;
+      continue;
+    }
+    let steps = stepsByDocument.get(association.documentId);
+    if (!steps) {
+      steps = new Set<number>();
+      stepsByDocument.set(association.documentId, steps);
+    }
+    for (const elementId of association.elementIds) {
+      const stepNumber = stepByElement.get(elementId);
+      // Nur Schritte, die es im Plan auch gibt. Ein Verweis, der an einem
+      // Objekt ohne auswertbaren Arbeitsvorgang hängt, gilt für den ganzen
+      // Plan und nicht für einen erfundenen Schritt.
+      if (stepNumber !== undefined && knownSteps.has(stepNumber)) steps.add(stepNumber);
+    }
+  }
+
+  if (unresolvedDocuments > 0) {
+    warnings.push(
+      `${unresolvedDocuments} Dokumentzuordnungen verweisen auf eine Angabe, die nicht in der ` +
+        'Datei steht — die zugehörige Zeichnung bleibt unberücksichtigt.',
+    );
+  }
+
+  const drawings: IfcDrawing[] = [];
+  for (const [documentId, steps] of stepsByDocument) {
+    const entity = documents.get(documentId);
+    if (!entity) continue;
+
+    // Ein `IfcDocumentReference` darf auf eine `IfcDocumentInformation`
+    // zeigen; Nummer und Titel stehen dann dort. Der Verweis gewinnt, wo er
+    // selbst etwas sagt — er ist die spezifischere Angabe.
+    const referenced =
+      entity.referencedDocument !== undefined
+        ? documents.get(entity.referencedDocument)
+        : undefined;
+
+    const name = entity.name ?? referenced?.name;
+    const identification = entity.identification ?? referenced?.identification;
+    const location = entity.location ?? referenced?.location;
+    const description = entity.description ?? referenced?.description;
+
+    // Ohne Nummer, Titel und Ablageort ist der Verweis nicht zuordenbar und
+    // auch für einen Menschen nicht lesbar. Er wird gemeldet, nicht geführt.
+    if (name === undefined && identification === undefined && location === undefined) {
+      warnings.push(
+        'Ein Dokumentverweis trägt weder Nummer noch Titel noch Ablageort und wurde ausgelassen.',
+      );
+      continue;
+    }
+
+    drawings.push({
+      ...(name !== undefined ? { name } : {}),
+      ...(identification !== undefined ? { identification } : {}),
+      ...(location !== undefined ? { location } : {}),
+      ...(description !== undefined ? { description } : {}),
+      stepNumbers: [...steps].sort((a, b) => a - b),
+    });
+  }
+
+  const withoutStep = drawings.filter((drawing) => drawing.stepNumbers.length === 0).length;
+  if (withoutStep > 0) {
+    warnings.push(
+      `${withoutStep} Dokumentverweise hängen an keinem Arbeitsvorgang und lassen sich keinem ` +
+        'Schritt zuordnen.',
+    );
+  }
+
+  return drawings.sort((a, b) =>
+    (a.identification ?? a.name ?? a.location ?? '').localeCompare(
+      b.identification ?? b.name ?? b.location ?? '',
+      'de',
+    ),
+  );
+}
+
+function setIfString(
+  entity: ParsedDocumentEntity,
+  key: 'name' | 'identification' | 'location' | 'description',
+  raw: string | undefined,
+): void {
+  if (raw === undefined) return;
+  const match = /^'((?:[^']|'')*)'$/.exec(raw.trim());
+  if (!match || match[1] === undefined) return;
+  const value = decodeStepString(match[1]).trim();
+  // `' '` ist in diesen Exporten die übliche Schreibweise für „nichts" und
+  // wäre als Titel eine Zeile aus Leerzeichen auf dem Tablet des Werkers.
+  if (value.length > 0) entity[key] = value;
+}
+
+function refValue(raw: string): number | undefined {
+  const match = /^#(\d+)$/.exec(raw.trim());
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Zerlegt eine Argumentliste in ihre obersten Bestandteile.
+ *
+ * Nötig, weil die Stellen bei Dokumenten zählen und ein Komma sowohl in einer
+ * Zeichenkette („Grundriss, Ansicht Nord") als auch in einer verschachtelten
+ * Liste `(#1,#2)` vorkommt. Ein `split(',')` zerschnitte beides.
+ */
+export function splitArgs(args: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let current = '';
+
+  for (let i = 0; i < args.length; i += 1) {
+    const char = args[i];
+
+    if (inString) {
+      current += char;
+      // `''` ist ein einfaches Anführungszeichen im Text, kein Ende.
+      if (char === "'") {
+        if (args[i + 1] === "'") {
+          current += "'";
+          i += 1;
+        } else {
+          inString = false;
+        }
+      }
+      continue;
+    }
+
+    if (char === "'") {
+      inString = true;
+      current += char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+
+  return parts;
 }
 
 /**

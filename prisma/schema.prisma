@@ -88,6 +88,7 @@ model Organization {
   webhookDeliveries    WebhookDelivery[]
   ifcImports           IfcImport[]
   ifcComponents        IfcComponent[]
+  ifcDrawingReferences IfcDrawingReference[]
   syncSequence         SyncSequence?
   syncCursors          SyncCursor[]
   syncCommands         SyncCommand[]
@@ -677,8 +678,9 @@ model Document {
 
   organization Organization          @relation(fields: [organizationId], references: [id])
   project      Project               @relation(fields: [projectId], references: [id])
-  revisions    DocumentRevision[]
-  stepBindings StepDocumentBinding[]
+  revisions             DocumentRevision[]
+  stepBindings          StepDocumentBinding[]
+  ifcDrawingReferences  IfcDrawingReference[]
 
   @@unique([organizationId, documentNumber])
   @@index([organizationId])
@@ -718,8 +720,9 @@ model DocumentRevision {
   document      Document              @relation(fields: [documentId], references: [id])
   priorRevision DocumentRevision?     @relation("DocumentRevisionHistory", fields: [priorRevisionId], references: [id])
   supersededBy  DocumentRevision[]    @relation("DocumentRevisionHistory")
-  approvals     DocumentApproval[]
-  stepBindings  StepDocumentBinding[]
+  approvals             DocumentApproval[]
+  stepBindings          StepDocumentBinding[]
+  ifcDrawingReferences  IfcDrawingReference[]
 
   @@unique([organizationId, documentId, revisionNumber])
   @@index([organizationId])
@@ -849,6 +852,7 @@ model PlanStep {
   photoRequirements         PhotoRequirement[]
   workStepInstances         WorkStepInstance[]
   ifcComponents             IfcComponent[]
+  ifcDrawingReferences      IfcDrawingReference[]
 
   @@unique([organizationId, productionPlanRevisionId, stepNumber])
   @@index([organizationId])
@@ -1995,6 +1999,7 @@ model IfcImport {
   productionPlanRevision ProductionPlanRevision @relation(fields: [productionPlanRevisionId], references: [id])
   importedBy             User                   @relation(fields: [importedById], references: [id])
   components             IfcComponent[]
+  drawingReferences      IfcDrawingReference[]
 
   @@index([organizationId])
   @@index([organizationId, fileHash])
@@ -2030,4 +2035,45 @@ model IfcComponent {
   @@index([organizationId])
   @@index([planStepId])
   @@map("ifc_components")
+}
+
+/// Eine Zeichnung, die das Gebäudemodell für diesen Arbeitsschritt nennt.
+///
+/// **Warum eine eigene Tabelle neben `step_document_bindings`.** Die Bindung
+/// sagt, welche Revision der Schritt verwendet — sie trägt Verantwortung und
+/// geht in den `documentSetHash` der Freigabe ein. Diese Zeile hier sagt nur,
+/// was in der Datei stand. Beides zusammenzulegen hieße, eine Behauptung des
+/// Planungsprogramms wie eine geprüfte Zuordnung aussehen zu lassen.
+///
+/// Findet der Import ein passendes Dokument, entsteht zusätzlich eine Bindung
+/// und `document_revision_id` zeigt darauf. Bleibt das Feld leer, ist der
+/// Verweis unerledigt: die Zeichnung ist im Modell benannt, aber nicht im
+/// System — genau das muss im Schritt sichtbar sein, statt zu fehlen.
+model IfcDrawingReference {
+  id             String @id @default(uuid())
+  organizationId String @map("organization_id")
+  ifcImportId    String @map("ifc_import_id")
+  planStepId     String @map("plan_step_id")
+  /// `Name` des Verweises, z. B. „Grundriss Modulboden".
+  name           String?
+  /// `Identification` bzw. `ItemReference` — die Zeichnungsnummer.
+  identification String?
+  /// `Location` — Dateiname, Pfad oder URL, wie in der Datei angegeben.
+  location       String?
+  description    String?
+  /// Gefüllt, wenn beim Import ein Dokument dieser Nummer gefunden wurde.
+  documentId         String?  @map("document_id")
+  documentRevisionId String?  @map("document_revision_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  version            Int      @default(1)
+
+  organization     Organization      @relation(fields: [organizationId], references: [id])
+  ifcImport        IfcImport         @relation(fields: [ifcImportId], references: [id])
+  planStep         PlanStep          @relation(fields: [planStepId], references: [id])
+  document         Document?         @relation(fields: [documentId], references: [id])
+  documentRevision DocumentRevision? @relation(fields: [documentRevisionId], references: [id])
+
+  @@index([organizationId])
+  @@index([planStepId])
+  @@map("ifc_drawing_references")
 }
