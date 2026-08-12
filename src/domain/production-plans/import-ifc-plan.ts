@@ -5,7 +5,8 @@ import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
 import { AlreadyExistsError, NotFoundError, ValidationError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
-import { parseIfc, IfcParseError, type IfcParseResult } from '@/lib/ifc/parse-ifc';
+import { parseIfc, IfcParseError, type IfcDrawing, type IfcParseResult } from '@/lib/ifc/parse-ifc';
+import type { Prisma } from '@prisma/client';
 
 /**
  * Erzeugt aus einem Gebäudemodell (IFC) einen Fertigungsplan im Entwurf.
@@ -50,6 +51,10 @@ export interface ImportIfcPlanResult {
   importId: string;
   stepCount: number;
   componentCount: number;
+  /** Zeilen in `ifc_drawing_references` — Verweis × Schritt. */
+  drawingCount: number;
+  /** Davon an ein freigegebenes Dokument gebunden. */
+  boundDrawingCount: number;
   warnings: string[];
 }
 
@@ -235,6 +240,15 @@ export async function importIfcPlan(command: ImportIfcPlanCommand): Promise<Impo
       await tx.ifcComponent.createMany({ data: componentRows });
     }
 
+    const drawings = await linkDrawings({
+      tx,
+      organizationId: command.actor.organizationId,
+      projectId: command.projectId,
+      ifcImportId: ifcImport.id,
+      stepIdByNumber,
+      parsed,
+    });
+
     await writeAuditEvent(tx, {
       organizationId: command.actor.organizationId,
       eventType: 'ifc_import.executed',
@@ -249,6 +263,8 @@ export async function importIfcPlan(command: ImportIfcPlanCommand): Promise<Impo
         moduleNumbers: parsed.moduleNumbers,
         stepCount: parsed.steps.length,
         componentCount: parsed.components.length,
+        drawingCount: drawings.referenceCount,
+        boundDrawingCount: drawings.boundCount,
         // Die Warnungen gehören in den Audit-Trail und nicht nur in die
         // Antwort: „importiert" und „vollständig importiert" sind zwei
         // verschiedene Aussagen, und später ist nur nachlesbar, was
@@ -264,7 +280,130 @@ export async function importIfcPlan(command: ImportIfcPlanCommand): Promise<Impo
       importId: ifcImport.id,
       stepCount: parsed.steps.length,
       componentCount: parsed.components.length,
+      drawingCount: drawings.referenceCount,
+      boundDrawingCount: drawings.boundCount,
       warnings: parsed.warnings,
     };
   });
+}
+
+/**
+ * Legt zu jedem Zeichnungsverweis eine Zeile an und bindet ihn an das
+ * Dokument, das er nennt — wenn es das im Projekt gibt.
+ *
+ * **Gebunden wird nur auf eine freigegebene Revision.** Ein Verweis aus einer
+ * Planungsdatei darf keinen Entwurf in einen Fertigungsplan holen; RELEASED
+ * ist die Zusicherung, um derentwillen die Bindung überhaupt existiert
+ * (Geschäftsgrundsatz 6). Findet sich kein Dokument oder keine freigegebene
+ * Revision, bleibt die Zeile unerledigt stehen und ist im Schritt sichtbar —
+ * das ist der Zustand, den jemand auflösen muss, und keiner, den der Import
+ * durch Wegsehen beseitigen darf.
+ *
+ * **Der Abgleich geht über die Nummer, nicht über den Titel.** Eine
+ * Zeichnungsnummer ist eine Kennung, ein Titel ist Prosa: „Grundriss" steht
+ * an dreißig Dokumenten. Nur wenn der Verweis keine Nummer trägt, wird der
+ * Titel als exakter Vergleich herangezogen.
+ */
+async function linkDrawings(input: {
+  tx: Prisma.TransactionClient;
+  organizationId: string;
+  projectId: string;
+  ifcImportId: string;
+  stepIdByNumber: Map<number, string>;
+  parsed: IfcParseResult;
+}): Promise<{ referenceCount: number; boundCount: number }> {
+  const { tx, organizationId, projectId, ifcImportId, stepIdByNumber, parsed } = input;
+
+  let referenceCount = 0;
+  let boundCount = 0;
+
+  for (const drawing of parsed.drawings) {
+    // Ein Verweis ohne Schritt gehört zum ganzen Plan; er steht als Warnung
+    // im Import und bekommt hier keine Zeile — sie hinge an keinem Schritt.
+    if (drawing.stepNumbers.length === 0) continue;
+
+    const match = await findDocumentForDrawing(tx, projectId, drawing);
+
+    for (const stepNumber of drawing.stepNumbers) {
+      const planStepId = stepIdByNumber.get(stepNumber);
+      if (!planStepId) continue;
+
+      await tx.ifcDrawingReference.create({
+        data: {
+          organizationId,
+          ifcImportId,
+          planStepId,
+          name: drawing.name,
+          identification: drawing.identification,
+          location: drawing.location,
+          description: drawing.description,
+          documentId: match?.documentId,
+          documentRevisionId: match?.revisionId,
+        },
+      });
+      referenceCount += 1;
+
+      if (!match) continue;
+
+      // `upsert` statt `create`: zwei Verweise derselben Datei dürfen auf
+      // dasselbe Dokument zeigen. Die Bindung ist je (Schritt, Revision)
+      // eindeutig — ein zweiter Anlauf ist kein Fehler, sondern dieselbe
+      // Aussage.
+      await tx.stepDocumentBinding.upsert({
+        where: {
+          planStepId_documentRevisionId: {
+            planStepId,
+            documentRevisionId: match.revisionId,
+          },
+        },
+        create: {
+          organizationId,
+          planStepId,
+          documentId: match.documentId,
+          documentRevisionId: match.revisionId,
+          markerLabel: 'Aus IFC-Modell',
+        },
+        update: {},
+      });
+      boundCount += 1;
+    }
+  }
+
+  return { referenceCount, boundCount };
+}
+
+async function findDocumentForDrawing(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  drawing: IfcDrawing,
+): Promise<{ documentId: string; revisionId: string } | null> {
+  const where = drawing.identification
+    ? {
+        projectId,
+        documentNumber: { equals: drawing.identification, mode: 'insensitive' as const },
+      }
+    : drawing.name
+      ? { projectId, title: { equals: drawing.name, mode: 'insensitive' as const } }
+      : null;
+  if (!where) return null;
+
+  const document = await tx.document.findFirst({
+    where,
+    select: {
+      id: true,
+      revisions: {
+        where: { status: 'RELEASED' },
+        // Die zuletzt freigegebene Fassung — `validFrom` ist der Zeitpunkt,
+        // ab dem sie gilt, und damit die Reihenfolge, in der die Halle sie
+        // kennt.
+        orderBy: [{ validFrom: 'desc' }, { revisionNumber: 'desc' }],
+        take: 1,
+        select: { id: true },
+      },
+    },
+  });
+
+  const revisionId = document?.revisions[0]?.id;
+  if (!document || !revisionId) return null;
+  return { documentId: document.id, revisionId };
 }

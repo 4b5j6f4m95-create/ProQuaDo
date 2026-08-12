@@ -177,6 +177,33 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
         </section>
       )}
 
+      {/* Im Modell benannt, im System nicht vorhanden. Das gehört vor die
+          Augen des Werkers und nicht nur in ein Import-Protokoll: er soll
+          erfahren, dass es zu diesem Schritt eine Zeichnung geben müsste,
+          bevor er ohne sie anfängt. */}
+      {step.planStep.ifcDrawingReferences.length > 0 && (
+        <section className="card">
+          <h2>Im Modell genannte Zeichnungen ({step.planStep.ifcDrawingReferences.length})</h2>
+          <p className="notice">
+            Diese Zeichnungen nennt das Gebäudemodell für diesen Schritt. Sie liegen nicht als
+            freigegebenes Dokument im System und lassen sich hier deshalb nicht öffnen.
+          </p>
+          <ul>
+            {step.planStep.ifcDrawingReferences.map((reference) => (
+              <li key={reference.id}>
+                {reference.identification ? <strong>{reference.identification}</strong> : null}
+                {reference.identification && reference.name ? ' — ' : ''}
+                {reference.name}
+                {reference.location ? <span className="muted"> · {reference.location}</span> : null}
+                {reference.description ? (
+                  <div className="muted">{reference.description}</div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <IfcComponentList components={step.planStep.ifcComponents} />
 
       {!canWork && (

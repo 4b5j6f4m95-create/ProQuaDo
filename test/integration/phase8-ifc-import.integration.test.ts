@@ -84,13 +84,33 @@ function element(id: number, arbeitsvorgang: string, bauteilId: string): string 
 }
 
 function sampleIfc(): Buffer {
-  const body = [
-    element(100, '20: Statische Verschraubung', 'B-0001'),
-    element(200, '20: Statische Verschraubung', 'B-0002'),
-    element(300, '130: K\\X\\FCchen Montage', 'B-0003'),
-    element(400, '04: Modulboden', 'B-0004'),
-  ].join('\n');
+  return ifcFile(
+    [
+      element(100, '20: Statische Verschraubung', 'B-0001'),
+      element(200, '20: Statische Verschraubung', 'B-0002'),
+      element(300, '130: K\\X\\FCchen Montage', 'B-0003'),
+      element(400, '04: Modulboden', 'B-0004'),
+    ].join('\n'),
+  );
+}
 
+/**
+ * Dieselbe Datei, zusätzlich mit einem Zeichnungsverweis an den Bauteilen von
+ * Schritt 20 — der Normweg `IfcRelAssociatesDocument`, den Allplan nicht
+ * schreibt, andere Exporteure aber schon.
+ */
+function ifcWithDrawing(identification: string): Buffer {
+  return ifcFile(
+    [
+      element(100, '20: Statische Verschraubung', 'B-0001'),
+      element(300, '130: K\\X\\FCchen Montage', 'B-0003'),
+      `#900=IFCDOCUMENTREFERENCE('${identification}_Rev01.pdf','${identification}','Schraubplan Modulboden');`,
+      `#901=IFCRELASSOCIATESDOCUMENT('${guid('da', 901)}',#5,$,$,(#100),#900);`,
+    ].join('\n'),
+  );
+}
+
+function ifcFile(body: string): Buffer {
   return Buffer.from(
     [
       'ISO-10303-21;',
@@ -366,5 +386,147 @@ describe('IFC-Import', () => {
         storageKey: 'ifc/test/nope.ifc',
       }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * Zeichnungen aus dem Modell.
+ *
+ * Der Fall, um den es geht: das Modell nennt zu einem Arbeitsvorgang eine
+ * Zeichnung. Liegt sie freigegeben im Projekt, soll der Werker sie im Schritt
+ * öffnen können, ohne dass jemand die Zuordnung von Hand nachträgt. Liegt sie
+ * nicht vor, darf das nicht untergehen — eine fehlende Zeichnung, die niemand
+ * sieht, ist schlimmer als gar kein Verweis.
+ */
+describe('IFC-Import — Zeichnungen', () => {
+  async function seedDrawing(
+    f: Fixtures,
+    documentNumber: string,
+    status: string,
+  ): Promise<{ documentId: string; revisionId: string }> {
+    const organizationId = f.projectLead.organizationId;
+    const document = await ownerClient.document.create({
+      data: {
+        organizationId,
+        projectId: f.projectId,
+        documentNumber,
+        title: 'Schraubplan Modulboden',
+        category: 'DRAWING',
+      },
+    });
+    const revision = await ownerClient.documentRevision.create({
+      data: {
+        organizationId,
+        documentId: document.id,
+        revisionNumber: '01',
+        status,
+        title: 'Schraubplan Modulboden',
+        createdById: f.projectLead.userId,
+      },
+    });
+    return { documentId: document.id, revisionId: revision.id };
+  }
+
+  async function stepOf(revisionId: string, stepNumber: number): Promise<string> {
+    const step = await ownerClient.planStep.findFirstOrThrow({
+      where: { productionPlanRevisionId: revisionId, stepNumber },
+    });
+    return step.id;
+  }
+
+  it('bindet eine im Modell genannte Zeichnung an die freigegebene Revision', async () => {
+    const f = await seedFixtures('drawing-bound');
+    const drawing = await seedDrawing(f, 'ZG-4711', 'RELEASED');
+
+    const result = await doImport(f, 'FP-IFC-20', ifcWithDrawing('ZG-4711'));
+
+    expect(result.drawingCount).toBe(1);
+    expect(result.boundDrawingCount).toBe(1);
+
+    const verschraubung = await stepOf(result.revisionId, 20);
+    const bindings = await ownerClient.stepDocumentBinding.findMany({
+      where: { planStepId: verschraubung },
+    });
+
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.documentRevisionId).toBe(drawing.revisionId);
+    // Woher die Bindung kommt, muss am Schritt ablesbar sein — sonst sieht
+    // sie aus wie eine von einem Menschen geprüfte Zuordnung.
+    expect(bindings[0]?.markerLabel).toBe('Aus IFC-Modell');
+  });
+
+  it('bindet die Zeichnung nur an den Schritt, an dem sie im Modell hängt', async () => {
+    const f = await seedFixtures('drawing-scope');
+    await seedDrawing(f, 'ZG-4712', 'RELEASED');
+
+    const result = await doImport(f, 'FP-IFC-21', ifcWithDrawing('ZG-4712'));
+
+    const kueche = await stepOf(result.revisionId, 130);
+    const bindings = await ownerClient.stepDocumentBinding.findMany({
+      where: { planStepId: kueche },
+    });
+
+    expect(bindings).toHaveLength(0);
+  });
+
+  it('lässt den Verweis offen, wenn das Dokument nicht im Projekt liegt', async () => {
+    const f = await seedFixtures('drawing-missing');
+
+    const result = await doImport(f, 'FP-IFC-22', ifcWithDrawing('ZG-9999'));
+
+    expect(result.drawingCount).toBe(1);
+    expect(result.boundDrawingCount).toBe(0);
+
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: result.importId },
+    });
+
+    expect(references).toHaveLength(1);
+    // Nicht stumm verschwunden: Nummer, Titel und Ablageort bleiben stehen,
+    // damit im Schritt steht, was fehlt.
+    expect(references[0]).toMatchObject({
+      identification: 'ZG-9999',
+      name: 'Schraubplan Modulboden',
+      location: 'ZG-9999_Rev01.pdf',
+      documentRevisionId: null,
+    });
+  });
+
+  /**
+   * Der Fall, der ohne Prüfung leise falsch liefe: das Dokument gibt es, aber
+   * es ist ein Entwurf. Eine Bindung darauf hieße, dass in der Halle nach
+   * einer ungeprüften Zeichnung gearbeitet wird — genau das, was die
+   * Revisionsbindung ausschließen soll.
+   */
+  it('bindet nicht auf einen Entwurf, sondern lässt den Verweis offen', async () => {
+    const f = await seedFixtures('drawing-draft');
+    await seedDrawing(f, 'ZG-4713', 'DRAFT');
+
+    const result = await doImport(f, 'FP-IFC-23', ifcWithDrawing('ZG-4713'));
+
+    expect(result.boundDrawingCount).toBe(0);
+
+    const verschraubung = await stepOf(result.revisionId, 20);
+    const bindings = await ownerClient.stepDocumentBinding.findMany({
+      where: { planStepId: verschraubung },
+    });
+    expect(bindings).toHaveLength(0);
+
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: result.importId },
+    });
+    expect(references[0]?.documentRevisionId).toBeNull();
+  });
+
+  it('legt keine Verweise an, wenn die Datei keine trägt', async () => {
+    const f = await seedFixtures('drawing-none');
+
+    const result = await doImport(f, 'FP-IFC-24');
+
+    expect(result.drawingCount).toBe(0);
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: result.importId },
+    });
+    expect(references).toHaveLength(0);
   });
 });

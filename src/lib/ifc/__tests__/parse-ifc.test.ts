@@ -1,4 +1,10 @@
-import { parseIfc, parseWorkStepLabel, decodeStepString, IfcParseError } from '../parse-ifc';
+import {
+  parseIfc,
+  parseWorkStepLabel,
+  decodeStepString,
+  splitArgs,
+  IfcParseError,
+} from '../parse-ifc';
 
 /**
  * Die Ausschnitte sind aus einer echten Exportdatei entnommen (Allplan,
@@ -223,6 +229,162 @@ describe('parseIfc', () => {
     ].join('\n');
 
     expect(() => parseIfc(ifc(body))).toThrow(/Arbeitsvorgang/);
+  });
+});
+
+/**
+ * Zeichnungen zum Arbeitsschritt.
+ *
+ * **Vorbemerkung, damit die Erwartung stimmt:** die beiden geprüften
+ * Exportdateien (Allplan, IFC2X3) enthalten keine einzige
+ * `IfcDocumentReference` — dort ist `drawings` leer, und das ist keine
+ * Fehlfunktion, sondern der Befund. Die Fälle hier beschreiben die Dateien
+ * anderer Fertiger, die den Normweg gehen.
+ */
+describe('parseIfc — Zeichnungen', () => {
+  /** IFC2X3: `IfcDocumentReference(Location, ItemReference, Name)`. */
+  function documentReference(id: number, location: string, itemReference: string, name: string) {
+    return `#${id}=IFCDOCUMENTREFERENCE('${location}','${itemReference}','${name}');`;
+  }
+
+  function associates(id: number, elementIds: number[], documentId: number) {
+    const objects = elementIds.map((elementId) => `#${elementId}`).join(',');
+    return `#${id}=IFCRELASSOCIATESDOCUMENT('${guid('doc', id)}',#5,$,$,(${objects}),#${documentId});`;
+  }
+
+  it('ordnet eine Zeichnung dem Arbeitsvorgang ihres Bauteils zu', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'),
+          element(200, 'aaaaaaaaaaaaaaaaaaaaa2', '130: K\\X\\FCchen Montage'),
+          documentReference(900, 'P-102_Rev04.pdf', 'P-102', 'Grundriss Verschraubung'),
+          associates(901, [100], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings).toEqual([
+      {
+        identification: 'P-102',
+        location: 'P-102_Rev04.pdf',
+        name: 'Grundriss Verschraubung',
+        stepNumbers: [20],
+      },
+    ]);
+  });
+
+  it('führt eine Zeichnung einmal, auch wenn sie an vielen Bauteilen hängt', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'),
+          element(200, 'aaaaaaaaaaaaaaaaaaaaa2', '20: Statische Verschraubung'),
+          element(300, 'aaaaaaaaaaaaaaaaaaaaa3', '130: K\\X\\FCchen Montage'),
+          documentReference(900, 'P-102.pdf', 'P-102', 'Grundriss'),
+          associates(901, [100, 200], 900),
+          associates(902, [300], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings).toHaveLength(1);
+    expect(result.drawings[0]?.stepNumbers).toEqual([20, 130]);
+  });
+
+  /**
+   * Der Fall aus dem Beispielmodul: die Objekte auf der Ebene `KBS_Fenster`
+   * sind `IfcAnnotation`, tragen aber `Arbeitsvorgang '11: Fenstereinbau'`.
+   * Sie sind kein Bauteil — eine Zeichnung, die an ihnen hängt, gehört
+   * trotzdem zu Schritt 11.
+   */
+  it('behält die Zuordnung, wenn der Verweis an einer Beschriftung hängt', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '11: Fenstereinbau'),
+          element(200, 'aaaaaaaaaaaaaaaaaaaaa2', '11: Fenstereinbau', { type: 'IFCANNOTATION' }),
+          documentReference(900, 'F-01.pdf', 'F-01', 'Fensterdetail'),
+          associates(901, [200], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings[0]?.stepNumbers).toEqual([11]);
+  });
+
+  /** IFC4: `IfcDocumentReference(Location, Identification, Name, Description, ReferencedDocument)`. */
+  it('liest Nummer und Titel aus der Dokumentangabe, auf die der Verweis zeigt', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'),
+          `#899=IFCDOCUMENTINFORMATION('ZG-4711','Schraubplan Modulboden','Freigegeben','ablage/ZG-4711.pdf');`,
+          `#900=IFCDOCUMENTREFERENCE($,$,$,$,#899);`,
+          associates(901, [100], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings[0]).toMatchObject({
+      identification: 'ZG-4711',
+      name: 'Schraubplan Modulboden',
+      location: 'ablage/ZG-4711.pdf',
+      stepNumbers: [20],
+    });
+  });
+
+  it('meldet einen Verweis, der an keinem Arbeitsvorgang hängt', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'),
+          `#500=IFCBUILDING('bbbbbbbbbbbbbbbbbbbbb1',#5,'Haus B',$,$,#63,#64,$,$,$,$,$);`,
+          documentReference(900, 'Baubeschreibung.pdf', 'BB-01', 'Baubeschreibung'),
+          associates(901, [500], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings[0]?.stepNumbers).toEqual([]);
+    expect(result.warnings.join(' ')).toContain('keinem Arbeitsvorgang');
+  });
+
+  it('meldet eine Zuordnung, deren Dokument nicht in der Datei steht', () => {
+    const result = parseIfc(
+      ifc(
+        [
+          element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung'),
+          associates(901, [100], 900),
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.drawings).toEqual([]);
+    expect(result.warnings.join(' ')).toContain('nicht in der Datei');
+  });
+
+  it('lässt drawings leer, wenn die Datei keine Dokumentverweise trägt', () => {
+    const result = parseIfc(
+      ifc(element(100, 'aaaaaaaaaaaaaaaaaaaaa1', '20: Statische Verschraubung')),
+    );
+
+    expect(result.drawings).toEqual([]);
+  });
+});
+
+describe('splitArgs', () => {
+  it('zerschneidet weder Zeichenketten noch verschachtelte Listen', () => {
+    expect(splitArgs("'Grundriss, Ansicht Nord',$,(#1,#2),#3")).toEqual([
+      "'Grundriss, Ansicht Nord'",
+      '$',
+      '(#1,#2)',
+      '#3',
+    ]);
+  });
+
+  it('behandelt ein verdoppeltes Anführungszeichen als Text', () => {
+    expect(splitArgs("'Werkst''att',#1")).toEqual(["'Werkst''att'", '#1']);
   });
 });
 

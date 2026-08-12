@@ -23,6 +23,8 @@ interface ImportResult {
   revisionId: string;
   stepCount: number;
   componentCount: number;
+  drawingCount: number;
+  boundDrawingCount: number;
   warnings: string[];
 }
 
@@ -123,6 +125,25 @@ export function ImportIfcForm({
           <strong>Entwurf</strong> und muss wie jeder andere eingereicht, von der Qualitätssicherung
           genehmigt und freigegeben werden.
         </p>
+
+        {/* Die Zahl der offenen Verweise ist die eigentliche Aussage: eine
+            Zeichnung, die das Modell nennt und die niemand hochgeladen hat,
+            fehlt später im Schritt. Deshalb steht sie hier und nicht nur in
+            den Hinweisen. */}
+        {result.drawingCount > 0 && (
+          <p>
+            <strong>{result.drawingCount}</strong> Zeichnungsverweise aus dem Modell,{' '}
+            <strong>{result.boundDrawingCount}</strong> davon an ein freigegebenes Dokument
+            gebunden.
+            {result.drawingCount > result.boundDrawingCount && (
+              <>
+                {' '}
+                Die übrigen bleiben im jeweiligen Schritt als offener Punkt sichtbar, bis das
+                Dokument im Projekt liegt.
+              </>
+            )}
+          </p>
+        )}
 
         {result.warnings.length > 0 && (
           <div role="alert">

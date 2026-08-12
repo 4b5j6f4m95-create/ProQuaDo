@@ -116,6 +116,21 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
                 },
               },
             },
+            // Nur die Verweise, die noch zu keinem Dokument führen. Die
+            // aufgelösten stehen bereits unter den verbindlichen Unterlagen —
+            // sie hier ein zweites Mal zu zeigen hieße, dieselbe Zeichnung
+            // doppelt zu führen und die eine offene Stelle darin zu verstecken.
+            ifcDrawingReferences: {
+              where: { documentRevisionId: null },
+              orderBy: [{ identification: 'asc' }, { name: 'asc' }],
+              select: {
+                id: true,
+                name: true,
+                identification: true,
+                location: true,
+                description: true,
+              },
+            },
             // Nur vorhanden, wenn der Plan aus einem Gebäudemodell entstanden
             // ist. Nach Bauteilnummer sortiert, weil das die Kennung ist, die
             // auf dem Teil steht — nicht die GlobalId, die niemand ablesen kann.
