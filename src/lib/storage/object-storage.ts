@@ -4,6 +4,7 @@ import {
   HeadObjectCommand,
   GetObjectCommand,
   DeleteObjectsCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'node:crypto';
@@ -195,4 +196,41 @@ function isNotFound(error: unknown): boolean {
     'name' in error &&
     (error.name === 'NotFound' || error.name === 'NoSuchKey')
   );
+}
+
+/**
+ * Alle Objekte unter einem Präfix, mit Größe und Änderungszeit.
+ *
+ * Bewusst blätternd bis zum Ende: S3 liefert höchstens 1000 Schlüssel je
+ * Antwort, und ein Aufräumlauf, der nur die erste Seite sieht, hielte den
+ * Rest für nicht vorhanden. Bei einem Werkzeug, das anschließend löschen
+ * darf, wäre das die gefährlichste Art von Abkürzung.
+ */
+export async function listObjects(
+  prefix: string,
+): Promise<Array<{ storageKey: string; sizeBytes: number; lastModified: Date }>> {
+  const client = s3Client();
+  const out: Array<{ storageKey: string; sizeBytes: number; lastModified: Date }> = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket(),
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }),
+    );
+    for (const object of page.Contents ?? []) {
+      if (!object.Key) continue;
+      out.push({
+        storageKey: object.Key,
+        sizeBytes: object.Size ?? 0,
+        lastModified: object.LastModified ?? new Date(0),
+      });
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return out;
 }
