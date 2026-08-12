@@ -20,7 +20,9 @@ export default async function DocumentDetailPage(props: { params: Promise<{ id: 
   return (
     <main>
       <p>
-        <Link href={`/projects/${document.projectId}`}>← Projekt</Link>
+        <Link className="action-link" href={`/projects/${document.projectId}`}>
+          ← Projekt
+        </Link>
       </p>
       <h1>
         {document.documentNumber} — {document.title}

@@ -339,6 +339,24 @@ button:disabled {
   box-shadow: none;
 }
 
+/* Ein Link, der für sich allein steht und eine Nebenhandlung ist — nicht
+   einer, der mitten im Satz liegt.
+
+   Der Unterschied ist der ganze Punkt. WCAG 2.2 nimmt Links **im Fließtext**
+   ausdrücklich von der Zielgrößenregel aus, und sie größer zu machen würde
+   Absätze zerreißen. Ein Link, der allein in seinem Absatz steht, ist aber
+   kein Fließtext, sondern eine Schaltfläche ohne Rahmen — und wurde
+   nachgemessen 20 px hoch dargestellt, neben einem Hauptknopf mit 46 px.
+
+   Deshalb eine benannte Klasse und keine Regel auf `p > a`: ob ein Link eine
+   Handlung ist, weiß die Stelle, die ihn schreibt, und keine Heuristik im
+   Stylesheet. */
+.action-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
 .button-link {
   display: inline-flex;
   align-items: center;
@@ -361,11 +379,24 @@ button:disabled {
   border-color: var(--brand-hover);
 }
 
+/* Sieht aus wie ein Textlink, ist aber eine Aktion — und deshalb braucht sie
+   eine Fläche, die man mit Handschuhen trifft.
+
+   Hier stand `min-height: 0`, um die allgemeine Knopfhöhe wieder loszuwerden.
+   Nachgemessen war „Abmelden" damit **19 px** hoch, während der Hauptknopf
+   daneben 46 px hat. Auf einem geteilten Hallentablet ist die Abmeldung aber
+   der einzige Weg, den Benutzer zu wechseln (siehe notes.md) — ausgerechnet
+   sie zur kleinsten Fläche der Seite zu machen, ist die falsche Reihenfolge.
+
+   `inline-flex` mit `min-height` statt Innenabstand: die Fläche wächst nach
+   oben und unten, der Text bleibt waagerecht dort, wo er im Satz steht. */
 .link-button {
+  display: inline-flex;
+  align-items: center;
   background: none;
   border: none;
   padding: 0;
-  min-height: 0;
+  min-height: 44px;
   color: var(--danger);
   font-size: inherit;
   font-weight: 500;
@@ -599,6 +630,28 @@ li > .inline-form {
 .tablet input[type='text'],
 .tablet input:not([type='radio']):not([type='checkbox']) {
   min-height: 44px;
+}
+
+/* Kontrollkästchen und Auswahlknöpfe sind im Browser 13 × 13 px groß und damit
+   die kleinsten Flächen der ganzen Anwendung — nachgemessen am
+   Abweichungsformular des Arbeitsschritts. Die Regel darüber nimmt sie aus,
+   und das ist richtig: `min-height` richtet an einem ersetzten Element nichts
+   aus. Was hilft, ist `width`/`height`.
+
+   24 px ist die Untergrenze aus WCAG 2.2 AA; mehr wäre am Schreibtisch
+   ungewohnt groß. Wo es auf Handschuhe ankommt, umschließt sie ohnehin ein
+   `.radio-option` mit 44 px.
+
+   **Diese Regel stand einmal drei Zeilen weiter oben** — mitten in der
+   Selektorliste darüber. Ein Kommentar beendet eine Kommaliste nicht, also
+   erbten `.touch-target` und `.tablet button` klaglos `width: 24px`, und die
+   Knöpfe im Offline-Arbeitsbereich schrumpften auf 34 px. Prettier hat es
+   formatiert, ESLint prüft kein CSS, der Typecheck erst recht nicht — gesehen
+   hat es allein der Browser. */
+input[type='checkbox'],
+input[type='radio'] {
+  width: 24px;
+  height: 24px;
 }
 
 .tablet .radio-option {

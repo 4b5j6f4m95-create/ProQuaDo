@@ -36,7 +36,9 @@ export default async function ProductionOrderPage(props: { params: Promise<{ id:
   return (
     <main>
       <p>
-        <Link href={`/projects/${order.project.id}`}>← {order.project.name}</Link>
+        <Link className="action-link" href={`/projects/${order.project.id}`}>
+          ← {order.project.name}
+        </Link>
       </p>
       <h1>
         {order.orderNumber} — {order.product.name}

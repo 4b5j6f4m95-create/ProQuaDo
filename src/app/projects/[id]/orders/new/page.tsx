@@ -15,7 +15,9 @@ export default async function NewProductionOrderPage(props: { params: Promise<{ 
   return (
     <main>
       <p>
-        <Link href={`/projects/${project.id}`}>← {project.name}</Link>
+        <Link className="action-link" href={`/projects/${project.id}`}>
+          ← {project.name}
+        </Link>
       </p>
       <h1>Neuer Produktionsauftrag — {project.name}</h1>
 

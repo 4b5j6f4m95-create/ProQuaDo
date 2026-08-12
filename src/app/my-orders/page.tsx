@@ -54,7 +54,9 @@ export default async function MyOrdersPage() {
             <p className="muted">Aktuell ist für Sie kein Arbeitsschritt freigegeben.</p>
           )}
           <p>
-            <Link href={`/production-orders/${order.id}`}>Auftragsdetails</Link>
+            <Link className="action-link" href={`/production-orders/${order.id}`}>
+              Auftragsdetails
+            </Link>
           </p>
         </section>
       ))}

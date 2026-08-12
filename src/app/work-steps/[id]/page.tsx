@@ -69,7 +69,7 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
   return (
     <main className="tablet">
       <p>
-        <Link href={`/production-orders/${step.productionOrderId}`}>
+        <Link className="action-link" href={`/production-orders/${step.productionOrderId}`}>
           ← {step.productionOrder.orderNumber}
         </Link>
       </p>
