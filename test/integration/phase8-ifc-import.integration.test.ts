@@ -343,6 +343,26 @@ describe('IFC-Import', () => {
    * ohne die Arbeitsvorgänge zu pflegen. Ohne Abweisung entstünde daraus ein
    * Plan ohne Schritte, den niemand bestätigen müsste.
    */
+  /**
+   * Der Speicherschlüssel im Audit-Eintrag ist die einzige Möglichkeit,
+   * später zu entscheiden, ob eine verwaiste Datei im Objektspeicher zu
+   * einem Import gehört, der stattgefunden hat — oder zu einem, der
+   * abgewiesen wurde. Dateiname und Hash tragen das nicht: beide sagen
+   * nichts darüber, wo die Datei liegt. Und **rückwirkend lässt es sich
+   * nicht nachtragen**, weshalb dieser Test die Zeile festhält.
+   */
+  it('hält den Speicherschlüssel im Audit-Eintrag fest', async () => {
+    const f = await seedFixtures('storagekey');
+    const result = await doImport(f, 'FP-IFC-KEY');
+
+    const events = await ownerClient.auditEvent.findMany({
+      where: { resourceId: result.planId, eventType: 'ifc_import.executed' },
+    });
+    const values = events[0]?.newValues as Record<string, unknown> | null;
+
+    expect(values?.storageKey).toBe('ifc/test/FP-IFC-KEY.ifc');
+  });
+
   it('weist ein gültiges Modell ohne gepflegte Arbeitsvorgänge ab', async () => {
     const f = await seedFixtures('nosteps');
     const body = [

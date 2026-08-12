@@ -38,18 +38,22 @@
  *    Sicherung 1, die versagt hat — leere Tabelle und falsche Rolle sehen von
  *    hier aus gleich aus. Der Lauf bricht dann ab, statt zu raten.
  *
- * ── Was dieser Lauf NICHT entscheidet ───────────────────────
+ * ── Zwei Arten von Waisen, und nur eine wird gelöscht ───────
  *
- * Ob eine Waise zu einem Import gehört, der im Audit-Trail noch verzeichnet
- * ist. Der Audit-Eintrag `ifc_import.executed` hält Dateiname und Hash fest,
- * **nicht** den Schlüssel im Objektspeicher — eine Zuordnung ist von hier
- * aus also nicht möglich. Wer das braucht, ergänzt zuerst den Schlüssel im
- * Audit-Eintrag; rückwirkend geht es nicht.
+ * **Ohne Spur im Audit-Trail**: ein Versuch, der abgewiesen wurde. Er hat nie
+ * einen Plan erzeugt, nichts ist ihm zugerechnet, die Datei ist Abfall.
  *
- * Das ist kein Formalismus: ADR-004 macht den Audit-Trail zur Zurechnung.
- * Eine Datei zu einem noch verzeichneten Vorgang wegzuwerfen, macht aus
- * einem nachlesbaren Vorgang einen unbelegbaren. Der Bericht nennt deshalb
- * das Alter jedes Fundes, damit die Entscheidung bei einem Menschen bleibt.
+ * **Mit Eintrag `ifc_import.executed`**: ein Import, der stattgefunden hat
+ * und dessen Plan später verschwand. Nach ADR-004 bleibt der Vorgang
+ * zugerechnet — seine Datei wegzuwerfen macht aus einem nachlesbaren Vorgang
+ * einen unbelegbaren. Solche Funde werden **nie** automatisch gelöscht,
+ * sondern getrennt ausgewiesen und einem Menschen vorgelegt.
+ *
+ * Möglich ist diese Unterscheidung erst, seit der Audit-Eintrag den
+ * Speicherschlüssel mitführt. **Für Importe davor bleibt sie unmöglich** —
+ * Dateiname und Hash sagen nichts darüber, wo die Datei liegt. Ältere Funde
+ * erscheinen deshalb als „ohne Spur", obwohl sie es womöglich nicht sind;
+ * wer eine Umgebung mit Importhistorie aufräumt, sollte das wissen.
  */
 
 import { PrismaClient } from '@prisma/client';
@@ -93,17 +97,28 @@ async function main(): Promise<void> {
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 
   try {
-    const [objects, rows] = await Promise.all([
+    const [objects, rows, auditRows] = await Promise.all([
       listObjects(PREFIX),
       db.ifcImport.findMany({ select: { storageKey: true } }),
+      // Schlüssel aus dem Audit-Trail. `new_values->>'storageKey'` gibt es
+      // erst seit dem Import, der ihn mitschreibt — ältere Einträge liefern
+      // NULL und fallen hier heraus.
+      db.$queryRaw<Array<{ storage_key: string }>>`
+        SELECT DISTINCT new_values ->> 'storageKey' AS storage_key
+          FROM audit_events
+         WHERE event_type = 'ifc_import.executed'
+           AND new_values ->> 'storageKey' IS NOT NULL`,
     ]);
 
     const known = new Set(rows.map((r) => r.storageKey));
+    const recorded = new Set(auditRows.map((r) => r.storage_key));
     const orphans = objects.filter((o) => !known.has(o.storageKey));
+    const auditProtected = orphans.filter((o) => recorded.has(o.storageKey));
 
     const cutoff = Date.now() - options.minAgeHours * 3600_000;
-    const oldEnough = orphans.filter((o) => o.lastModified.getTime() < cutoff);
-    const tooYoung = orphans.filter((o) => o.lastModified.getTime() >= cutoff);
+    const deletable = orphans.filter((o) => !recorded.has(o.storageKey));
+    const oldEnough = deletable.filter((o) => o.lastModified.getTime() < cutoff);
+    const tooYoung = deletable.filter((o) => o.lastModified.getTime() >= cutoff);
 
     const totalBytes = objects.reduce((sum, o) => sum + o.sizeBytes, 0);
     const orphanBytes = oldEnough.reduce((sum, o) => sum + o.sizeBytes, 0);
@@ -118,6 +133,12 @@ async function main(): Promise<void> {
       console.log(
         `  davon jünger — unangetastet: ${tooYoung.length} ` +
           '(könnten Uploads sein, deren Import gerade läuft)',
+      );
+    }
+    if (auditProtected.length > 0) {
+      console.log(
+        `  im Audit-Trail verzeichnet:  ${auditProtected.length} ` +
+          '(wird nie automatisch gelöscht)',
       );
     }
 
@@ -136,7 +157,11 @@ async function main(): Promise<void> {
     )) {
       const ageHours = (Date.now() - orphan.lastModified.getTime()) / 3600_000;
       const age = ageHours < 48 ? `${ageHours.toFixed(0)} h` : `${Math.floor(ageHours / 24)} Tage`;
-      const mark = young.has(orphan.storageKey) ? '  [geschützt, zu jung]' : '';
+      const mark = recorded.has(orphan.storageKey)
+        ? '  [im Audit-Trail verzeichnet — von Hand entscheiden]'
+        : young.has(orphan.storageKey)
+          ? '  [geschützt, zu jung]'
+          : '';
       console.log(
         `  ${orphan.storageKey}  ${formatMb(orphan.sizeBytes).padStart(9)}  ${age.padStart(7)} alt${mark}`,
       );
@@ -147,9 +172,12 @@ async function main(): Promise<void> {
         '\nNur berichtet, nichts gelöscht. Zum Löschen: pnpm run ifc:orphans -- --delete',
       );
       console.log(
-        'Vorher lesen: ADR-004. Ein Import bleibt im Audit-Trail verzeichnet, auch wenn sein\n' +
-          'Plan verschwunden ist — der Audit-Eintrag nennt Dateiname und Hash, nicht diesen\n' +
-          'Schlüssel. Die Zuordnung ist also Handarbeit und diese Liste nur ihr Ausgangspunkt.',
+        'Funde mit Audit-Eintrag bleiben auch dann liegen: nach ADR-004 ist der Vorgang\n' +
+          'zugerechnet, und seine Datei wegzuwerfen macht ihn unbelegbar. Diese Entscheidung\n' +
+          'gehört einem Menschen.\n' +
+          'Achtung bei Umgebungen mit älterer Importhistorie: der Speicherschlüssel steht erst\n' +
+          'seit Kurzem im Audit-Eintrag. Ältere Funde erscheinen als „ohne Spur", obwohl sie es\n' +
+          'womöglich nicht sind.',
       );
       return;
     }
