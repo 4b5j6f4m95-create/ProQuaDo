@@ -870,9 +870,19 @@ grep -rn "Negativtest #" --include='*.test.ts' test/integration src
 
 ## Übergabe: woran man als Nächstes arbeiten kann
 
-Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe; die Testpyramide aus docs/09 ist vollständig, und seit der Stammdatenerfassung ist auch **keine Programmierarbeit mehr offen**. Was bleibt, braucht eine Zielumgebung, eine Entscheidung außerhalb dieses Repositories oder den Piloten selbst.
+Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus der Phase-6-Übergabe; die Testpyramide aus docs/09 ist vollständig. Bis auf **Punkt 0** braucht alles Verbliebene eine Zielumgebung, eine Entscheidung außerhalb dieses Repositories oder den Piloten selbst.
 
 **Nach dem Piloten gehören drei Dokumente nachgezogen**, und sie sagen das selbst: die ⚠️-Kennzeichen in [docs/13](docs/13_STAGING_SETUP.md) und [docs/14](docs/14_RUNBOOK.md) durch das, was tatsächlich gelaufen ist; die neun `[FESTZULEGEN]`-Punkte in [docs/16](docs/16_ON_CALL.md) durch eure Festlegungen — bis dahin ist es eine Vorlage und kein Verfahren; und die fünf Missverständnisse in [docs/15](docs/15_TRAINING.md) durch die, die wirklich angerufen haben, denn sie sind aus der Konstruktion abgeleitet und nicht aus Beobachtung.
+
+0. **Ein abgewiesener IFC-Import lässt seine Datei im Objektspeicher liegen** — und das ist der einzige Punkt dieser Liste, der Programmierarbeit ist und keine Zielumgebung braucht.
+
+   Nachgemessen in der Entwicklungsumgebung: **11 Objekte unter `ifc/`, eine einzige Zeile in `ifc_imports`, 156 MB.** Zehn davon gehören zu Importen, die abgewiesen wurden — dieselbe Datei ein zweites Mal, eine belegte Plannummer, ein gekappter Körper. Jeder dieser Versuche hat 23 MB abgelegt und nie wieder angefasst.
+
+   Die Ursache steht in `src/app/api/v1/production-plans/import-ifc/route.ts` und ist **kein Versehen**: die Datei wird erst abgelegt, dann gescannt, dann gelesen. Der Virenscanner arbeitet auf dem Objektspeicher und nicht auf einem Puffer, „erst ablegen" ist also die richtige Reihenfolge und darf nicht umgedreht werden. Was fehlt, ist das Aufräumen danach — die Route hat kein `finally`, das ein Objekt entfernt, dessen Import gescheitert ist.
+
+   Dazu kommt der zweite Weg: wer einen Plan wieder löscht, löst die Zeile in `ifc_imports`, nicht das Objekt. Für einen Fertigungsplan aus einem 23-MB-Modell ist das kein Rundungsfehler.
+
+   Zwei Teile also, und der erste ist klein: das Objekt entfernen, wenn der Import nicht durchläuft. Der zweite ist eine Betriebsaufgabe — ein Lauf, der Objekte ohne Datenbankzeile findet und meldet, bevor er etwas löscht. **Bevor jemand hier automatisch löscht**, sollte er sich ansehen, was ADR-004 über den Audit-Trail sagt: der Import bleibt dort verzeichnet, auch wenn der Plan verschwindet, und ein Aufräumen, das die Datei zu einem noch verzeichneten Vorgang wegwirft, macht aus einem nachlesbaren Vorgang einen unbelegbaren.
 
 1. **Wenn ein realer ERP-Konsument da ist**, ADR-008 neu bewerten: dann zeigt sich, ob das Ereignisformat trägt oder eine Abbildungsschicht dazugehört. Genau dafür hatte docs/10 die Umsetzung ursprünglich zurückgestellt.
 
