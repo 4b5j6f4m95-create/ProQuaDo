@@ -199,14 +199,15 @@ Dazu im Browser die lokale Datenbank des Geräts leeren, sonst kollidiert der al
 
 ## Bekannte Stolpersteine (lokal aufgetreten, für die Zukunft dokumentiert)
 
-Inzwischen 30 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
+Inzwischen 32 Einträge, in der Reihenfolge ihres Auftretens. Wonach hier zu suchen lohnt, nach Anlass sortiert:
 
-- **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „Dieselbe CSP hätte in Production jeden Upload verhindert", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten".
+- **Etwas läuft in `next dev`, aber nicht im Production-Build** (oder umgekehrt): „Dieselbe CSP verhinderte in Production jede Hydration", „Dieselbe CSP hätte in Production jeden Upload verhindert", „`pnpm run build` neben laufendem `next dev`", „pdfkit findet seine Schriftmetriken nicht", „`pino-pretty` + Next.js Dev-Server", „ESM-only Abhängigkeiten", „Der Service Worker eines Production-Laufs beliefert danach den Dev-Server".
 - **Die Anmeldung schlägt fehl oder zeigt den falschen Benutzer**: „Ein Keycloak-Neuaufbau entwertete alle Kontoverknüpfungen" (die Meldung lautet „Access Denied" und meint etwas anderes), „Es gab keine Abmeldung", „Der Seed legt nach dem ersten Login Doppelbenutzer an".
 - **Der Offline-/Sync-Pfad verhält sich unerwartet**: „Der Offline-Fluss konnte nie synchronisieren", „Zwei Klicks im selben Tick", „Ein geteiltes Tablet konnte den Benutzer nicht wechseln", „Sitzungsdauer und Access-Token-Dauer".
 - **Eine Schaltfläche tut nichts oder die Seite bricht ab**: „Der Abschlussknopf war dauerhaft gesperrt", „Eine geworfene Ablehnung reißt in Next.js die ganze Seite weg", „Eine `'use server'`-Datei darf ausschließlich async-Funktionen exportieren" (bricht den Build, nicht die Seite — aber dieselbe Ecke).
 - **Ein Test ist grün und beweist trotzdem nichts**: „Jest entscheidet `skip` beim Einlesen", „Ein Test, der versehentlich echte Infrastruktur anspricht", „Eine Kontrolle, die nur einen von zwei Pfaden kennt".
 - **Eine Messung sagt etwas anderes, als sie zu sagen scheint**: „Blockweise verglichene Konfigurationen messen die Maschine, nicht die Konfiguration".
+- **Eine Änderung wirkt nicht, obwohl sie richtig ist**: „Der Service Worker eines Production-Laufs beliefert danach den Dev-Server", „Eine Regel mitten in eine Selektorliste zu setzen, bemerkt keine Prüfstufe".
 - **Datenbank und Schema**: „Eine bereits angewendete Migration nachträglich zu ändern", „Prisma-Client-Regenerierung erfordert Server-Neustart", „Relationsnamen bei bidirektionalen Prisma-Beziehungen", „Abgelehnte Vorgänge dürfen nicht in derselben Transaktion geworfen werden", „Berechtigung hängt manchmal von Daten ab".
 - **Einzeln stehend**: „Portkonflikte mit anderen Projekten", „CSP blockiert Dev-Tooling und OAuth-Redirect" (die Vorgeschichte des CSP-Eintrags oben), „Browser-Tool: Klick-Koordinaten können bei mehrzeiligen Überschriften driften", „`getByRole('alert')` trifft in Next.js auch den Routenansager", „Die CI war sieben Phasen lang nie gelaufen".
 
@@ -510,6 +511,53 @@ Die Ursache ist eine Drift der Maschine über die Sitzung: dieselbe Konfiguratio
 Dasselbe Verfahren kippte einen zweiten Befund in die Gegenrichtung: blockweise sahen mehrere Organisationen wirkungslos aus (59,9 gegen 62,9 Stapel/s), verschränkt gewinnen vier Organisationen **4 von 4** Runden mit +15 %.
 
 **Lehre:** Wer zwei Konfigurationen desselben Lasttests vergleicht, misst sie verschränkt und wertet **paarweise** aus — „gewinnt in 4 von 4 Runden" trägt, „im Mittel 9,7 Stapel/s schneller" trägt auf einer driftenden Maschine nicht. Und ein Unterschied, der nur in einer Richtung auftritt und dabei größer ist als die Streuung derselben Konfiguration, ist zuerst verdächtig und erst danach ein Befund.
+
+### Der Service Worker eines Production-Laufs beliefert danach den Dev-Server
+
+Eine Änderung an `globals.css` blieb im Browser wirkungslos. Server neu gestartet: unverändert. `.next` gelöscht und neu gestartet: unverändert. Die Datei auf der Platte war richtig, der Prozess frisch, das Arbeitsverzeichnis das richtige — und der Browser zeigte weiter den alten Stand.
+
+Der Grund stand nicht im Projekt, sondern im Browser:
+
+```js
+navigator.serviceWorker.controller; // http://localhost:3002/sw.js
+await caches.keys(); // ['proquado-shell-v1']
+```
+
+Ein früherer `pnpm run start` auf **demselben Port** hatte den Service Worker registriert. Er überlebt das Ende des Prozesses, kontrolliert die Origin weiter und liefert Seite, CSS und Chunks aus seinem Cache — genau das, wofür er in der Halle da ist. Für den Dev-Server auf Port 3002 heißt das: er baut korrekt, und niemand sieht es.
+
+Besonders tückisch ist die Fehlersuche, zu der das verleitet. Alles zeigt auf den eigenen Code: die Klasse hängt am Element, die Regel steht in der Datei, der Prozess ist neu. Also sucht man den Fehler dort, wo keiner ist. Erkennen lässt es sich an einer Kleinigkeit — das ausgelieferte Stylesheet ist **kleiner**, als die Datei sein müsste.
+
+**Was hilft:**
+
+```js
+for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+for (const k of await caches.keys()) await caches.delete(k);
+```
+
+**Lehre:** Wer nach einem Production-Lauf auf demselben Port weiterentwickelt, meldet den Service Worker ab, bevor er dem Dev-Server misstraut. Und wenn eine Stiländerung wirkungslos scheint, ist die erste Frage nicht „stimmt mein CSS", sondern **„sehe ich überhaupt mein CSS"** — nachzusehen mit einem `fetch` auf die Stylesheet-URL und einer Suche nach dem neuen Selektor.
+
+### Eine Regel mitten in eine Selektorliste zu setzen, bemerkt keine Prüfstufe
+
+Beim Vergrößern der Zielgrößen kam eine Regel für Kontrollkästchen dazu. Sie landete drei Zeilen zu weit oben:
+
+```css
+.touch-target,
+.tablet button,
+.tablet select,
+.tablet input[type='text'],
+/* … erklärender Kommentar … */
+input[type='checkbox'],
+input[type='radio'] {
+  width: 24px;
+  height: 24px;
+}
+```
+
+**Ein Kommentar beendet keine Kommaliste.** Für den Parser steht dort eine einzige Regel, und `.touch-target` und `.tablet button` erbten klaglos `width: 24px`. Die Knöpfe im Offline-Arbeitsbereich schrumpften von 196 auf **34 px** und überlappten einander.
+
+Nichts davon war zu sehen, außer auf dem Bildschirm: **Prettier hat es formatiert** (es ist ja gültiges CSS), **ESLint prüft kein CSS**, der Typecheck erst recht nicht, und kein Test rendert eine Seite und misst Knopfbreiten. Aufgefallen ist es nur, weil ein Screenshot angesehen wurde — die Messung der Zielgrößen allein hätte es nicht gefunden, denn gemessen wurde auf anderen Bildschirmen.
+
+**Lehre:** Eine mehrzeilige Selektorliste sieht aus wie mehrere Regeln und ist eine. Wer in einem fremden Stylesheet etwas einfügt, prüft zuerst, ob die Zeile darüber mit einem Komma endet. Und: nach jeder Stiländerung mindestens **eine** betroffene Seite ansehen, nicht nur die geänderten Werte nachmessen — dieselbe Regel wie beim Durchspielen im Browser, nur eine Ebene tiefer.
 
 ---
 
