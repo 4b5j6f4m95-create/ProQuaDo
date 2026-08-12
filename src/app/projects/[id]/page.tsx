@@ -37,7 +37,9 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
   return (
     <main>
       <p>
-        <Link href="/projects">← Projekte</Link>
+        <Link className="action-link" href="/projects">
+          ← Projekte
+        </Link>
       </p>
       <h1>
         {project.projectNumber} — {project.name}
@@ -90,7 +92,9 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
           ))}
         </tbody>
       </table>
-      <Link href={`/projects/${project.id}/documents/new`}>+ Dokument hochladen</Link>
+      <Link className="action-link" href={`/projects/${project.id}/documents/new`}>
+        + Dokument hochladen
+      </Link>
 
       {/* Produkte stehen vor den Plänen, weil ein Plan eines braucht. Ohne
           Formular hier entstanden sie bis Phase 7 ausschließlich im Seed. */}
@@ -138,8 +142,12 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
           ))}
         </tbody>
       </table>
-      <Link href={`/projects/${project.id}/plans/new`}>+ Fertigungsplan anlegen</Link>
-      <Link href={`/projects/${project.id}/plans/import-ifc`}>+ Aus Gebäudemodell (IFC)</Link>
+      <Link className="action-link" href={`/projects/${project.id}/plans/new`}>
+        + Fertigungsplan anlegen
+      </Link>
+      <Link className="action-link" href={`/projects/${project.id}/plans/import-ifc`}>
+        + Aus Gebäudemodell (IFC)
+      </Link>
 
       <h2>Produktionsaufträge</h2>
       <table>
@@ -166,7 +174,9 @@ export default async function ProjectDetailPage(props: { params: Promise<{ id: s
           ))}
         </tbody>
       </table>
-      <Link href={`/projects/${project.id}/orders/new`}>+ Produktionsauftrag anlegen</Link>
+      <Link className="action-link" href={`/projects/${project.id}/orders/new`}>
+        + Produktionsauftrag anlegen
+      </Link>
     </main>
   );
 }

@@ -25,7 +25,9 @@ export default async function NonConformanceDetailPage(props: { params: Promise<
   return (
     <main>
       <p>
-        <Link href="/quality/ncrs">← Abweichungen</Link>
+        <Link className="action-link" href="/quality/ncrs">
+          ← Abweichungen
+        </Link>
       </p>
       <h1>
         {ncr.ncrNumber}: {ncr.description.slice(0, 80)}
