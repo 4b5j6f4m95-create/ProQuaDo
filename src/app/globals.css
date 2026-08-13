@@ -3,7 +3,30 @@
    docs/07 "Designprinzipien" gewählt: Text mindestens 4,5:1 gegen
    seinen Hintergrund, UI-Kanten mindestens 3:1 — ein Hallentablet
    wird bei Streiflicht und mit Handschuhen bedient, nicht am
-   abgedunkelten Schreibtisch. */
+   abgedunkelten Schreibtisch.
+
+   **Die beiden Kantenfarben sind nicht zwei Abstufungen desselben,
+   sondern zwei verschiedene Dinge**, und die Zusage oben gilt nur für
+   die zweite:
+
+     --border         trennt Flächen: Kartenrand, Tabellenlinie,
+                      Abschnittstrenner. Schmuck und Gliederung, kein
+                      Bedienelement — WCAG 2.2 SC 1.4.11 verlangt hier
+                      nichts, und 3:1 machte die Oberfläche schwer.
+     --border-strong  **identifiziert ein Bedienelement**: Knopf,
+                      Eingabefeld, Auswahlfeld, Optionskachel. Die
+                      liegen auf weißem Grund und sind weiß — die Kante
+                      ist das Einzige, was sie überhaupt sichtbar macht.
+                      Deshalb mindestens 3:1, und zwar gegen alle drei
+                      Flächen (--surface, --surface-sunken, --bg).
+
+   Der Satz oben stand hier von Anfang an, die Werte hielten ihn nicht:
+   `--border-strong` war `#b3bdcd` und damit 1,90:1 gegen Weiß. Ein
+   Knopf war also allein durch seinen Schatten von der Karte zu
+   unterscheiden, auf der er liegt. Die axe-Prüfung sieht das nicht —
+   SC 1.4.11 ist für eigene Kanten maschinell nicht entscheidbar, und
+   die Suite war die ganze Zeit grün. Nachgerechnet gefunden, nicht
+   gesehen. */
 
 :root {
   color-scheme: light;
@@ -13,7 +36,11 @@
   --surface-sunken: #f5f7fb;
 
   --border: #d7dde8;
-  --border-strong: #b3bdcd;
+  /* 3,41:1 gegen Weiß, 3,18:1 gegen --surface-sunken, 3,01:1 gegen --bg.
+     Der hellste Wert dieser Farbfamilie, der auf allen drei Flächen über
+     3:1 bleibt — heller wäre wieder unter der Marke, dunkler machte die
+     Formulare unnötig schwer. */
+  --border-strong: #7d8ca4;
 
   --text: #16202e;
   --text-muted: #4d5a6d;
