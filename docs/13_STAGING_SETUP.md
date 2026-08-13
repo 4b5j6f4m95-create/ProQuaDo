@@ -34,8 +34,21 @@ Dieses Projekt hat einmal eine Betriebsanweisung veröffentlicht, die beim Aufsc
 Die ✅-Schritte sind gegen eine **eigene Staging-Umgebung** gelaufen, die zu diesem Zweck aufgesetzt wurde: [`infra/staging/docker-compose.staging.yml`](../infra/staging/docker-compose.staging.yml). Sie ist bewusst keine zweite Entwicklungsumgebung — eigener Projektname, eigenes Netz, eigene Ports und Volumes, zwei getrennte Datenbankrollen, `clamd` fest dabei statt optional, Bucket mit Versionierung, und Geheimnisse, die nicht aus `.env.example` stammen.
 
 ```bash
+cp infra/staging/.env.example infra/staging/.env   # einmalig, dann Werte einsetzen
 docker compose -f infra/staging/docker-compose.staging.yml up -d
 ```
+
+**Der erste Befehl ist keine Bequemlichkeit.** Die drei Passwörter der Umgebung standen bis zum 13.08.2026 fest in der Compose-Datei — in einem öffentlichen Repository, ohne Kennzeichen, dass sie zu ersetzen wären, und die ✅-Schritte unten sind mit genau diesen Werten gelaufen. Jetzt kommen sie aus `infra/staging/.env` (von `.gitignore` erfasst), und die `${VAR:?...}`-Form sorgt dafür, dass `up` mit einer benannten Fehlermeldung **abbricht**, wenn ein Wert fehlt. Es gibt keinen stillen Rückfall mehr auf etwas Veröffentlichtes — was fehlt, fällt beim Hochfahren auf und nicht später.
+
+Wer eine Umgebung weiterbenutzt, die vor dieser Änderung lief, muss die alten Passwörter **aktiv wechseln**. Neue Werte in `.env` genügen für PostgreSQL nicht: `POSTGRES_PASSWORD` wird nur beim ersten Anlegen des Datenverzeichnisses ausgewertet, und `infra/staging/.staging-data/postgres` liegt dann schon.
+
+```bash
+docker compose -f infra/staging/docker-compose.staging.yml exec postgres \
+  psql -U proquado_owner -d proquado \
+  -c "ALTER ROLE proquado_owner PASSWORD '<neuer Wert>'"
+```
+
+MinIO und Keycloak übernehmen ihre Werte dagegen bei jedem Start neu.
 
 Was Zielhardware, echten Objektspeicher, einen anderen OIDC-Anbieter als Keycloak oder einen TLS-Proxy voraussetzt, konnte auch dort nicht laufen und bleibt gekennzeichnet.
 
