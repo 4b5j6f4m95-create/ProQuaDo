@@ -93,6 +93,11 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   verdicts: Verdict[];
   measurement: Measurement;
   rejected: number;
+  /** Für den Wiederholmodus: die beiden Zahlen einer Reihe. Vorher standen
+   *  sie nur in der Konsolenausgabe und waren damit nicht zusammenfassbar. */
+  p95Ms: number;
+  throughputPerSecond: number;
+  deadlocks: number;
 }> {
   const measurement = createMeasurement('Sync-Stapel je Gerät (4 Kommandos)');
   let rejected = 0;
@@ -143,6 +148,9 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   return {
     measurement,
     rejected,
+    p95Ms: p95,
+    throughputPerSecond: throughput,
+    deadlocks,
     verdicts: [
       judge(
         'Schichtwechsel-Sync',

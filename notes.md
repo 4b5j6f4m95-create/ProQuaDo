@@ -912,6 +912,26 @@ Das ist kein Nullergebnis, sondern eine Auskunft über die Form der Last: **der 
 
 **Bewusst nicht in der CI.** Messwerte hängen an der Maschine; ein Gate, das je nach Runner-Auslastung rot wird, erzieht dazu, rote Läufe zu ignorieren. Der Lauf prüft die Ziele trotzdem und endet mit Exit-Code 1, wenn eines gerissen wird — für einen Lauf von Hand vor einem Release ist das die richtige Härte.
 
+#### Der Lauf urteilt jetzt über eine Reihe, nicht über eine Zahl (13.08.2026)
+
+Der Vorbehalt oben — „auf diesem Laptop ist der Wert nicht entscheidbar" — war richtig, aber der Lauf selbst wusste nichts davon. Er meldete einen p95, und je nachdem, welchen man erwischte, stand dort „bestanden" oder „gerissen". Auf der Zielhardware wäre das genauso gewesen: **die Streuung kommt vom Szenario, nicht von der Maschine.** Eine Messung, die dort einmal läuft, hätte das Problem mitgenommen statt es zu lösen.
+
+`LOAD_REPEAT=n` fährt den Schichtwechsel-Sync deshalb n-mal gegen je **frische** Fixtures — nach dem ersten Stapel sind die Schrittversionen fortgeschritten, ein zweiter gegen dieselben Geräte würde abgewiesen und misste die Ablehnung. Die Reihe kennt drei Ausgänge statt zwei:
+
+| Reihe                     | Urteil                                           |
+| ------------------------- | ------------------------------------------------ |
+| alle Läufe unter dem Ziel | bestanden                                        |
+| alle Läufe über dem Ziel  | gerissen                                         |
+| Läufe beidseits           | **nicht entschieden** — gilt als nicht bestanden |
+
+**Der dritte Ausgang ist der Grund für die ganze Übung.** Bei der Reihe 2856/3446/2990 aus der Messung oben liegt der **Median bei 2990 ms**, also unter dem Ziel: ein Urteil über den Median allein hätte „bestanden" gemeldet. Nachgeprüft mit vier konstruierten Reihen; die drei Ausgänge treffen zu, „genau auf der Marke" gilt als bestanden (`measured <= target`, wie im übrigen Lasttest).
+
+Dazu ein **Steckbrief der Maschine** in der Ausgabe und in `LOAD_RESULT_FILE` als JSON: Kerne, Takt, Speicher, Node, Docker, `UV_THREADPOOL_SIZE`, `DATABASE_POOL_MAX`, Vorlast. Die Frage lautet nicht „ist der p95 unter 3 s", sondern „ist er es **auf dieser Hardware**" — und die zweite ist an einer Zahl ohne Maschine nicht zu beantworten. Liegt die Vorlast beim Start über 0,3 je Kern, warnt der Lauf: dann misst man den Zustand der Maschine.
+
+**Vergleichswert auf dem Entwicklungsrechner** (Apple M5 Pro, 18 Kerne, 48 GB, `UV_THREADPOOL_SIZE` nicht gesetzt), 200 Geräte, 5 Läufe: p95 **3064–3554 ms, Median 3112**, Streuung 15,8 % — **alle fünf über dem Ziel**, also „gerissen" und nicht „nicht entschieden". Deadlocks 0, abgewiesene Kommandos 0.
+
+**Und eine Probe, die nichts ergab, aber trotzdem hierhergehört.** Nach dem Grundlauf lag nahe, dass `UV_THREADPOOL_SIZE=16` (+5 % laut Messung oben) die 3112 ms unter 3000 drücken könnte. Verschränkt gemessen, 5 Paare: 16 war in **3 von 5** Paaren schneller, Median der Paardifferenz 98 ms (2,4 %) — bei Einzeldifferenzen von **−859 bis +607 ms**. Der Effekt ist kleiner als das Rauschen; mit fünf Paaren ist er weder bestätigt noch widerlegt. Bemerkenswerter ist etwas anderes: dieselbe Konfiguration lag in dieser Probe bei p95 3625–4654 ms gegen 3064–3554 ms zwanzig Minuten zuvor. **Die Maschine war schlicht eine andere geworden.** Wer auf der Zielhardware misst, misst im Leerlauf und liest den Vorlast-Hinweis.
+
 ### Restore-Probe (docs/09 Ebene 10)
 
 ```bash
@@ -1036,9 +1056,17 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Dependabot ist dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
 
-5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er liegt seit dem Wechsel auf Prisma 7 über dem Ziel aus docs/09 (p95 3,2–3,9 s statt < 3 s; zod 4 hat daran nichts geändert, nachgemessen). Auf einem Laptop gemessen und deshalb kein Urteil über die reale Anlage — aber der Wert, der beim Schichtwechsel von 200 Tablets zählt, und der einzige aus dem Lasttest, der nicht mit Reserve besteht.
+5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er ist der einzige Zielwert aus docs/09, der nicht mit Reserve besteht — und der einzige, den kein Entwicklungsrechner entscheiden kann. **Das Kommando steht bereit und dauert etwa eine Minute:**
 
-   **Die Hebel sind inzwischen durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. Zwei Dinge folgen für den Piloten. Erstens ist **`UV_THREADPOOL_SIZE=16`** in der Zielumgebung ein risikoloser Gewinn von 5 % und gehört in die Deployment-Konfiguration, sobald jemand dort etwas festlegt. Zweitens ist der Wert auf einem Entwicklungsrechner **nicht entscheidbar** — dieselbe Konfiguration lieferte p95 zwischen 2856 und 3446 ms, also beidseits der Zielmarke. Wer auf der Zielhardware misst, misst verschränkt und mehrfach, nicht einmal.
+   ```bash
+   UV_THREADPOOL_SIZE=16 LOAD_REPEAT=5 LOAD_RESULT_FILE=sync-zielhardware.json pnpm run test:load
+   ```
+
+   Auf der Zielhardware braucht es dafür **Docker, Node ≥ 22.13 und pnpm**, sonst nichts — der Lauf bringt Postgres und MinIO als Container selbst mit. `LOAD_REPEAT=5` ist kein Feinschliff: ein einzelner Lauf beantwortet die Frage auch dort nicht, weil die Streuung vom Szenario kommt und nicht von der Maschine. Die Reihe kennt deshalb „nicht entschieden" als eigenen Ausgang — siehe „Der Lauf urteilt jetzt über eine Reihe, nicht über eine Zahl". `LOAD_RESULT_FILE` schreibt Messwerte samt Maschinensteckbrief als JSON; ohne den ist ein Wert später keiner Hardware zuzuordnen.
+
+   **Vergleichswert vom 13.08.2026** (Apple M5 Pro, 18 Kerne, `UV_THREADPOOL_SIZE` nicht gesetzt): p95 3064–3554 ms über 5 Läufe, **alle über dem Ziel**. Ein schneller Laptop reißt die Marke also deutlich — wer einen Server mietet, sollte das einrechnen und nicht auf die Hebel allein setzen.
+
+   **Die Hebel sind durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. **`UV_THREADPOOL_SIZE=16`** ist ein risikoloser Gewinn von etwa 5 % und gehört in die Deployment-Konfiguration — dass er allein die Lücke schließt, ist allerdings **nicht belegt**: eine verschränkte Probe mit fünf Paaren blieb im Rauschen.
 
 6. **Code Scanning wieder einschalten — oder den Workflow entfernen.** Es steht auf `not-configured` (Folge der Zeit, in der das Repository privat war), während `.github/workflows/codeql.yml` weiterläuft und deshalb bei **jedem** PR scheitert: `Resource not accessible by integration`, die Analyse startet gar nicht erst. Einschalten geht nur über die Weboberfläche — _Settings → Code security → Code scanning → Set up → Default_. Prüfen lässt es sich danach mit
 

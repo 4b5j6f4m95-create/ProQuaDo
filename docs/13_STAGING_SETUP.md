@@ -190,9 +190,27 @@ Was die dritte Zeile davon vorwegnimmt: die **Adressen stimmen**. Genau daran is
 
 ## Schritt 8 — Die drei Messungen, für die Staging existiert ⚠️
 
-**Sync-Durchsatz.** `pnpm run test:load` auf der Zielhardware. Der Harness ruft die Domänendienste direkt auf, misst also die Arbeit des Servers ohne HTTP und Netzweg. Bleibt p95 über 3 s, steht die Reihenfolge der Hebel in [docs/12 §8.4](12_DEPLOYMENT.md#84-wenn-beschleunigt-werden-muss): zuerst `UV_THREADPOOL_SIZE=16`, dann die Commit-Latenz der Datenbank, dann ein feinerer Outbox-Zähler. **Nicht** die Verbindungsverwaltung — der Rat stand hier bis zur Messung und ist widerlegt: zwischen `DATABASE_POOL_MAX=10` und `25` ist kein Unterschied messbar.
+**Sync-Durchsatz.** Der Harness ruft die Domänendienste direkt auf, misst also die Arbeit des Servers ohne HTTP und Netzweg. Er bringt seine Infrastruktur selbst mit (Testcontainers: Postgres und MinIO) — auf der Zielhardware braucht es **Docker, Node ≥ 22.13 und pnpm**, sonst nichts. Das Kommando lautet:
 
-**Und messt mehrfach und verschränkt, nicht einmal.** Derselbe Lauf schwankt auf einer beschäftigten Maschine zwischen p95 2856 und 3446 ms — beidseits der Zielmarke. Wer eine Konfiguration blockweise gegen eine andere stellt, vergleicht die Tagesform der Maschine (notes.md, „Blockweise verglichene Konfigurationen messen die Maschine").
+```bash
+UV_THREADPOOL_SIZE=16 LOAD_REPEAT=5 LOAD_RESULT_FILE=sync-zielhardware.json pnpm run test:load
+```
+
+**`LOAD_REPEAT=5` ist der Kern und keine Feinheit.** Ein einzelner Lauf beantwortet die Frage nicht: dieselbe Konfiguration auf derselben Maschine lieferte p95 2856 **und** 3446 ms — beidseits der Zielmarke von 3000 ms. Wer einmal misst, würfelt. Der Lauf fasst die Reihe zusammen und kennt deshalb einen dritten Ausgang neben bestanden und gerissen:
+
+| Reihe | Urteil | Bedeutung |
+| --- | --- | --- |
+| alle Läufe unter 3000 ms | ✓ bestanden | die Anlage hält das Ziel |
+| alle Läufe über 3000 ms | ✗ gerissen | die Hebel unten durchgehen |
+| Läufe beidseits | ✗ **nicht entschieden** | mehr Läufe oder eine ruhigere Maschine — **kein** halbes Bestehen |
+
+Der dritte Fall ist der, um dessentwillen es die Reihe gibt: Bei p95 2856/3446/2990 liegt der **Median bei 2990 ms** und damit unter dem Ziel. Ein Urteil über den Median allein hätte „bestanden" gemeldet.
+
+Die Ausgabe trägt einen **Steckbrief der Maschine** — Kerne, Takt, Speicher, Node- und Docker-Fassung, `UV_THREADPOOL_SIZE`, `DATABASE_POOL_MAX` — und `LOAD_RESULT_FILE` schreibt alles als JSON. Beides ist der Zweck der Übung: Die Frage lautet nicht „ist der p95 unter 3 s", sondern „ist er es **auf dieser Hardware**", und die zweite Frage lässt sich an einer Zahl ohne Maschine nicht beantworten. Der Lauf warnt außerdem, wenn die Vorlast beim Start über 0,3 je Kern liegt — dann misst man den Zustand der Maschine und nicht die Maschine.
+
+Bleibt p95 über 3 s, steht die Reihenfolge der Hebel in [docs/12 §8.4](12_DEPLOYMENT.md#84-wenn-beschleunigt-werden-muss): zuerst `UV_THREADPOOL_SIZE=16` (im Kommando oben schon gesetzt — 5 % ohne Risiko), dann die Commit-Latenz der Datenbank, dann ein feinerer Outbox-Zähler. **Nicht** die Verbindungsverwaltung — der Rat stand hier bis zur Messung und ist widerlegt: zwischen `DATABASE_POOL_MAX=10` und `25` ist kein Unterschied messbar.
+
+**Und wer zwei Konfigurationen vergleicht, misst verschränkt und nicht blockweise** — sonst vergleicht er die Tagesform der Maschine (notes.md, „Blockweise verglichene Konfigurationen messen die Maschine").
 
 Der Lauf hinterlässt Daten: je Durchgang ein Projekt `LOAD-P-…` mit bis zu 200 Aufträgen, ebenso vielen Geräten und einer Akte mit 500 Schritten und 2000 Fotos. In Staging ist das unproblematisch — in einer Umgebung, die später produktiv wird, ist es das nicht.
 
