@@ -22,7 +22,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
   - Der Rest von Phase 7 ist **keine Programmierarbeit mehr**: Pilot an einer realen Linie, Schulung, externer Penetrationstest, Restore-Probe gegen das echte Backup, kontrollierter Rollout.
 
   - _Werkzeugkette_: Node **≥ 22.13**, **Next 16** mit React 19 und Turbopack, **Prisma 7** (Treiber-Adapter statt Rust-Engine), **TypeScript 6**, **ESLint 9** im Flat-Format, pino 10 mit pino-pretty 13, **zod 4**. Jedes für sich angehoben und geprüft — die Begründungen stehen unter „Architekturentscheidungen mit Nachwirkung", die Messwerte beim Lasttest. **ESLint 10 ist absichtlich nicht dabei**, siehe Übergabe Punkt 4.
-  - _Repository_: **öffentlich**, mit Branch Protection auf `main` (alle fünf CI-Jobs erforderlich, `enforce_admins`), CodeQL, Dependabot und Secret Scanning samt Push Protection. Direkte Pushes auf `main` gehen nicht mehr; alles läuft über PRs.
+  - _Repository_: **öffentlich**, mit Branch Protection auf `main` (alle fünf CI-Jobs erforderlich, `strict`, `enforce_admins`), Dependabot und Secret Scanning samt Push Protection. Direkte Pushes auf `main` gehen nicht mehr; alles läuft über PRs. **Die Sichtbarkeit ist Voraussetzung dafür und nicht bloß Beiwerk** — siehe „Ein privates Repository verliert seine Schutzregel" unter den Stolpersteinen. **Code Scanning ist derzeit aus** (`state: not-configured`), der CodeQL-Workflow läuft aber noch und scheitert deshalb bei jedem PR; einschalten unter _Settings → Code security → Code scanning → Set up → Default_, sonst gehört der Workflow entfernt.
 
   **Bemerkenswert an dieser Phase**: nahezu jeder gefundene Fehler lag **nicht** im Domänendienst, sondern in der Schicht darüber (Server Action, Formular, Client-Zustand) oder in der Kombination einzeln korrekt getesteter Bausteine. Keiner davon war durch Typecheck, Unit-, Integrationstests oder `next build` sichtbar; gefunden hat sie durchweg das Durchspielen im Browser. Die Liste steht unter „Bekannte Stolpersteine", die Konsequenz als Arbeitsregel am Ende.
 
@@ -610,6 +610,49 @@ Gefunden beim Durchspielen im Browser; Typecheck, Lint und sechs Integrationstes
 
 Am selben Bildschirm trat zusätzlich **Stolperstein #30 erneut auf** — der Service Worker eines früheren Production-Laufs lieferte das alte Client-Bündel, und der Knopf blieb sichtbar, obwohl der Server längst `openCount: 0` schickte. Die Serverdaten daneben waren frisch, was die Suche zuerst in die falsche Richtung schickte. Merkmal für das nächste Mal: **frische Serverdaten plus veraltetes Verhalten einer Client-Komponente** heißt altes Bündel, nicht falscher Code.
 
+### Ein privates Repository verliert seine Schutzregel — und bekommt sie nicht zurück
+
+Das Repository war zwischenzeitlich wieder **privat** geschaltet. Aufgefallen ist das nicht daran, dass jemand es gemerkt hätte, sondern an einem roten CodeQL-Lauf mit einer Meldung, die nichts mit Code zu tun hat:
+
+```
+Resource not accessible by integration
+CodeQL job status was configuration error
+```
+
+Drei API-Abfragen sagten dann dasselbe:
+
+```
+gh api .../branches/main/protection    → 403 "Upgrade to GitHub Pro or make this repository public"
+gh api .../rulesets                    → 403 dieselbe Meldung
+gh api .../code-scanning/default-setup → 403 "Code scanning is not enabled"
+```
+
+**Zwei Sicherungen waren damit still weg**: die Branch Protection auf `main` und das Code Scanning. Direktes Pushen auf `main` war wieder möglich, und `gh pr merge --auto` hätte wieder sofort gemergt statt auf grün zu warten — genau der Weg, auf dem PR #3 vor seinen eigenen Checks landete. Gemerkt hätte man es erst an den Folgen.
+
+**Und das Wichtigste**: Wieder öffentlich zu schalten bringt die Regel **nicht** zurück. GitHub hat sie gelöscht, nicht stillgelegt —
+
+```
+gh api .../branches/main/protection → 404 "Branch not protected"
+```
+
+— sie muss neu angelegt werden. Die Job-Namen dafür holt man aus einem tatsächlich gelaufenen grünen CI-Lauf und tippt sie nicht ab; ein Tippfehler in `contexts` blockiert jeden künftigen Merge auf einen Check, den es nicht gibt:
+
+```bash
+gh run view <id> --json jobs -q '.jobs[].name'
+```
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input - <<'JSON'
+{"required_status_checks":{"strict":true,"contexts":["lint-and-typecheck","unit-tests","integration-tests","e2e-tests","build"]},"enforce_admins":true,"required_pull_request_reviews":null,"restrictions":null}
+JSON
+```
+
+CodeQL gehört **nicht** in `contexts`, solange Code Scanning nicht eingeschaltet ist — als erforderliche Prüfung sperrte es sonst jeden Merge.
+
+**Nachgeprüft statt geglaubt**, denn eine angelegte Regel ist noch keine wirksame: ein leerer Probe-Commit direkt auf `main` wurde abgewiesen (`GH006: Protected branch update failed … 5 of 5 required status checks are expected`) und danach zurückgenommen.
+
+**Lehre:** Eine Schutzeinstellung, die an der Sichtbarkeit des Repositories hängt, ist keine Eigenschaft des Projekts, sondern des Tarifs. Wer die Sichtbarkeit ändert, ändert die Sicherungen mit — und beim Zurückschalten kommen sie nicht von allein wieder. Verwandt mit „Eine Aussage im Dokument ist keine Funktion" am Ende dieser Datei: dass hier oben „mit Branch Protection" stand, machte sie nicht wirksam.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -997,6 +1040,16 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Die Hebel sind inzwischen durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. Zwei Dinge folgen für den Piloten. Erstens ist **`UV_THREADPOOL_SIZE=16`** in der Zielumgebung ein risikoloser Gewinn von 5 % und gehört in die Deployment-Konfiguration, sobald jemand dort etwas festlegt. Zweitens ist der Wert auf einem Entwicklungsrechner **nicht entscheidbar** — dieselbe Konfiguration lieferte p95 zwischen 2856 und 3446 ms, also beidseits der Zielmarke. Wer auf der Zielhardware misst, misst verschränkt und mehrfach, nicht einmal.
 
+6. **Code Scanning wieder einschalten — oder den Workflow entfernen.** Es steht auf `not-configured` (Folge der Zeit, in der das Repository privat war), während `.github/workflows/codeql.yml` weiterläuft und deshalb bei **jedem** PR scheitert: `Resource not accessible by integration`, die Analyse startet gar nicht erst. Einschalten geht nur über die Weboberfläche — _Settings → Code security → Code scanning → Set up → Default_. Prüfen lässt es sich danach mit
+
+   ```bash
+   gh api repos/4b5j6f4m95-create/ProQuaDo/code-scanning/default-setup --jq .state
+   ```
+
+   Wer es nicht will, entfernt den Workflow. **Was nicht bleiben darf, ist der Zwischenzustand**: ein Job, der bei jedem PR rot ist und den man jedes Mal wegsehen muss, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der Dependabot für ESLint 10 stillgelegt wurde und der Lasttest nicht in der CI steht. In die erforderlichen Checks der Branch Protection gehört CodeQL erst, wenn es tatsächlich läuft; vorher sperrte es jeden Merge.
+
+7. **Die Staging-Passwörter aus `infra/staging/docker-compose.staging.yml` herausziehen.** Dort stehen `staging_owner_secret`, `staging_minio_secret` und `staging_keycloak_secret` fest eingetragen — **nicht** als Platzhalter gekennzeichnet, anders als in `.env.example`, wo „replace-with-openssl-rand-base64-32" schon durch seinen Wortlaut zum Ersetzen auffordert. Es hängt kein System daran: die Umgebung ist nach docs/13 nie aufgesetzt worden, die ⚠️-Kennzeichen dort stehen noch. Aber die Datei liegt in einem **öffentlichen** Repository, und wer die Anleitung eines Tages befolgt, übernimmt Passwörter, die im Netz stehen. Auf `${POSTGRES_PASSWORD:?}`-Form umstellen, damit das Hochfahren ohne gesetzte Werte **scheitert** statt stillschweigend die veröffentlichten zu nehmen. Verwandt mit „Eine Aussage im Dokument ist keine Funktion": ein Wert, der wie ein Beispiel aussieht, ist keiner, solange er funktioniert.
+
 ### Arbeitsweise, die sich in diesem Projekt bewährt hat
 
 - Vor jeder Phase die zugehörigen `docs/`-Kapitel lesen; sie sind vor dem Code entstanden und enthalten die Begründungen.
@@ -1005,7 +1058,7 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 - Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
 - **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
 - **Was nur in Production greift, muss auch einmal in Production laufen.** Die CSP war in der gesamten Prüfkette abgeschaltet und verhinderte dort, wo sie galt, jede Hydration — sieben Phasen lang unbemerkt, weil niemand `next start` ausgeführt hatte. Grün heißt nur „geprüft, was geprüft wurde".
-- **Das Mergen vor grünen Checks verhindert jetzt GitHub, nicht mehr die Aufmerksamkeit.** Auf `main` liegt eine Branch-Protection-Regel mit allen fünf CI-Jobs als erforderlichen Checks, `enforce_admins` eingeschlossen — sie gilt also auch für Administratoren. Zwei Folgen für die tägliche Arbeit: direktes `git push` auf `main` geht nicht mehr, alles läuft über PRs; und `gh pr merge --auto` tut endlich, was der Name sagt. Vorgeschichte: PR #3 landete vor seinen eigenen Checks, weil `--auto` ohne erforderliche Checks sofort mergt, und die Regel selbst war damals gesperrt — Branch Protection ist bei GitHub für **private** Repositories dem Pro-Plan vorbehalten. Seit das Repository öffentlich ist, greift sie.
+- **Das Mergen vor grünen Checks verhindert jetzt GitHub, nicht mehr die Aufmerksamkeit.** Auf `main` liegt eine Branch-Protection-Regel mit allen fünf CI-Jobs als erforderlichen Checks, `strict` und `enforce_admins` eingeschlossen — sie gilt also auch für Administratoren. Zwei Folgen für die tägliche Arbeit: direktes `git push` auf `main` geht nicht mehr, alles läuft über PRs; und `gh pr merge --auto` tut endlich, was der Name sagt. Vorgeschichte: PR #3 landete vor seinen eigenen Checks, weil `--auto` ohne erforderliche Checks sofort mergt, und die Regel selbst war damals gesperrt — Branch Protection ist bei GitHub für **private** Repositories dem Pro-Plan vorbehalten. Seit das Repository öffentlich ist, greift sie. **Diese Bedingung ist keine Fußnote**: das Repository war zwischenzeitlich wieder privat, damit war die Regel weg, und beim Zurückschalten kam sie nicht von allein wieder — siehe „Ein privates Repository verliert seine Schutzregel". Wer an der Sichtbarkeit dreht, prüft danach `gh api .../branches/main/protection`.
 - **Eine Betriebsanweisung, die hier hineingeschrieben wird, sollte einmal ausgeführt worden sein.** Der `--force-recreate`-Hinweis für Keycloak stand eine halbe Phase lang da, war plausibel formuliert und entwertete beim Befolgen jede Kontoverknüpfung. Dokumentation, die man nur zu Ende gedacht hat, ist eine Vermutung mit Befehlszeile.
 - **Zahlen, die eine Begründung tragen, gehören in einen Test.** Zweimal an einem Tag hatte ein Kommentar eine Größenordnung behauptet, die nicht stimmte (Dauer eines PIN-Durchprobierens, Anzahl gefundener Fehler). Wo eine Zahl das Argument ist, prüft sie am besten die Testsuite — siehe `lockSecondsForAttempts`.
 - **Fragen, was am ersten Tag zu tun ist — nicht nur, was der Code kann.** Die folgenreichste Lücke dieses Projekts stand nicht im Code, sondern in einer Formulierung des Plans: `docs/10` führt die Datenmigration als „falls Altsystem vorhanden" und stellt die andere Hälfte der Frage nie. Dahinter lag, dass sich Stammdaten und Bestätigungs-PINs überhaupt nicht erfassen ließen — ein Pilot wäre vor leeren Auswahllisten und arbeitsunfähigen Konten gestanden. Kein Test hätte das gefunden, denn alles Vorhandene war richtig; gefehlt hat, was niemand verlangt hatte. Bei jeder Phase lohnt deshalb die Gegenfrage: **wenn morgen jemand mit einer leeren Datenbank anfängt, woran scheitert er zuerst?**
