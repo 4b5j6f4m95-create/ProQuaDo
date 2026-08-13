@@ -71,6 +71,10 @@ export const SYSTEM_ROLES = {
       'calibration.manage',
       'sync_conflict.view',
       'sync_conflict.decide',
+      // Eine bauaufsichtliche Zulassung trifft typischerweise bei der
+      // Qualitätssicherung ein, nicht bei der Projektleitung. Beide dürfen
+      // deshalb nachreichen.
+      'work_step_supplement.manage',
       // Produktfreigabe: die Entscheidung liegt allein bei QM, wie bei
       // Dokumenten — siehe permissions-catalog.ts.
       'product_release.decide',
@@ -102,6 +106,10 @@ export const SYSTEM_ROLES = {
       // nicht: was aus der Datei kommt, geht denselben Weg über QM wie ein
       // von Hand geschriebener Plan.
       'ifc_import.execute',
+      // Die Projektleitung pflegt die Unterlagen des Projekts und reicht
+      // deshalb auch nach. Die Qualitätssicherung hat dasselbe Recht, weil
+      // eine Zulassung typischerweise dort eintrifft.
+      'work_step_supplement.manage',
       'production_plan.release',
       'work_step_definition.create',
       'work_step_definition.update',

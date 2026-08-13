@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
+import { can } from '@/lib/authz/can';
+import { listBindableDocumentRevisions } from '@/domain/production-plans/plan-queries';
 import { getWorkStepInstance, listWorkStepsOfOrder } from '@/domain/execution/execution-queries';
 import { STEP_CONFIRMATION_TEXT } from '@/domain/execution/complete-work-step';
 import {
@@ -8,6 +10,7 @@ import {
 } from '@/domain/execution/step-requirements';
 import { listMeasuringEquipment } from '@/domain/quality/measuring-equipment';
 import { IfcComponentList } from './IfcComponentList';
+import { SupplementSection } from './SupplementSection';
 import { StatusChip } from '@/components/StatusChip';
 import { CompleteStepForm } from '@/components/CompleteStepForm';
 import { PhotoCaptureWidget } from '@/components/PhotoCaptureWidget';
@@ -50,6 +53,19 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
   // requirementsBlockingCompletion.
   const blockingCount = requirementsBlockingCompletion(step.evaluation).length;
   const canWork = step.isAssignedToOrder;
+
+  // Ob das Nachreichen ANGEBOTEN wird. Ob es angenommen wird, entscheidet der
+  // Dienst — dieselbe Trennung wie beim Freigabeformular der Akte.
+  const mayManageSupplements = (
+    await can({
+      userId: actor.userId,
+      organizationId: actor.organizationId,
+      action: 'work_step_supplement.manage',
+    })
+  ).allowed;
+  const bindableRevisions = mayManageSupplements
+    ? await listBindableDocumentRevisions(actor, step.productionOrder.project.id)
+    : [];
   const responseByItemId = new Map(step.checklistResponses.map((r) => [r.checklistItemId, r]));
   const measurementByCharacteristicId = new Map(
     step.measurementResults.map((m) => [m.inspectionCharacteristicId, m]),
@@ -203,6 +219,14 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
           </ul>
         </section>
       )}
+
+      <SupplementSection
+        workStepInstanceId={step.id}
+        supplements={step.supplements}
+        bindableRevisions={bindableRevisions}
+        mayManage={mayManageSupplements}
+        hasBindings={step.planStep.documentBindings.length > 0}
+      />
 
       <IfcComponentList components={step.planStep.ifcComponents} />
 

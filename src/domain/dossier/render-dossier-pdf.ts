@@ -134,6 +134,35 @@ function planAndDocumentsSection(doc: Doc, dossier: ProductionDossierContent): v
     doc.text(`SHA-256: ${document.fileHashSha256 ?? '— keine Datei hinterlegt —'}`);
     doc.moveDown(0.5);
   }
+
+  // Beilagen als eigene Liste im selben Abschnitt. Die Überschrift trägt die
+  // Aussage, nicht die Fußnote: wer nur den Titel liest, muss wissen, dass
+  // das Folgende nicht verbindlich war.
+  if (dossier.supplements.length === 0) return;
+
+  doc.moveDown(0.5);
+  doc.fontSize(BODY_SIZE).font('Helvetica-Bold');
+  doc.text(
+    'Nachgereichte Unterlagen — nach Planfreigabe beigelegt, nicht Teil der Arbeitsanweisung',
+  );
+  doc.font('Helvetica');
+  doc.moveDown(0.3);
+
+  for (const supplement of dossier.supplements) {
+    doc.font('Helvetica-Bold');
+    doc.text(
+      `${supplement.documentNumber} Rev. ${supplement.revisionNumber} — ${supplement.title}`,
+    );
+    doc.font('Helvetica');
+    doc.text(
+      `Schritt ${supplement.stepNumber}` +
+        ` · Nachgereicht von ${supplement.addedBy} am ${formatDateTime(supplement.addedAt)}` +
+        ` · Grund: ${supplement.reason}`,
+      { width: contentWidth(doc) },
+    );
+    doc.text(`SHA-256: ${supplement.fileHashSha256 ?? '— keine Datei hinterlegt —'}`);
+    doc.moveDown(0.5);
+  }
 }
 
 // 5.–7. Schritte mit Bestätigungen, Prüfungen und Nachweisen

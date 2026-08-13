@@ -15,6 +15,10 @@ import {
   type ChecklistResponseValue,
 } from '@/domain/execution/capture-evidence';
 import { submitWorkStepCompletion } from '@/domain/execution/complete-work-step';
+import {
+  addWorkStepSupplement,
+  removeWorkStepSupplement,
+} from '@/domain/execution/work-step-supplements';
 import { DomainError } from '@/lib/domain-errors';
 import { AuthzError } from '@/lib/authz/errors';
 
@@ -121,4 +125,27 @@ export async function completeWorkStepAction(
   }
   revalidatePath(`/work-steps/${workStepInstanceId}`);
   return { error: null };
+}
+
+export async function addWorkStepSupplementAction(formData: FormData): Promise<void> {
+  const actor = await requireAuthContext();
+  const workStepInstanceId = String(formData.get('workStepInstanceId'));
+  await addWorkStepSupplement({
+    actor,
+    workStepInstanceId,
+    documentRevisionId: String(formData.get('documentRevisionId')),
+    reason: String(formData.get('reason') ?? ''),
+  });
+  revalidatePath(`/work-steps/${workStepInstanceId}`);
+}
+
+export async function removeWorkStepSupplementAction(formData: FormData): Promise<void> {
+  const actor = await requireAuthContext();
+  const workStepInstanceId = String(formData.get('workStepInstanceId'));
+  await removeWorkStepSupplement({
+    actor,
+    supplementId: String(formData.get('supplementId')),
+    reason: String(formData.get('reason') ?? ''),
+  });
+  revalidatePath(`/work-steps/${workStepInstanceId}`);
 }

@@ -61,6 +61,12 @@ export const PERMISSIONS: readonly PermissionDefinition[] = [
   // Reihenfolge der Fertigungsstraße aus einer fremden Datei. Wer das darf,
   // ist eine eigene Frage, und sie gehört beantwortbar zu sein.
   perm('ifc_import', 'execute', 'Gebäudemodell (IFC) importieren'),
+  // Nachgereichte Unterlagen an einem laufenden Auftrag. Bewusst NICHT
+  // `work_step_definition.update`: das Atom steht für das Ändern des Plans,
+  // und eine Beilage ändert ihn gerade nicht. Wer beides mit demselben Recht
+  // erlaubte, könnte später nicht mehr sagen, wer den Plan anfassen darf und
+  // wer nur etwas beilegen.
+  perm('work_step_supplement', 'manage', 'Unterlage nachreichen'),
 
   // Production Execution
   perm('production_order', 'create', 'Produktionsauftrag anlegen'),

@@ -90,6 +90,31 @@ export default async function DossierPage(props: { params: Promise<{ id: string 
             ))}
           </ul>
         )}
+
+        {dossier.supplements.length > 0 && (
+          <>
+            <h3>Nachgereichte Unterlagen ({dossier.supplements.length})</h3>
+            <p className="muted">
+              Nach der Freigabe des Plans beigelegt. Nicht Teil der Arbeitsanweisung — verbindlich
+              war, was oben steht.
+            </p>
+            <ul>
+              {dossier.supplements.map((supplement, index) => (
+                <li key={`${supplement.documentNumber}-${supplement.stepNumber}-${index}`}>
+                  <strong>
+                    {supplement.documentNumber} Rev. {supplement.revisionNumber}
+                  </strong>{' '}
+                  — {supplement.title}
+                  <br />
+                  <span className="muted">
+                    Schritt {supplement.stepNumber} · nachgereicht von {supplement.addedBy} ·{' '}
+                    {supplement.reason} · SHA-256 {supplement.fileHashSha256?.slice(0, 16) ?? '—'}…
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </section>
 
       <section>
