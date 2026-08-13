@@ -506,54 +506,15 @@ export interface PlanningScenario {
 export async function createPlanningScenario(): Promise<PlanningScenario> {
   const context = await getDemoContext();
   const { projectId, productId } = await createProject(context);
-  const { projectLead, qualityManager } = context.actors;
+  const { projectLead } = context.actors;
   const suffix = randomUUID().slice(0, 8);
 
-  const documentNumber = `E2E-ZG-${suffix}`;
   const documentTitle = 'E2E Zusammenbauzeichnung';
-  const { revision: documentRevision } = await createDocument({
-    actor: projectLead,
+  const { documentNumber, revisionOptionLabel } = await createReleasedDocument(context, {
     projectId,
-    documentNumber,
+    documentNumber: `E2E-ZG-${suffix}`,
     title: documentTitle,
-    firstRevision: { title: documentTitle },
-  });
-
-  const content = Buffer.from(`E2E Zeichnungsinhalt ${suffix}`);
-  const { uploadUrl, storageKey } = await requestDocumentUploadUrl({
-    actor: projectLead,
-    documentRevisionId: documentRevision.id,
-    mimeType: 'text/plain',
-  });
-  const upload = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: content,
-    headers: { 'Content-Type': 'text/plain' },
-  });
-  if (!upload.ok) {
-    throw new Error(
-      `Upload der Testzeichnung nach MinIO scheiterte (${upload.status}). Läuft der ` +
-        'minio-Container und stimmt S3_ENDPOINT in der .env?',
-    );
-  }
-  await completeDocumentUpload({
-    actor: projectLead,
-    documentRevisionId: documentRevision.id,
-    storageKey,
-    mimeType: 'text/plain',
-    expectedHashSha256: createHash('sha256').update(content).digest('hex'),
-  });
-  await submitDocumentRevisionForReview({
-    actor: projectLead,
-    documentRevisionId: documentRevision.id,
-  });
-  await approveDocumentRevision({
-    actor: qualityManager,
-    documentRevisionId: documentRevision.id,
-  });
-  const released = await releaseDocumentRevision({
-    actor: qualityManager,
-    documentRevisionId: documentRevision.id,
+    body: `E2E Zeichnungsinhalt ${suffix}`,
   });
 
   const planStepTitle = 'Verschraubung nach Zeichnung';
@@ -575,6 +536,184 @@ export async function createPlanningScenario(): Promise<PlanningScenario> {
     planRevisionId: planRevision.id,
     planStepTitle,
     documentNumber,
-    revisionOptionLabel: `${documentNumber} Rev. ${released.revisionNumber} — ${documentTitle}`,
+    revisionOptionLabel,
+  };
+}
+
+interface ReleasedDocument {
+  documentId: string;
+  documentNumber: string;
+  revisionId: string;
+  /** So, wie eine Auswahlliste den Eintrag beschriftet. */
+  revisionOptionLabel: string;
+}
+
+/**
+ * Ein Dokument mit **freigegebener** erster Revision und echter Datei im
+ * Objektspeicher.
+ *
+ * Der ganze Weg wird gefahren — hochladen, einreichen, genehmigen, freigeben
+ * —, nicht per `UPDATE` gesetzt: eine Revision, die nur im Status RELEASED
+ * steht, aber nie durch den Freigabelauf ging, hat keinen `released_at`, keine
+ * Genehmigungszeile und keine Datei. Alles drei braucht die Produktionsakte.
+ */
+async function createReleasedDocument(
+  context: DemoContext,
+  spec: { projectId: string; documentNumber: string; title: string; body: string },
+): Promise<ReleasedDocument> {
+  const { projectLead, qualityManager } = context.actors;
+
+  const { document, revision } = await createDocument({
+    actor: projectLead,
+    projectId: spec.projectId,
+    documentNumber: spec.documentNumber,
+    title: spec.title,
+    firstRevision: { title: spec.title },
+  });
+
+  const content = Buffer.from(spec.body);
+  const { uploadUrl, storageKey } = await requestDocumentUploadUrl({
+    actor: projectLead,
+    documentRevisionId: revision.id,
+    mimeType: 'text/plain',
+  });
+  const upload = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: content,
+    headers: { 'Content-Type': 'text/plain' },
+  });
+  if (!upload.ok) {
+    throw new Error(
+      `Upload der Testdatei nach MinIO scheiterte (${upload.status}). Läuft der ` +
+        'minio-Container und stimmt S3_ENDPOINT in der .env?',
+    );
+  }
+  await completeDocumentUpload({
+    actor: projectLead,
+    documentRevisionId: revision.id,
+    storageKey,
+    mimeType: 'text/plain',
+    expectedHashSha256: createHash('sha256').update(content).digest('hex'),
+  });
+  await submitDocumentRevisionForReview({ actor: projectLead, documentRevisionId: revision.id });
+  await approveDocumentRevision({ actor: qualityManager, documentRevisionId: revision.id });
+  const released = await releaseDocumentRevision({
+    actor: qualityManager,
+    documentRevisionId: revision.id,
+  });
+
+  return {
+    documentId: document.id,
+    documentNumber: spec.documentNumber,
+    revisionId: revision.id,
+    revisionOptionLabel: `${spec.documentNumber} Rev. ${released.revisionNumber} — ${spec.title}`,
+  };
+}
+
+export interface SupplementScenario {
+  orderId: string;
+  orderNumber: string;
+  stepInstanceId: string;
+  stepTitle: string;
+  documentNumber: string;
+  documentTitle: string;
+  revisionOptionLabel: string;
+}
+
+/**
+ * Der Zustand, in dem eine Unterlage nachgereicht wird: der Plan ist
+ * **freigegeben**, der Auftrag läuft, und erst danach kommt die Zulassung.
+ *
+ * Zwei Eigenschaften sind Absicht und tragen je eine Zusicherung des Tests:
+ *
+ * 1. **Der Schritt hat keine Dokumentbindung.** Damit steht der Abschnitt
+ *    „Verbindliche Unterlagen" gar nicht auf dem Bildschirm — und der
+ *    erklärende Satz über den Beilagen darf dann nicht auf ihn verweisen.
+ * 2. **Die Dokumentrevision entsteht nach der Planfreigabe.** Vorher gebunden
+ *    werden könnte sie ohnehin nicht (`bindDocumentToPlanStep` verlangt
+ *    DRAFT); genau deshalb gibt es die Beilage.
+ */
+export async function createSupplementScenario(): Promise<SupplementScenario> {
+  const context = await getDemoContext();
+  const { projectId, productId } = await createProject(context);
+  const { projectLead, productionManager, worker } = context.actors;
+  const suffix = randomUUID().slice(0, 8);
+
+  const stepTitle = 'Modulwand aufrichten';
+  const { revision: planRevision } = await createProductionPlan({
+    actor: projectLead,
+    projectId,
+    productId,
+    planNumber: `E2E-FP-NA-${suffix}`,
+    name: 'E2E-Plan für Nachreichung',
+  });
+  await addPlanStep({
+    actor: projectLead,
+    productionPlanRevisionId: planRevision.id,
+    stepNumber: 1,
+    title: stepTitle,
+    instruction: 'Wandelement aufrichten und verschrauben.',
+  });
+  await submitProductionPlanForReview({
+    actor: projectLead,
+    productionPlanRevisionId: planRevision.id,
+  });
+  await approveProductionPlan({
+    actor: context.actors.qualityManager,
+    productionPlanRevisionId: planRevision.id,
+  });
+  await releaseProductionPlan({ actor: projectLead, productionPlanRevisionId: planRevision.id });
+
+  const orderNumber = `E2E-AUF-NA-${suffix}`;
+  const order = await createProductionOrder({
+    actor: productionManager,
+    projectId,
+    productId,
+    productionPlanRevisionId: planRevision.id,
+    orderNumber,
+    serialNumber: `E2E-SN-NA-${suffix}`,
+  });
+  const planned = await transitionProductionOrderStatus({
+    actor: productionManager,
+    productionOrderId: order.id,
+    toStatus: 'PLANNED',
+    expectedVersion: order.version,
+  });
+  await releaseProductionOrder({
+    actor: productionManager,
+    productionOrderId: order.id,
+    expectedVersion: planned.version,
+  });
+  await assignProductionOrder({
+    actor: productionManager,
+    productionOrderId: order.id,
+    userId: worker.userId,
+    role: 'EXECUTOR',
+  });
+
+  const instance = await owner().workStepInstance.findFirstOrThrow({
+    where: { productionOrderId: order.id },
+    orderBy: { stepNumber: 'asc' },
+  });
+  await startWorkStep({ actor: worker, workStepInstanceId: instance.id });
+
+  // Erst jetzt — nach der Planfreigabe und nach Arbeitsbeginn. Das ist der
+  // Anlass der Funktion und nicht bloß die bequeme Reihenfolge.
+  const documentTitle = 'E2E Zulassung Z-9.1-842';
+  const { documentNumber, revisionOptionLabel } = await createReleasedDocument(context, {
+    projectId,
+    documentNumber: `E2E-ZUL-${suffix}`,
+    title: documentTitle,
+    body: `E2E Zulassungsinhalt ${suffix}`,
+  });
+
+  return {
+    orderId: order.id,
+    orderNumber,
+    stepInstanceId: instance.id,
+    stepTitle,
+    documentNumber,
+    documentTitle,
+    revisionOptionLabel,
   };
 }

@@ -170,7 +170,24 @@ export interface ProductionDossierContent {
     releasedAt: Date | null;
     releasedBy: string | null;
   };
-  // 4. verwendete Dokumente und Revisionen
+  // 4. verwendete Dokumente und Revisionen — verbindlich gebunden UND
+  // nachgereicht. Bewusst zwei Listen statt einer: die erste sagt, wonach
+  // gearbeitet werden musste, die zweite, was dem Vorgang beiliegt. Ein
+  // elfter Abschnitt wäre die naheliegende Alternative gewesen und wäre
+  // falsch — die zehn Abschnitte aus Masterprompt Kap. 10 sind eine
+  // zugesicherte Struktur, und ein Prüfer sucht Unterlagen an einer Stelle.
+  supplements: Array<{
+    documentNumber: string;
+    title: string;
+    revisionNumber: string;
+    revisionStatus: string;
+    fileHashSha256: string | null;
+    storageKey: string | null;
+    stepNumber: number;
+    reason: string;
+    addedBy: string;
+    addedAt: Date;
+  }>;
   documents: Array<{
     documentNumber: string;
     title: string;
@@ -256,7 +273,7 @@ export interface ProductionDossierContent {
     /** Every file the ZIP export has to contain, so the manifest and the
      *  archive are built from one list rather than two. */
     evidenceFiles: Array<{
-      kind: 'DOCUMENT' | 'PHOTO' | 'NCR_EVIDENCE';
+      kind: 'DOCUMENT' | 'SUPPLEMENT' | 'PHOTO' | 'NCR_EVIDENCE';
       storageKey: string;
       declaredHashSha256: string | null;
       label: string;
@@ -332,6 +349,27 @@ export async function assembleProductionDossier(
             },
           },
         },
+        // Nachgereichte Unterlagen hängen an der Instanz, nicht am
+        // Planschritt — sie gelten nur für diesen Auftrag.
+        supplements: {
+          orderBy: { addedAt: 'asc' },
+          select: {
+            reason: true,
+            addedAt: true,
+            addedBy: { select: { displayName: true, email: true } },
+            documentRevision: {
+              select: {
+                id: true,
+                revisionNumber: true,
+                status: true,
+                fileHashSha256: true,
+                storageKey: true,
+                releasedAt: true,
+                document: { select: { documentNumber: true, title: true } },
+              },
+            },
+          },
+        },
         nonConformance: { select: { ncrNumber: true } },
         confirmations: { orderBy: { confirmedAt: 'asc' } },
         secondApproval: true,
@@ -391,6 +429,7 @@ export async function assembleProductionDossier(
 
     const steps = instances.map((instance) => buildStep(instance, name));
     const documents = buildDocumentList(instances);
+    const supplements = buildSupplementList(instances);
     const participants = await buildParticipants(tx, instances, names);
     // Read in the same transaction as everything else, so the release
     // decision belongs to the same `data_as_of` instant as the facts it is
@@ -441,6 +480,7 @@ export async function assembleProductionDossier(
         releasedBy: name(order.productionPlanRevision.releasedById),
       },
       documents,
+      supplements,
       steps,
       nonConformances: nonConformances.map((ncr) => ({
         ncrNumber: ncr.ncrNumber,
@@ -502,7 +542,7 @@ export async function assembleProductionDossier(
         generatedAt: dataAsOf,
         generatedBy: name(actor.userId) ?? actor.userId,
         templateVersion: DOSSIER_TEMPLATE_VERSION,
-        evidenceFiles: collectEvidenceFiles(documents, instances, nonConformances),
+        evidenceFiles: collectEvidenceFiles(documents, supplements, instances, nonConformances),
       },
     };
   });
@@ -532,6 +572,25 @@ type InstanceRow = Prisma.WorkStepInstanceGetPayload<{
                 document: { select: { documentNumber: true; title: true } };
               };
             };
+          };
+        };
+      };
+    };
+    supplements: {
+      orderBy: { addedAt: 'asc' };
+      select: {
+        reason: true;
+        addedAt: true;
+        addedBy: { select: { displayName: true; email: true } };
+        documentRevision: {
+          select: {
+            id: true;
+            revisionNumber: true;
+            status: true;
+            fileHashSha256: true;
+            storageKey: true;
+            releasedAt: true;
+            document: { select: { documentNumber: true; title: true } };
           };
         };
       };
@@ -632,6 +691,40 @@ function buildStep(instance: InstanceRow, name: (id: string | null) => string | 
       })),
     },
   };
+}
+
+/**
+ * Die nachgereichten Unterlagen, eine Zeile je Beilage.
+ *
+ * Anders als bei den Bindungen wird hier NICHT nach Revision zusammengefasst:
+ * dieselbe Zulassung an zwei Schritten sind zwei Vorgänge mit zwei
+ * Begründungen und zwei Zeitpunkten, und genau das ist die Auskunft, die ein
+ * Prüfer braucht.
+ */
+function buildSupplementList(instances: InstanceRow[]): ProductionDossierContent['supplements'] {
+  const out: ProductionDossierContent['supplements'] = [];
+
+  for (const instance of instances) {
+    for (const supplement of instance.supplements) {
+      const revision = supplement.documentRevision;
+      out.push({
+        documentNumber: revision.document.documentNumber,
+        title: revision.document.title,
+        revisionNumber: revision.revisionNumber,
+        revisionStatus: revision.status,
+        fileHashSha256: revision.fileHashSha256,
+        storageKey: revision.storageKey,
+        stepNumber: instance.stepNumber,
+        reason: supplement.reason,
+        addedBy: supplement.addedBy.displayName ?? supplement.addedBy.email,
+        addedAt: supplement.addedAt,
+      });
+    }
+  }
+
+  return out.sort(
+    (a, b) => a.stepNumber - b.stepNumber || a.addedAt.getTime() - b.addedAt.getTime(),
+  );
 }
 
 function buildDocumentList(instances: InstanceRow[]): ProductionDossierContent['documents'] {
@@ -737,13 +830,32 @@ function buildFinalRelease(
 
 function collectEvidenceFiles(
   documents: ProductionDossierContent['documents'],
+  supplements: ProductionDossierContent['supplements'],
   instances: InstanceRow[],
   nonConformances: NcrRow[],
 ): ProductionDossierContent['generation']['evidenceFiles'] {
   const files: ProductionDossierContent['generation']['evidenceFiles'] = [];
+  const seen = new Set<string>();
+
+  // Beilagen kommen mit ins Archiv — eine Akte, die eine Unterlage aufführt,
+  // deren Datei das ZIP nicht enthält, wäre genau die Lücke, die
+  // Abnahmeszenario F ausschließt. Eigener `kind`, damit sie im Archiv in
+  // einem eigenen Ordner landen und der Unterschied auch dort sichtbar
+  // bleibt, wo niemand mehr die Akte danebenlegt.
+  for (const supplement of supplements) {
+    if (!supplement.storageKey || seen.has(supplement.storageKey)) continue;
+    seen.add(supplement.storageKey);
+    files.push({
+      kind: 'SUPPLEMENT',
+      storageKey: supplement.storageKey,
+      declaredHashSha256: supplement.fileHashSha256,
+      label: `${supplement.documentNumber}_Rev${supplement.revisionNumber}`,
+    });
+  }
 
   for (const document of documents) {
-    if (!document.storageKey) continue;
+    if (!document.storageKey || seen.has(document.storageKey)) continue;
+    seen.add(document.storageKey);
     files.push({
       kind: 'DOCUMENT',
       storageKey: document.storageKey,

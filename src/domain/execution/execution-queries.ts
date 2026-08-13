@@ -171,6 +171,27 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
             measuringEquipment: { select: { id: true, equipmentNumber: true, name: true } },
           },
         },
+        // Nachgereichte Unterlagen. Bewusst getrennt von den Bindungen am
+        // Planschritt geladen: sie hängen an DIESER Instanz, gelten also nur
+        // für diesen Auftrag, und die Oberfläche muss den Unterschied zeigen
+        // können.
+        supplements: {
+          orderBy: { addedAt: 'asc' },
+          select: {
+            id: true,
+            reason: true,
+            addedAt: true,
+            addedBy: { select: { displayName: true, email: true } },
+            documentRevision: {
+              select: {
+                id: true,
+                revisionNumber: true,
+                status: true,
+                document: { select: { id: true, documentNumber: true, title: true } },
+              },
+            },
+          },
+        },
         confirmations: { select: { id: true, confirmedAt: true, signatureMethod: true } },
         // Phase 5: a step can be waiting on a conflict decision rather than
         // on the worker (docs/07 A8). Loaded with the step so the page can

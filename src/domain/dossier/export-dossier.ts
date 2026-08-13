@@ -444,6 +444,9 @@ export async function listDossierExports(actor: Actor, productionOrderId: string
 
 function folderFor(kind: string): string {
   if (kind === 'DOCUMENT') return 'dokumente';
+  // Eigener Ordner, nicht `dokumente/`: wer das Archiv ohne die Akte daneben
+  // öffnet, muss verbindliche Unterlagen von Beilagen unterscheiden können.
+  if (kind === 'SUPPLEMENT') return 'nachgereicht';
   if (kind === 'PHOTO') return 'fotos';
   return 'abweichungen';
 }

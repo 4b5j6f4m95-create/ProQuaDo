@@ -559,6 +559,35 @@ Nichts davon war zu sehen, außer auf dem Bildschirm: **Prettier hat es formatie
 
 **Lehre:** Eine mehrzeilige Selektorliste sieht aus wie mehrere Regeln und ist eine. Wer in einem fremden Stylesheet etwas einfügt, prüft zuerst, ob die Zeile darüber mit einem Komma endet. Und: nach jeder Stiländerung mindestens **eine** betroffene Seite ansehen, nicht nur die geänderten Werte nachmessen — dieselbe Regel wie beim Durchspielen im Browser, nur eine Ebene tiefer.
 
+### `prisma format` erfindet Felder, um einen falsch platzierten Rückverweis zu bedienen
+
+Das neue Modell `WorkStepSupplement` verweist auf `DocumentRevision`. Der Rückverweis landete beim Einfügen ein Modell zu früh — in `Document`, weil beide Modelle dieselben Feldzeilen (`stepBindings`, `ifcDrawingReferences`) tragen und die Textersetzung die **erste** Fundstelle traf.
+
+Danach lief `prisma format`. Es hat den Fehler nicht gemeldet, sondern **repariert**: dem Modell wurde stillschweigend
+
+```prisma
+document   Document? @relation(fields: [documentId], references: [id])
+documentId String?
+```
+
+hinzugefügt, damit der Rückverweis in `Document` ein Gegenüber hat. Das Schema war danach gültig (`prisma validate` 🚀), der Client ließ sich erzeugen, **der Typecheck lief durch** — und die Migration, die vorher geschrieben worden war, kannte die Spalte `documentId` natürlich nicht.
+
+Aufgefallen ist es erst im Integrationstest:
+
+```
+The column `work_step_supplements.documentId` does not exist in the current database.
+```
+
+Die Meldung nennt eine Spalte, die niemand geschrieben hat. Wer sie für einen Migrationsfehler hält, sucht an der falschen Stelle — die Migration ist richtig, das **Schema** hat sich verändert.
+
+**Lehre:** Nach `prisma format` das Diff des Schemas ansehen, nicht nur den Exit-Code. Und bei einem neuen Modell einmal prüfen, an welchem Modell die Rückverweise tatsächlich stehen:
+
+```bash
+grep -n "meinRueckverweis" prisma/schema.prisma | while read -r l; do n=${l%%:*}; echo "$n -> $(awk -v n=$n 'NR<=n && /^model /{m=$0} NR==n{print m}' prisma/schema.prisma)"; done
+```
+
+Verwandt mit „Relationsnamen bei bidirektionalen Prisma-Beziehungen" weiter oben — dort war der Name das Problem, hier der Ort.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -675,6 +704,16 @@ Nichts davon war zu sehen, außer auf dem Bildschirm: **Prettier hat es formatie
 - **Eine Freigabe wird nie abgeleitet.** Der Server verweigert sie, solange der Auftrag nicht `COMPLETED` ist oder eine blockierende Abweichung oder Sperre offen ist — aber das Erfüllen dieser Bedingungen _erzeugt_ keine Freigabe, es macht eine nur möglich. Ablehnen bleibt jederzeit möglich: ein Produkt zurückzuweisen ist genau das, was man tut, solange etwas nicht stimmt.
 - **Die Accessibility-Prüfung nimmt mehr Regeln, als docs/09 nennt.** Dort steht `withTags(['wcag22aa'])`; dieses Tag steht in axe-core aber nur für die mit WCAG 2.2 **neu hinzugekommenen** Kriterien. Allein geprüft liefe der Test an Kontrast, Formularbeschriftung und Namen von Bedienelementen vorbei — also an fast allem, was hier schiefgehen kann. Geprüft wird deshalb die kumulative Menge bis AA (`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`). Strenger als der Buchstabe von docs/09 und näher an dem, was dort gemeint ist. Dieselbe Art dokumentierter Abweichung wie bei den Berechtigungsatomen.
 - **Ein grüner axe-Lauf ist keine barrierefreie Anwendung.** axe prüft, was maschinell prüfbar ist; ob jemand mit Handschuhen an einem Hallentablet die Bestätigungs-PIN eingeben kann, sagt kein automatischer Test. Was der Lauf leistet, ist das Fernhalten von Regressionen — und die Zusicherung, dass er überhaupt etwas geprüft hat, steckt im Helfer selbst: er verlangt eine Mindestzahl **bestandener** Regeln, weil ein Scan auf einer leergebliebenen Seite sonst als „keine Verstöße" durchginge. Dass der Scanner anschlägt, wurde einmal gegengeprüft — eine eingeschleuste Verletzung (Bild ohne Alternativtext, Knopf ohne Namen, Text ohne Kontrast) wird gemeldet.
+- **Eine nachgereichte Unterlage hängt an der Schrittinstanz, nicht am Planschritt** (`work_step_supplements`, `src/domain/execution/work-step-supplements.ts`). Anlass war eine Aussage aus der Fertigung: „Detailzeichnungen oder Zulassungen werden nachträglich zugeordnet." Der vorhandene Weg konnte das nicht — `bindDocumentToPlanStep` verlangt eine Planrevision im Status **DRAFT**, und nach dem Einreichen ist der Plan zu. Die Entscheidung war nicht, ob so etwas möglich sein soll, sondern **woran es hängt**, und das ist der ganze Zuschnitt:
+  - Eine Beilage **ändert den Plan nicht**. Ein zweiter Auftrag gegen dieselbe Planrevision bekommt sie nicht mit — sie gehört zu diesem Vorgang, nicht zur Vorschrift.
+  - Sie geht **nicht in den `documentSetHash`** der Schrittfreigabe ein und löst deshalb keinen Revisionskonflikt aus. Ein Werker, der gerade arbeitet, wird nicht unterbrochen. Genau dieser Preis wäre bei einer echten Bindung fällig gewesen.
+  - Sie ist deshalb auch an einem **laufenden oder längst abgeschlossenen** Schritt zulässig. Dafür gibt es sie: die Zulassung trifft ein, wenn das Modul fertig ist.
+  - Verlangt bleibt, was auch eine Bindung verlangt: nur eine **freigegebene** Revision, nur aus **demselben Projekt** (RLS trennt Mandanten, nicht Projekte), und eine **Begründung** — sie steht sonst ohne Zusammenhang in der Akte. Ein stornierter Auftrag nimmt nichts mehr an.
+
+  **Was das ausdrücklich nicht abdeckt:** eine Zeichnung, die die Arbeit ändert. Das ist eine Planänderung und braucht eine neue Planrevision. Diese Unterscheidung ist **nicht technisch erzwingbar** — sie steht im Namen („nachgereicht"), im erklärenden Satz über der Liste und in der Akte, die beides getrennt ausweist. Wer sie aufweicht, hat den Unterschied zwischen Anweisung und Nachweis aufgegeben, ohne dass ein Test das meldet.
+
+  In der Produktionsakte steht sie unter Abschnitt 3.–4. als **eigene Liste** unter den verbindlichen Unterlagen, nicht als elfter Abschnitt: die zehn Abschnitte aus Masterprompt Kap. 10 sind eine zugesicherte Struktur, und ein Prüfer sucht Unterlagen an einer Stelle. Im ZIP liegt sie in `nachweise/nachgereicht/`, getrennt von `nachweise/dokumente/` — wer das Archiv ohne die Akte daneben öffnet, muss den Unterschied trotzdem sehen. `work_step_supplement.manage` haben PROJECT_LEAD **und** QUALITY_MANAGER; eine bauaufsichtliche Zulassung trifft typischerweise bei der Qualitätssicherung ein. Ausdrücklich **nicht** `work_step_definition.update` — wer den Plan ändern darf, ist eine andere Frage als wer einen Nachweis beilegen darf.
+
 - **`product_release.decide` liegt allein bei QM, `product_release.view` bei allen lesenden Rollen.** docs/04 nennt das Atom nicht — Masterprompt Kap. 10 beschreibt den Abschnitt der Akte, sagt aber nicht, wer entscheidet, weil bisher niemand entschied. Vergeben nach derselben Begründung, die docs/04 bei Dokumenten benutzt: wo QM die eindeutige Instanz ist, ist es die einzige. Dieselbe Art Abweichung wie bei `sync.execute` — dokumentiert, nicht stillschweigend. **Seed nachziehen nicht vergessen**, sonst liefert die Anwendung `PERMISSION_DENIED` für eine Berechtigung, die im Code längst vergeben ist.
 
 ---

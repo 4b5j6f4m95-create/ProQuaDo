@@ -88,6 +88,7 @@ model Organization {
   webhookDeliveries    WebhookDelivery[]
   ifcImports           IfcImport[]
   ifcComponents        IfcComponent[]
+  workStepSupplements  WorkStepSupplement[]
   ifcDrawingReferences IfcDrawingReference[]
   syncSequence         SyncSequence?
   syncCursors          SyncCursor[]
@@ -211,11 +212,12 @@ model User {
   delegationsGiven    Delegation[] @relation("DelegatingUser")
   delegationsReceived Delegation[] @relation("DelegatedUser")
 
-  projectMemberships ProjectMember[]
-  documentApprovals  DocumentApproval[]
-  orderAssignments   OrderAssignment[]
-  notifications      Notification[]
-  ifcImports         IfcImport[]
+  projectMemberships  ProjectMember[]
+  documentApprovals   DocumentApproval[]
+  orderAssignments    OrderAssignment[]
+  notifications       Notification[]
+  ifcImports          IfcImport[]
+  workStepSupplements WorkStepSupplement[]
 
   @@unique([organizationId, externalId])
   // Added in Phase 7. Two accounts with the same address inside one
@@ -676,11 +678,11 @@ model Document {
   updatedAt      DateTime @updatedAt @map("updated_at")
   version        Int      @default(1)
 
-  organization Organization          @relation(fields: [organizationId], references: [id])
-  project      Project               @relation(fields: [projectId], references: [id])
-  revisions             DocumentRevision[]
-  stepBindings          StepDocumentBinding[]
-  ifcDrawingReferences  IfcDrawingReference[]
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  project              Project               @relation(fields: [projectId], references: [id])
+  revisions            DocumentRevision[]
+  stepBindings         StepDocumentBinding[]
+  ifcDrawingReferences IfcDrawingReference[]
 
   @@unique([organizationId, documentNumber])
   @@index([organizationId])
@@ -716,13 +718,14 @@ model DocumentRevision {
   updatedAt         DateTime  @updatedAt @map("updated_at")
   version           Int       @default(1)
 
-  organization  Organization          @relation(fields: [organizationId], references: [id])
-  document      Document              @relation(fields: [documentId], references: [id])
-  priorRevision DocumentRevision?     @relation("DocumentRevisionHistory", fields: [priorRevisionId], references: [id])
-  supersededBy  DocumentRevision[]    @relation("DocumentRevisionHistory")
-  approvals             DocumentApproval[]
-  stepBindings          StepDocumentBinding[]
-  ifcDrawingReferences  IfcDrawingReference[]
+  organization         Organization          @relation(fields: [organizationId], references: [id])
+  document             Document              @relation(fields: [documentId], references: [id])
+  priorRevision        DocumentRevision?     @relation("DocumentRevisionHistory", fields: [priorRevisionId], references: [id])
+  supersededBy         DocumentRevision[]    @relation("DocumentRevisionHistory")
+  approvals            DocumentApproval[]
+  stepBindings         StepDocumentBinding[]
+  ifcDrawingReferences IfcDrawingReference[]
+  workStepSupplements  WorkStepSupplement[]
 
   @@unique([organizationId, documentId, revisionNumber])
   @@index([organizationId])
@@ -1123,6 +1126,7 @@ model WorkStepInstance {
   raisedNonConformances NonConformance[]       @relation("NcrOriginStep")
   productionHolds       ProductionHold[]
   syncConflicts         SyncConflict[]
+  supplements           WorkStepSupplement[]
 
   @@unique([organizationId, productionOrderId, planStepId, attemptNumber])
   @@index([organizationId])
@@ -2050,17 +2054,17 @@ model IfcComponent {
 /// Verweis unerledigt: die Zeichnung ist im Modell benannt, aber nicht im
 /// System — genau das muss im Schritt sichtbar sein, statt zu fehlen.
 model IfcDrawingReference {
-  id             String @id @default(uuid())
-  organizationId String @map("organization_id")
-  ifcImportId    String @map("ifc_import_id")
-  planStepId     String @map("plan_step_id")
+  id                 String   @id @default(uuid())
+  organizationId     String   @map("organization_id")
+  ifcImportId        String   @map("ifc_import_id")
+  planStepId         String   @map("plan_step_id")
   /// `Name` des Verweises, z. B. „Grundriss Modulboden".
-  name           String?
+  name               String?
   /// `Identification` bzw. `ItemReference` — die Zeichnungsnummer.
-  identification String?
+  identification     String?
   /// `Location` — Dateiname, Pfad oder URL, wie in der Datei angegeben.
-  location       String?
-  description    String?
+  location           String?
+  description        String?
   /// Gefüllt, wenn beim Import ein Dokument dieser Nummer gefunden wurde.
   documentId         String?  @map("document_id")
   documentRevisionId String?  @map("document_revision_id")
@@ -2076,4 +2080,41 @@ model IfcDrawingReference {
   @@index([organizationId])
   @@index([planStepId])
   @@map("ifc_drawing_references")
+}
+
+/// Eine Unterlage, die nach der Freigabe des Plans zu einem Arbeitsschritt
+/// dazukommt — eine Detailzeichnung, die erst später gezeichnet wurde, oder
+/// eine bauaufsichtliche Zulassung, die der Lieferant nachreicht.
+///
+/// **Sie hängt an der Schrittinstanz, nicht am Planschritt.** Das ist der
+/// ganze Zuschnitt: eine Bindung (`step_document_bindings`) sagt, welche
+/// Revision der Schritt verwendet, geht in den `documentSetHash` der Freigabe
+/// ein und darf nur im Status DRAFT entstehen. Eine Beilage sagt, was dem
+/// Vorgang beiliegt — sie ändert weder Plan noch Ausführung und ist deshalb
+/// auch an einem laufenden oder bereits abgeschlossenen Auftrag zulässig.
+///
+/// Wer eine Zeichnung nachreicht, die die **Arbeit** ändert, braucht
+/// weiterhin eine neue Planrevision. Diese Tabelle ist dafür ausdrücklich
+/// nicht gedacht, und die Oberfläche sagt das auch.
+model WorkStepSupplement {
+  id                 String   @id @default(uuid())
+  organizationId     String   @map("organization_id")
+  workStepInstanceId String   @map("work_step_instance_id")
+  documentRevisionId String   @map("document_revision_id")
+  /// Warum die Unterlage erst jetzt dazukommt. Pflicht — ohne sie steht in
+  /// der Akte eine Datei ohne Anlass.
+  reason             String
+  addedById          String   @map("added_by_id")
+  addedAt            DateTime @default(now()) @map("added_at")
+  version            Int      @default(1)
+
+  organization     Organization     @relation(fields: [organizationId], references: [id])
+  workStepInstance WorkStepInstance @relation(fields: [workStepInstanceId], references: [id])
+  documentRevision DocumentRevision @relation(fields: [documentRevisionId], references: [id])
+  addedBy          User             @relation(fields: [addedById], references: [id])
+
+  @@unique([workStepInstanceId, documentRevisionId])
+  @@index([organizationId])
+  @@index([workStepInstanceId])
+  @@map("work_step_supplements")
 }
