@@ -1068,13 +1068,20 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Die Hebel sind durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. **`UV_THREADPOOL_SIZE=16`** ist ein risikoloser Gewinn von etwa 5 % und gehört in die Deployment-Konfiguration — dass er allein die Lücke schließt, ist allerdings **nicht belegt**: eine verschränkte Probe mit fünf Paaren blieb im Rauschen.
 
-6. **Code Scanning wieder einschalten — oder den Workflow entfernen.** Es steht auf `not-configured` (Folge der Zeit, in der das Repository privat war), während `.github/workflows/codeql.yml` weiterläuft und deshalb bei **jedem** PR scheitert: `Resource not accessible by integration`, die Analyse startet gar nicht erst. Einschalten geht nur über die Weboberfläche — _Settings → Code security → Code scanning → Set up → Default_. Prüfen lässt es sich danach mit
+6. **Code Scanning — erledigt, und der Weg dorthin ist die eigentliche Auskunft.** Hier stand bis zum 13.08.2026, es sei abgeschaltet und `.github/workflows/codeql.yml` scheitere deshalb bei jedem PR (`Resource not accessible by integration`). Beides war richtig — **solange das Repository privat war**. Mit der Rückkehr auf öffentlich hat GitHub die Analyse von selbst wieder aufgenommen; nichts eingeschaltet, nichts geändert.
+
+   **Nachgeprüft an den hochgeladenen Analysen**, nicht am grünen Haken:
 
    ```bash
-   gh api repos/4b5j6f4m95-create/ProQuaDo/code-scanning/default-setup --jq .state
+   gh api "repos/4b5j6f4m95-create/ProQuaDo/code-scanning/analyses?per_page=3" \
+     --jq '.[] | "\(.created_at)  \(.category)  Regeln=\(.rules_count)  Ergebnisse=\(.results_count)"'
    ```
 
-   Wer es nicht will, entfernt den Workflow. **Was nicht bleiben darf, ist der Zwischenzustand**: ein Job, der bei jedem PR rot ist und den man jedes Mal wegsehen muss, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der Dependabot für ESLint 10 stillgelegt wurde und der Lasttest nicht in der CI steht. In die erforderlichen Checks der Branch Protection gehört CodeQL erst, wenn es tatsächlich läuft; vorher sperrte es jeden Merge.
+   Drei Analysen seit `7532417`, je **201 Regeln, 0 Ergebnisse**. Die Zahl der Regeln ist dabei der Beleg und nicht die Null: **null Befunde bei null gelaufenen Regeln sähen genauso aus.** Dieselbe Überlegung wie beim axe-Helfer, der eine Mindestzahl bestandener Regeln verlangt, damit ein Scan auf einer leergebliebenen Seite nicht als „keine Verstöße" durchgeht.
+
+   **Eine Falle für das nächste Mal:** `code-scanning/default-setup` meldet weiterhin `state: not-configured`, und das ist **kein** Widerspruch. Das Feld beschreibt allein die Standardeinrichtung über die Weboberfläche; hier läuft die Analyse über den Workflow (Advanced Setup). Wer den Zustand an dieser Abfrage festmacht — wie es hier zuerst stand —, liest dauerhaft „aus", während geprüft wird. Die belastbare Frage ist, ob **Analysen ankommen**.
+
+   Offen bleibt allein, dass CodeQL **nicht** unter den erforderlichen Checks der Branch Protection steht. Das war richtig, solange der Job scheiterte; jetzt spräche nichts mehr dagegen, ihn aufzunehmen — mit dem Vorbehalt, dass er bei der nächsten Umschaltung auf privat wieder rot würde und dann jeden Merge sperrte. Siehe „Ein privates Repository verliert seine Schutzregel".
 
 7. **Die Staging-Passwörter sind aus der Compose-Datei heraus — die alte Umgebung braucht trotzdem noch einen Handgriff.** `staging_owner_secret`, `staging_minio_secret` und `staging_keycloak_secret` standen fest in `infra/staging/docker-compose.staging.yml`, **nicht** als Platzhalter gekennzeichnet, anders als in `.env.example`, wo „replace-with-openssl-rand-base64-32" schon durch seinen Wortlaut zum Ersetzen auffordert. Sie kommen jetzt aus `infra/staging/.env`, und die `${VAR:?...}`-Form lässt `docker compose up` mit benannter Meldung abbrechen, wenn ein Wert fehlt.
 
