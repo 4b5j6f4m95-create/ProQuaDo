@@ -5,7 +5,11 @@ import { writeAuditEvent } from '@/lib/audit/write-audit-event';
 import { assertPermission } from '@/lib/authz/assert-permission';
 import { AlreadyExistsError, NotFoundError, ValidationError } from '@/lib/domain-errors';
 import type { Actor } from '@/domain/shared/actor';
-import { parseIfc, IfcParseError, type IfcDrawing, type IfcParseResult } from '@/lib/ifc/parse-ifc';
+import { parseIfc, IfcParseError, type IfcParseResult } from '@/lib/ifc/parse-ifc';
+// Die Zuordnungsregel steht bewusst nur an einer Stelle: Import und späteres
+// Nachschlagen müssen dieselbe Zeichnung finden, sonst hinge das Ergebnis
+// davon ab, auf welchem Weg gesucht wurde.
+import { findDocumentForDrawing } from './resolve-drawing-references';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -385,40 +389,4 @@ async function linkDrawings(input: {
   }
 
   return { referenceCount, boundCount };
-}
-
-async function findDocumentForDrawing(
-  tx: Prisma.TransactionClient,
-  projectId: string,
-  drawing: IfcDrawing,
-): Promise<{ documentId: string; revisionId: string } | null> {
-  const where = drawing.identification
-    ? {
-        projectId,
-        documentNumber: { equals: drawing.identification, mode: 'insensitive' as const },
-      }
-    : drawing.name
-      ? { projectId, title: { equals: drawing.name, mode: 'insensitive' as const } }
-      : null;
-  if (!where) return null;
-
-  const document = await tx.document.findFirst({
-    where,
-    select: {
-      id: true,
-      revisions: {
-        where: { status: 'RELEASED' },
-        // Die zuletzt freigegebene Fassung — `validFrom` ist der Zeitpunkt,
-        // ab dem sie gilt, und damit die Reihenfolge, in der die Halle sie
-        // kennt.
-        orderBy: [{ validFrom: 'desc' }, { revisionNumber: 'desc' }],
-        take: 1,
-        select: { id: true },
-      },
-    },
-  });
-
-  const revisionId = document?.revisions[0]?.id;
-  if (!document || !revisionId) return null;
-  return { documentId: document.id, revisionId };
 }

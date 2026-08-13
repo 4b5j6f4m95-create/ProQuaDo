@@ -138,8 +138,12 @@ export function ImportIfcForm({
             {result.drawingCount > result.boundDrawingCount && (
               <>
                 {' '}
-                Die übrigen bleiben im jeweiligen Schritt als offener Punkt sichtbar, bis das
-                Dokument im Projekt liegt.
+                Die übrigen bleiben im jeweiligen Schritt als offener Punkt sichtbar. Wird die
+                Zeichnung später hochgeladen und freigegeben, greift sie das Einreichen zur Prüfung
+                automatisch auf; im Plan lässt sich das mit <em>
+                  Zeichnungsverweise nachschlagen
+                </em>{' '}
+                auch vorher anstoßen.
               </>
             )}
           </p>

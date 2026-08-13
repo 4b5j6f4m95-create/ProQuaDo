@@ -66,6 +66,21 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
   const bindableRevisions = mayManageSupplements
     ? await listBindableDocumentRevisions(actor, step.productionOrder.project.id)
     : [];
+  // Zeichnungsverweise aus dem Gebäudemodell in ihre drei Zustände zerlegt.
+  // Gebunden heißt: die Revision steht bereits unter den verbindlichen
+  // Unterlagen — dort und nicht zweimal. Maßgeblich ist die Bindung, nicht
+  // `documentRevisionId` am Verweis: seit dem Nachschlagen kann ein Verweis
+  // aufgelöst sein, ohne dass eine Bindung besteht.
+  const boundRevisionIds = new Set(
+    step.planStep.documentBindings.map((binding) => binding.documentRevision.id),
+  );
+  const unboundDrawings = step.planStep.ifcDrawingReferences.filter(
+    (reference) =>
+      reference.documentRevisionId === null || !boundRevisionIds.has(reference.documentRevisionId),
+  );
+  const foundDrawings = unboundDrawings.filter((reference) => reference.documentRevision !== null);
+  const openDrawings = unboundDrawings.filter((reference) => reference.documentRevision === null);
+
   const responseByItemId = new Map(step.checklistResponses.map((r) => [r.checklistItemId, r]));
   const measurementByCharacteristicId = new Map(
     step.measurementResults.map((m) => [m.inspectionCharacteristicId, m]),
@@ -196,27 +211,73 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
       {/* Im Modell benannt, im System nicht vorhanden. Das gehört vor die
           Augen des Werkers und nicht nur in ein Import-Protokoll: er soll
           erfahren, dass es zu diesem Schritt eine Zeichnung geben müsste,
-          bevor er ohne sie anfängt. */}
-      {step.planStep.ifcDrawingReferences.length > 0 && (
+          bevor er ohne sie anfängt.
+
+          Ein Verweis kann inzwischen drei Zustände haben, und sie dürfen
+          nicht zusammenfallen. Gebunden: er steht oben unter „Verbindliche
+          Unterlagen" und hier nicht noch einmal. Offen: es gibt die Zeichnung
+          im System nicht. Dazwischen der Fall, den es erst seit dem
+          Nachschlagen gibt — die Zeichnung liegt inzwischen freigegeben im
+          Projekt, gehört aber nicht zu den Unterlagen dieser Planrevision,
+          weil eine Bindung nach der Freigabe eine Planänderung wäre. Sie zu
+          verschweigen hieße, den Werker die Zeichnung suchen zu lassen, die
+          im System liegt; sie unter die verbindlichen zu mischen hieße,
+          etwas anzuordnen, was niemand angeordnet hat. */}
+      {openDrawings.length + foundDrawings.length > 0 && (
         <section className="card">
-          <h2>Im Modell genannte Zeichnungen ({step.planStep.ifcDrawingReferences.length})</h2>
-          <p className="notice">
-            Diese Zeichnungen nennt das Gebäudemodell für diesen Schritt. Sie liegen nicht als
-            freigegebenes Dokument im System und lassen sich hier deshalb nicht öffnen.
-          </p>
-          <ul>
-            {step.planStep.ifcDrawingReferences.map((reference) => (
-              <li key={reference.id}>
-                {reference.identification ? <strong>{reference.identification}</strong> : null}
-                {reference.identification && reference.name ? ' — ' : ''}
-                {reference.name}
-                {reference.location ? <span className="muted"> · {reference.location}</span> : null}
-                {reference.description ? (
-                  <div className="muted">{reference.description}</div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <h2>Im Modell genannte Zeichnungen ({openDrawings.length + foundDrawings.length})</h2>
+
+          {foundDrawings.length > 0 && (
+            <>
+              <p className="notice">
+                Diese Zeichnungen liegen inzwischen freigegeben im Projekt. Sie gehören{' '}
+                <strong>nicht zu den verbindlichen Unterlagen</strong> dieser Planrevision — dafür
+                wäre eine neue Revision nötig.
+              </p>
+              <ul>
+                {foundDrawings.map((reference) => (
+                  <li key={reference.id}>
+                    {reference.identification ? <strong>{reference.identification}</strong> : null}
+                    {reference.identification && reference.name ? ' — ' : ''}
+                    {reference.name}
+                    {reference.documentRevision && (
+                      <>
+                        {' · '}
+                        <Link href={`/documents/${reference.documentRevision.document.id}`}>
+                          {reference.documentRevision.document.documentNumber} Rev.{' '}
+                          {reference.documentRevision.revisionNumber}
+                        </Link>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {openDrawings.length > 0 && (
+            <>
+              <p className="notice">
+                Diese Zeichnungen nennt das Gebäudemodell für diesen Schritt. Sie liegen nicht als
+                freigegebenes Dokument im System und lassen sich hier deshalb nicht öffnen.
+              </p>
+              <ul>
+                {openDrawings.map((reference) => (
+                  <li key={reference.id}>
+                    {reference.identification ? <strong>{reference.identification}</strong> : null}
+                    {reference.identification && reference.name ? ' — ' : ''}
+                    {reference.name}
+                    {reference.location ? (
+                      <span className="muted"> · {reference.location}</span>
+                    ) : null}
+                    {reference.description ? (
+                      <div className="muted">{reference.description}</div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </section>
       )}
 

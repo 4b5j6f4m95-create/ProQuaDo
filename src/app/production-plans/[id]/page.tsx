@@ -8,6 +8,7 @@ import {
   type PlanRevisionStatus,
 } from '@/domain/production-plans/plan-revision-status';
 import { BindDocumentForm, UnbindDocumentButton } from '@/components/StepDocumentBindingForms';
+import { ResolveDrawingReferencesForm } from '@/components/ResolveDrawingReferencesForm';
 import {
   addChecklistItemAction,
   addInspectionCharacteristicAction,
@@ -33,6 +34,13 @@ export default async function ProductionPlanRevisionPage(props: {
   const bindableRevisions = editable
     ? await listBindableDocumentRevisions(actor, revision.productionPlan.projectId)
     : [];
+  // Verweise ohne zugeordnetes Dokument — die einzigen, für die Nachschlagen
+  // überhaupt etwas ändern kann.
+  const openDrawingCount = revision.steps.reduce(
+    (sum, step) =>
+      sum + step.ifcDrawingReferences.filter((r) => r.documentRevisionId === null).length,
+    0,
+  );
 
   return (
     <main>
@@ -66,6 +74,20 @@ export default async function ProductionPlanRevisionPage(props: {
             <button type="submit">Freigeben</button>
           </form>
         )}
+
+        {/* Steht für die ganze Revision, nicht je Schritt: nachgeschlagen
+            wird über alle offenen Verweise auf einmal, und eine Zeichnung
+            hängt oft an mehreren Schritten. Beim Einreichen läuft dasselbe
+            ohnehin automatisch; dieser Knopf ist für die Zeit davor, in der
+            der Planer wissen will, was noch fehlt.
+
+            Ob überhaupt etwas erscheint, entscheidet die Komponente selbst —
+            sie muss ihre Meldung überleben lassen, auch wenn danach kein
+            Verweis mehr offen ist. */}
+        <ResolveDrawingReferencesForm
+          productionPlanRevisionId={revision.id}
+          openCount={openDrawingCount}
+        />
       </div>
 
       <h2>Arbeitsschritte</h2>
@@ -145,6 +167,47 @@ export default async function ProductionPlanRevisionPage(props: {
             ))}
             {step.documentBindings.length === 0 && <li className="muted">—</li>}
           </ul>
+
+          {/* Was das Gebäudemodell für diesen Schritt nennt und was noch
+              nicht verbindlich ist. Der Planer sah das bisher nirgends — die
+              Liste stand nur in der Werkeransicht, also dort, wo niemand mehr
+              etwas daran ändern kann. Zwei Zustände, die nicht dasselbe sind:
+              die Zeichnung fehlt im System, oder sie liegt inzwischen darin,
+              ist aber nicht Teil dieser Planrevision. */}
+          {(() => {
+            const boundRevisionIds = new Set(
+              step.documentBindings.map((binding) => binding.documentRevision.id),
+            );
+            const unbound = step.ifcDrawingReferences.filter(
+              (reference) =>
+                reference.documentRevisionId === null ||
+                !boundRevisionIds.has(reference.documentRevisionId),
+            );
+            if (unbound.length === 0) return null;
+            return (
+              <>
+                <h4>Im Modell genannte Zeichnungen ({unbound.length} nicht gebunden)</h4>
+                <ul>
+                  {unbound.map((reference) => (
+                    <li key={reference.id}>
+                      📐 {reference.identification ?? reference.name ?? '—'}
+                      {reference.identification && reference.name ? ` — ${reference.name}` : ''}
+                      {reference.documentRevision ? (
+                        <>
+                          {' · liegt als '}
+                          {reference.documentRevision.document.documentNumber} Rev.{' '}
+                          {reference.documentRevision.revisionNumber} im Projekt,{' '}
+                          <strong>nicht gebunden</strong>
+                        </>
+                      ) : (
+                        <span className="muted"> · nicht im Projekt</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            );
+          })()}
 
           {editable && (
             <div className="requirement-forms">

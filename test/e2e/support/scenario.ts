@@ -29,6 +29,7 @@ import {
 } from '@/domain/execution/capture-evidence';
 import { submitWorkStepCompletion } from '@/domain/execution/complete-work-step';
 import { createDocument } from '@/domain/documents/create-document';
+import { importIfcPlan } from '@/domain/production-plans/import-ifc-plan';
 import {
   requestDocumentUploadUrl,
   completeDocumentUpload,
@@ -716,4 +717,92 @@ export async function createSupplementScenario(): Promise<SupplementScenario> {
     documentTitle,
     revisionOptionLabel,
   };
+}
+
+export interface DrawingLookupScenario {
+  planRevisionId: string;
+  stepTitle: string;
+  drawingNumber: string;
+}
+
+/**
+ * Ein aus einem Gebäudemodell importierter Plan im Entwurf, dessen
+ * Zeichnungsverweis beim Import **ins Leere ging** — und eine Zeichnung, die
+ * erst danach freigegeben wurde.
+ *
+ * Die Reihenfolge ist der ganze Fall. Beim Import wird jede im Modell genannte
+ * Zeichnung einmal gesucht; fehlt sie, bleibt der Verweis offen. Dass er
+ * später wieder aufgegriffen wird, ist die Funktion, die dieser Zustand prüft.
+ */
+export async function createDrawingLookupScenario(): Promise<DrawingLookupScenario> {
+  const context = await getDemoContext();
+  const { projectId, productId } = await createProject(context);
+  const suffix = randomUUID().slice(0, 8);
+  const drawingNumber = `E2E-ZG-NACH-${suffix}`;
+  const stepTitle = 'Statische Verschraubung';
+
+  const imported = await importIfcPlan({
+    actor: context.actors.projectLead,
+    projectId,
+    productId,
+    planNumber: `E2E-FP-NACH-${suffix}`,
+    name: 'E2E-Plan mit offenem Zeichnungsverweis',
+    fileName: 'Modul.ifc',
+    content: ifcWithDrawing(drawingNumber),
+    storageKey: `ifc/e2e/${suffix}.ifc`,
+  });
+  if (imported.boundDrawingCount !== 0) {
+    throw new Error(
+      'Der Verweis war schon beim Import gebunden — dann prüft der Test nicht, was er soll.',
+    );
+  }
+
+  // Erst nach dem Import. Vorher gefunden zu werden ist genau das, was hier
+  // nicht passieren darf.
+  await createReleasedDocument(context, {
+    projectId,
+    documentNumber: drawingNumber,
+    title: 'E2E Schraubplan Modulboden',
+    body: `E2E Zeichnungsinhalt ${suffix}`,
+  });
+
+  return { planRevisionId: imported.revisionId, stepTitle, drawingNumber };
+}
+
+/**
+ * Kleinstmögliche IFC-Datei mit einem Zeichnungsverweis am Bauteil von
+ * Schritt 20 — derselbe Aufbau wie in
+ * `test/integration/phase8-ifc-import.integration.test.ts`, hier auf das
+ * Nötigste gekürzt.
+ */
+function ifcWithDrawing(drawingNumber: string): Buffer {
+  const guid = (prefix: string, id: number): string =>
+    (prefix + String(id)).padEnd(22, '0').slice(0, 22);
+  const element = (id: number, arbeitsvorgang: string, bauteilId: string): string =>
+    [
+      `#${id}=IFCBUILDINGELEMENTPROXY('${guid('el', id)}',#5,' ',$,$,#63,#64,$,$);`,
+      `#${id + 1}=IFCPROPERTYSINGLEVALUE('Arbeitsvorgang',$,IFCTEXT('${arbeitsvorgang}'),$);`,
+      `#${id + 2}=IFCPROPERTYSINGLEVALUE('Allright_Bauteil_ID',$,IFCTEXT('${bauteilId}'),$);`,
+      `#${id + 10}=IFCPROPERTYSET('${guid('ps', id + 10)}',#5,'AllplanAttributes',$,(#${id + 1},#${id + 2}));`,
+      `#${id + 11}=IFCRELDEFINESBYPROPERTIES('${guid('rd', id + 10)}',#5,$,$,(#${id}),#${id + 10});`,
+    ].join('\n');
+
+  return Buffer.from(
+    [
+      'ISO-10303-21;',
+      'HEADER;',
+      "FILE_DESCRIPTION(('no view'),'2;1');",
+      "FILE_NAME('Modul.ifc','2026-08-13T10:00:00',('E2E'),('No Org',''),'ODA SDAI 25.4','','e2e');",
+      "FILE_SCHEMA(('IFC2X3'));",
+      'ENDSEC;',
+      'DATA;',
+      element(100, '20: Statische Verschraubung', 'B-0001'),
+      element(300, '130: Kuechen Montage', 'B-0003'),
+      `#900=IFCDOCUMENTREFERENCE('${drawingNumber}_Rev01.pdf','${drawingNumber}','E2E Schraubplan Modulboden');`,
+      `#901=IFCRELASSOCIATESDOCUMENT('${guid('da', 901)}',#5,$,$,(#100),#900);`,
+      'ENDSEC;',
+      'END-ISO-10303-21;',
+    ].join('\n'),
+    'latin1',
+  );
 }

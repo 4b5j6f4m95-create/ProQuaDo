@@ -588,6 +588,28 @@ grep -n "meinRueckverweis" prisma/schema.prisma | while read -r l; do n=${l%%:*}
 
 Verwandt mit „Relationsnamen bei bidirektionalen Prisma-Beziehungen" weiter oben — dort war der Name das Problem, hier der Ort.
 
+### Eine Erfolgsmeldung, die in der Bedingung steckt, die sie aufhebt
+
+Die Schaltfläche „Zeichnungsverweise nachschlagen" stand unter `openDrawingCount > 0` — sinnvoll, ein Knopf ohne Gegenstand lädt nur dazu ein, ihn zu drücken und nichts zu erfahren. Die Erfolgsmeldung war Zustand der Client-Komponente und stand deshalb **im Formular**:
+
+```tsx
+{openDrawingCount > 0 && <ResolveDrawingReferencesForm … />}
+```
+
+Nach einem erfolgreichen Lauf ist kein Verweis mehr offen. Also verschwand das Formular — samt der Meldung, die eine Zehntelsekunde vorher entstanden war. Wer drückte, sah die Zeichnung unter „Verbindliche Dokumente" auftauchen und bekam kein Wort dazu, ob das nun der Knopf war oder Zufall.
+
+**Die Bedingung gehört in die Komponente, nicht um sie herum.** Nur sie weiß, ob sie noch etwas zu sagen hat:
+
+```tsx
+if (openCount === 0 && !state.message && !state.error) return null;
+```
+
+Gefunden beim Durchspielen im Browser; Typecheck, Lint und sechs Integrationstests waren grün. Ein E2E-Test hält es jetzt fest, und die Gegenprobe ist gemacht — mit der alten Bedingung schlägt er an Zeile 42 fehl.
+
+**Lehre:** Wenn eine Aktion die Bedingung beseitigt, unter der ihr eigenes Bedienelement steht, verschwindet mit dem Element auch die Antwort. Beim Entwerfen einer solchen Schaltfläche einmal zu Ende denken: **was sieht der Benutzer unmittelbar nach dem Erfolg?**
+
+Am selben Bildschirm trat zusätzlich **Stolperstein #30 erneut auf** — der Service Worker eines früheren Production-Laufs lieferte das alte Client-Bündel, und der Knopf blieb sichtbar, obwohl der Server längst `openCount: 0` schickte. Die Serverdaten daneben waren frisch, was die Suche zuerst in die falsche Richtung schickte. Merkmal für das nächste Mal: **frische Serverdaten plus veraltetes Verhalten einer Client-Komponente** heißt altes Bündel, nicht falscher Code.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -704,6 +726,16 @@ Verwandt mit „Relationsnamen bei bidirektionalen Prisma-Beziehungen" weiter ob
 - **Eine Freigabe wird nie abgeleitet.** Der Server verweigert sie, solange der Auftrag nicht `COMPLETED` ist oder eine blockierende Abweichung oder Sperre offen ist — aber das Erfüllen dieser Bedingungen _erzeugt_ keine Freigabe, es macht eine nur möglich. Ablehnen bleibt jederzeit möglich: ein Produkt zurückzuweisen ist genau das, was man tut, solange etwas nicht stimmt.
 - **Die Accessibility-Prüfung nimmt mehr Regeln, als docs/09 nennt.** Dort steht `withTags(['wcag22aa'])`; dieses Tag steht in axe-core aber nur für die mit WCAG 2.2 **neu hinzugekommenen** Kriterien. Allein geprüft liefe der Test an Kontrast, Formularbeschriftung und Namen von Bedienelementen vorbei — also an fast allem, was hier schiefgehen kann. Geprüft wird deshalb die kumulative Menge bis AA (`wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`). Strenger als der Buchstabe von docs/09 und näher an dem, was dort gemeint ist. Dieselbe Art dokumentierter Abweichung wie bei den Berechtigungsatomen.
 - **Ein grüner axe-Lauf ist keine barrierefreie Anwendung.** axe prüft, was maschinell prüfbar ist; ob jemand mit Handschuhen an einem Hallentablet die Bestätigungs-PIN eingeben kann, sagt kein automatischer Test. Was der Lauf leistet, ist das Fernhalten von Regressionen — und die Zusicherung, dass er überhaupt etwas geprüft hat, steckt im Helfer selbst: er verlangt eine Mindestzahl **bestandener** Regeln, weil ein Scan auf einer leergebliebenen Seite sonst als „keine Verstöße" durchginge. Dass der Scanner anschlägt, wurde einmal gegengeprüft — eine eingeschleuste Verletzung (Bild ohne Alternativtext, Knopf ohne Namen, Text ohne Kontrast) wird gemeldet.
+- **Ein Zeichnungsverweis wird aufgelöst oder gebunden — das sind zwei Vorgänge** (`src/domain/production-plans/resolve-drawing-references.ts`). Beim IFC-Import wird jede im Modell genannte Zeichnung **einmal** gesucht. Fehlte sie, blieb der Verweis offen — und blieb es für immer, auch wenn sie zwei Tage später hochgeladen und freigegeben wurde; die Oberfläche versprach dabei ausdrücklich das Gegenteil („bis das Dokument im Projekt liegt"). Die Entscheidung beim Nachrüsten war nicht, ob nachgeschlagen wird, sondern **was Nachschlagen bewirken darf**:
+  - **Auflösen** hält fest, dass die Zeichnung inzwischen als Dokument im System liegt. Das ist eine Feststellung über die Wirklichkeit — der Verweis ist ein Fund aus der Datei, nichts, das der Plan anordnet. Deshalb jederzeit zulässig, unabhängig vom Planstatus.
+  - **Binden** macht die Revision für den Schritt verbindlich. Das ist eine Planänderung, geht in den `documentSetHash` ein und bleibt auf DRAFT beschränkt, genau wie `bindDocumentToPlanStep`.
+
+  An einer freigegebenen Planrevision wird also **aufgelöst und nicht gebunden**. Der Verweis steht danach im Arbeitsschritt als „liegt inzwischen im Projekt, gehört aber nicht zu den verbindlichen Unterlagen" — mit Link, ohne Behauptung. Wer ihn für einen laufenden Auftrag in die Akte holen will, reicht ihn nach; wer ihn verbindlich machen will, braucht eine neue Planrevision.
+
+  **Zwei Auslöser**: eine Schaltfläche am Plan, und automatisch beim **Einreichen zur Prüfung** — der letzte Moment, zu dem eine Bindung überhaupt noch entstehen kann. Der zweite ist der wichtigere: die Zeichnungen treffen typischerweise zwischen Import und Einreichen ein, und ein Plan soll nicht deshalb mit offenen Verweisen zu QM gehen, weil niemand auf einen Knopf gedrückt hat. Berechtigung ist `work_step_definition.update` — dasselbe Atom, das eine Bindung von Hand verlangt, weil hier Bindungen entstehen.
+
+  **Eine Falle, die dabei entschärft wurde**: `execution-queries.ts` lud die Verweise mit `where: { documentRevisionId: null }`, begründet damit, die aufgelösten stünden ohnehin unter den verbindlichen Unterlagen. Das galt nur, solange Auflösen ausschließlich beim Import geschah, wo beides zusammen entsteht. Mit dem Nachschlagen sind „aufgelöst" und „gebunden" zwei Zustände — der Filter hätte genau den neuen Fall unsichtbar gemacht: gefunden und nirgends gezeigt.
+
 - **Eine nachgereichte Unterlage hängt an der Schrittinstanz, nicht am Planschritt** (`work_step_supplements`, `src/domain/execution/work-step-supplements.ts`). Anlass war eine Aussage aus der Fertigung: „Detailzeichnungen oder Zulassungen werden nachträglich zugeordnet." Der vorhandene Weg konnte das nicht — `bindDocumentToPlanStep` verlangt eine Planrevision im Status **DRAFT**, und nach dem Einreichen ist der Plan zu. Die Entscheidung war nicht, ob so etwas möglich sein soll, sondern **woran es hängt**, und das ist der ganze Zuschnitt:
   - Eine Beilage **ändert den Plan nicht**. Ein zweiter Auftrag gegen dieselbe Planrevision bekommt sie nicht mit — sie gehört zu diesem Vorgang, nicht zur Vorschrift.
   - Sie geht **nicht in den `documentSetHash`** der Schrittfreigabe ein und löst deshalb keinen Revisionskonflikt aus. Ein Werker, der gerade arbeitet, wird nicht unterbrochen. Genau dieser Preis wäre bei einer echten Bindung fällig gewesen.
