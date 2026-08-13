@@ -25,6 +25,10 @@ let createCustomer: typeof import('@/domain/master-data/master-data').createCust
 let createProduct: typeof import('@/domain/master-data/master-data').createProduct;
 let createProject: typeof import('@/domain/projects/create-project').createProject;
 let importIfcPlan: typeof import('@/domain/production-plans/import-ifc-plan').importIfcPlan;
+let resolveDrawingReferences: typeof import('@/domain/production-plans/resolve-drawing-references').resolveDrawingReferences;
+let submitProductionPlanForReview: typeof import('@/domain/production-plans/plan-review-workflow').submitProductionPlanForReview;
+let approveProductionPlan: typeof import('@/domain/production-plans/plan-review-workflow').approveProductionPlan;
+let releaseProductionPlan: typeof import('@/domain/production-plans/plan-review-workflow').releaseProductionPlan;
 
 beforeAll(async () => {
   pgContainer = await new PostgreSqlContainer('postgres:16-alpine')
@@ -52,6 +56,10 @@ beforeAll(async () => {
     await import('@/domain/master-data/master-data'));
   ({ createProject } = await import('@/domain/projects/create-project'));
   ({ importIfcPlan } = await import('@/domain/production-plans/import-ifc-plan'));
+  ({ resolveDrawingReferences } =
+    await import('@/domain/production-plans/resolve-drawing-references'));
+  ({ submitProductionPlanForReview, approveProductionPlan, releaseProductionPlan } =
+    await import('@/domain/production-plans/plan-review-workflow'));
 
   ownerClient = new PrismaClient({ adapter: new PrismaPg({ connectionString: ownerUrl }) });
 }, 240_000);
@@ -130,6 +138,7 @@ function ifcFile(body: string): Buffer {
 
 interface Fixtures {
   projectLead: Actor;
+  qualityManager: Actor;
   worker: Actor;
   projectId: string;
   productId: string;
@@ -140,11 +149,13 @@ async function seedFixtures(name: string): Promise<Fixtures> {
   const ids = await seedDemoUsers(ownerClient, seeded, [
     { email: `admin-${name}@t.local`, displayName: 'Admin', roleCode: 'ADMIN' },
     { email: `pl-${name}@t.local`, displayName: 'PL', roleCode: 'PROJECT_LEAD' },
+    { email: `qm-${name}@t.local`, displayName: 'QM', roleCode: 'QUALITY_MANAGER' },
     { email: `w-${name}@t.local`, displayName: 'Worker', roleCode: 'WORKER' },
   ]);
   const org = seeded.organizationId;
   const admin: Actor = { userId: ids[`admin-${name}@t.local`] ?? '', organizationId: org };
   const projectLead: Actor = { userId: ids[`pl-${name}@t.local`] ?? '', organizationId: org };
+  const qualityManager: Actor = { userId: ids[`qm-${name}@t.local`] ?? '', organizationId: org };
   const worker: Actor = { userId: ids[`w-${name}@t.local`] ?? '', organizationId: org };
 
   const site = await createSite({ actor: admin, code: `S-${name}`, name: 'Werk' });
@@ -167,7 +178,7 @@ async function seedFixtures(name: string): Promise<Fixtures> {
     name: 'Raummodul',
   });
 
-  return { projectLead, worker, projectId: project.id, productId: product.id };
+  return { projectLead, qualityManager, worker, projectId: project.id, productId: product.id };
 }
 
 async function doImport(f: Fixtures, planNumber: string, content = sampleIfc()) {
@@ -548,5 +559,221 @@ describe('IFC-Import — Zeichnungen', () => {
       where: { ifcImportId: result.importId },
     });
     expect(references).toHaveLength(0);
+  });
+});
+
+/**
+ * Nachschlagen offener Verweise.
+ *
+ * Der Anlass: beim Import wird jede Zeichnung **einmal** gesucht. Fehlte sie,
+ * blieb der Verweis für immer offen — auch wenn sie zwei Tage später
+ * hochgeladen und freigegeben wurde. Die Oberfläche versprach dabei das
+ * Gegenteil („bis das Dokument im Projekt liegt").
+ *
+ * Die Fälle prüfen vor allem die **Grenze**: an einer freigegebenen
+ * Planrevision wird aufgelöst, aber nicht gebunden. Eine Bindung wäre eine
+ * Planänderung nach der Freigabe — genau das, was Geschäftsgrundsatz 6
+ * ausschließt. Fiele diese Unterscheidung weg, änderte ein Knopfdruck
+ * rückwirkend, was für einen laufenden Auftrag verbindlich ist.
+ */
+describe('IFC-Import — Verweise nachschlagen', () => {
+  async function seedDrawing(
+    f: Fixtures,
+    documentNumber: string,
+    status: string,
+  ): Promise<{ documentId: string; revisionId: string }> {
+    const organizationId = f.projectLead.organizationId;
+    const document = await ownerClient.document.create({
+      data: {
+        organizationId,
+        projectId: f.projectId,
+        documentNumber,
+        title: 'Schraubplan Modulboden',
+        category: 'DRAWING',
+      },
+    });
+    const revision = await ownerClient.documentRevision.create({
+      data: {
+        organizationId,
+        documentId: document.id,
+        revisionNumber: '01',
+        status,
+        title: 'Schraubplan Modulboden',
+        createdById: f.projectLead.userId,
+      },
+    });
+    return { documentId: document.id, revisionId: revision.id };
+  }
+
+  /** Hebt eine zuvor als DRAFT angelegte Revision auf RELEASED — der Vorgang,
+   *  der in der Wirklichkeit zwischen Import und Nachschlagen liegt. */
+  async function release(revisionId: string): Promise<void> {
+    await ownerClient.documentRevision.update({
+      where: { id: revisionId },
+      data: { status: 'RELEASED', validFrom: new Date() },
+    });
+  }
+
+  it('bindet die nachgereichte Zeichnung, solange der Plan im Entwurf ist', async () => {
+    const f = await seedFixtures('resolve-draft');
+    const drawing = await seedDrawing(f, 'ZG-5001', 'DRAFT');
+    const imported = await doImport(f, 'FP-IFC-30', ifcWithDrawing('ZG-5001'));
+    expect(imported.boundDrawingCount).toBe(0);
+
+    // Erst jetzt wird die Zeichnung freigegeben — nach dem Import.
+    await release(drawing.revisionId);
+
+    const result = await resolveDrawingReferences({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    expect(result).toMatchObject({ checked: 1, resolved: 1, bound: 1, bindingBlocked: false });
+
+    const step = await ownerClient.planStep.findFirstOrThrow({
+      where: { productionPlanRevisionId: imported.revisionId, stepNumber: 20 },
+    });
+    const bindings = await ownerClient.stepDocumentBinding.findMany({
+      where: { planStepId: step.id },
+    });
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.documentRevisionId).toBe(drawing.revisionId);
+    // Dieselbe Herkunftskennzeichnung wie beim Import: die Bindung kommt aus
+    // dem Modell und nicht aus einer Prüfung durch einen Menschen.
+    expect(bindings[0]?.markerLabel).toBe('Aus IFC-Modell');
+
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: imported.importId },
+    });
+    expect(references[0]?.documentRevisionId).toBe(drawing.revisionId);
+  });
+
+  /**
+   * Der Kern. An einer freigegebenen Planrevision darf das Nachschlagen den
+   * Verweis auflösen — das ist eine Feststellung — aber keine Bindung
+   * erzeugen, denn das wäre eine Anweisung.
+   */
+  it('löst an einem freigegebenen Plan auf, ohne zu binden', async () => {
+    const f = await seedFixtures('resolve-released');
+    const drawing = await seedDrawing(f, 'ZG-5002', 'DRAFT');
+    const imported = await doImport(f, 'FP-IFC-31', ifcWithDrawing('ZG-5002'));
+
+    await submitProductionPlanForReview({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+    await approveProductionPlan({
+      actor: f.qualityManager,
+      productionPlanRevisionId: imported.revisionId,
+    });
+    await releaseProductionPlan({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    await release(drawing.revisionId);
+
+    const result = await resolveDrawingReferences({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    expect(result).toMatchObject({ checked: 1, resolved: 1, bound: 0, bindingBlocked: true });
+
+    const step = await ownerClient.planStep.findFirstOrThrow({
+      where: { productionPlanRevisionId: imported.revisionId, stepNumber: 20 },
+    });
+    expect(
+      await ownerClient.stepDocumentBinding.findMany({ where: { planStepId: step.id } }),
+    ).toHaveLength(0);
+
+    // Aufgelöst ist er trotzdem — sonst wüsste niemand, dass die Zeichnung
+    // inzwischen im System liegt.
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: imported.importId },
+    });
+    expect(references[0]?.documentRevisionId).toBe(drawing.revisionId);
+  });
+
+  /**
+   * Der Weg, auf dem es in der Praxis passiert: zwischen Import und Einreichen
+   * treffen die Zeichnungen ein, und niemand drückt einen Knopf.
+   */
+  it('schlägt beim Einreichen zur Prüfung von selbst nach', async () => {
+    const f = await seedFixtures('resolve-submit');
+    const drawing = await seedDrawing(f, 'ZG-5003', 'DRAFT');
+    const imported = await doImport(f, 'FP-IFC-32', ifcWithDrawing('ZG-5003'));
+    await release(drawing.revisionId);
+
+    await submitProductionPlanForReview({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    const step = await ownerClient.planStep.findFirstOrThrow({
+      where: { productionPlanRevisionId: imported.revisionId, stepNumber: 20 },
+    });
+    const bindings = await ownerClient.stepDocumentBinding.findMany({
+      where: { planStepId: step.id },
+    });
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.documentRevisionId).toBe(drawing.revisionId);
+  });
+
+  it('lässt den Verweis offen, wenn die Zeichnung weiterhin nur ein Entwurf ist', async () => {
+    const f = await seedFixtures('resolve-still-draft');
+    await seedDrawing(f, 'ZG-5004', 'DRAFT');
+    const imported = await doImport(f, 'FP-IFC-33', ifcWithDrawing('ZG-5004'));
+
+    const result = await resolveDrawingReferences({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    expect(result).toMatchObject({ checked: 1, resolved: 0, bound: 0, stillOpen: 1 });
+    const references = await ownerClient.ifcDrawingReference.findMany({
+      where: { ifcImportId: imported.importId },
+    });
+    expect(references[0]?.documentRevisionId).toBeNull();
+  });
+
+  it('schreibt nur dann in den Audit-Trail, wenn etwas gefunden wurde', async () => {
+    const f = await seedFixtures('resolve-audit');
+    const drawing = await seedDrawing(f, 'ZG-5005', 'DRAFT');
+    const imported = await doImport(f, 'FP-IFC-34', ifcWithDrawing('ZG-5005'));
+
+    // Erster Lauf: nichts zu finden, also auch nichts zu protokollieren.
+    await resolveDrawingReferences({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+    expect(
+      await ownerClient.auditEvent.count({
+        where: { eventType: 'ifc_drawing_reference.resolved', resourceId: imported.revisionId },
+      }),
+    ).toBe(0);
+
+    await release(drawing.revisionId);
+    await resolveDrawingReferences({
+      actor: f.projectLead,
+      productionPlanRevisionId: imported.revisionId,
+    });
+
+    const event = await ownerClient.auditEvent.findFirstOrThrow({
+      where: { eventType: 'ifc_drawing_reference.resolved', resourceId: imported.revisionId },
+    });
+    expect(event.newValues).toMatchObject({ checked: 1, resolved: 1, bound: 1 });
+  });
+
+  it('lässt einen Werker nicht nachschlagen', async () => {
+    const f = await seedFixtures('resolve-authz');
+    const imported = await doImport(f, 'FP-IFC-35', ifcWithDrawing('ZG-5006'));
+
+    await expect(
+      resolveDrawingReferences({
+        actor: f.worker,
+        productionPlanRevisionId: imported.revisionId,
+      }),
+    ).rejects.toThrow();
   });
 });

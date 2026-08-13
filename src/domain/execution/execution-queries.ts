@@ -116,12 +116,17 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
                 },
               },
             },
-            // Nur die Verweise, die noch zu keinem Dokument führen. Die
-            // aufgelösten stehen bereits unter den verbindlichen Unterlagen —
-            // sie hier ein zweites Mal zu zeigen hieße, dieselbe Zeichnung
-            // doppelt zu führen und die eine offene Stelle darin zu verstecken.
+            // **Alle** Verweise, nicht nur die unaufgelösten. Früher stand
+            // hier `where: { documentRevisionId: null }` mit der Begründung,
+            // die aufgelösten stünden ohnehin unter den verbindlichen
+            // Unterlagen. Das galt nur, solange Auflösen ausschließlich beim
+            // Import geschah, wo beides zusammen entsteht. Seit ein Verweis
+            // auch an einer freigegebenen Planrevision nachgeschlagen werden
+            // kann — dort ohne Bindung, weil eine Bindung eine Planänderung
+            // wäre —, sind „aufgelöst" und „gebunden" zwei Zustände. Der
+            // Filter hätte genau den neuen Fall unsichtbar gemacht: gefunden,
+            // aber nirgends gezeigt. Die Seite unterscheidet die drei Fälle.
             ifcDrawingReferences: {
-              where: { documentRevisionId: null },
               orderBy: [{ identification: 'asc' }, { name: 'asc' }],
               select: {
                 id: true,
@@ -129,6 +134,15 @@ export async function getWorkStepInstance(actor: Actor, workStepInstanceId: stri
                 identification: true,
                 location: true,
                 description: true,
+                documentId: true,
+                documentRevisionId: true,
+                documentRevision: {
+                  select: {
+                    id: true,
+                    revisionNumber: true,
+                    document: { select: { id: true, documentNumber: true, title: true } },
+                  },
+                },
               },
             },
             // Nur vorhanden, wenn der Plan aus einem Gebäudemodell entstanden

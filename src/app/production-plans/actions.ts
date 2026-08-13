@@ -20,6 +20,7 @@ import {
   rejectProductionPlan,
   releaseProductionPlan,
 } from '@/domain/production-plans/plan-review-workflow';
+import { resolveDrawingReferences } from '@/domain/production-plans/resolve-drawing-references';
 
 export async function createProductionPlanAction(formData: FormData): Promise<void> {
   const actor = await requireAuthContext();
@@ -176,6 +177,57 @@ export async function unbindDocumentFromStepAction(
   }
   revalidatePath(`/production-plans/${productionPlanRevisionId}`);
   return { error: null };
+}
+
+export interface ResolveDrawingsFormState {
+  error: string | null;
+  /** Satz über das Ergebnis. Null, solange nichts angestoßen wurde. */
+  message: string | null;
+}
+
+/**
+ * Schlägt die offenen Zeichnungsverweise dieser Planrevision noch einmal nach.
+ *
+ * Gibt einen Satz zurück statt nur die Seite neu zu zeichnen: „nichts
+ * gefunden" ist ein Ergebnis, und eine Liste, die sich nicht verändert, sieht
+ * genauso aus wie ein Knopf, der nicht funktioniert hat. Aus demselben Grund
+ * wird zwischen „gebunden" und „gefunden, aber nicht gebunden" unterschieden
+ * — das zweite ist kein halber Erfolg, sondern eine andere Auskunft.
+ */
+export async function resolveDrawingReferencesAction(
+  _prevState: ResolveDrawingsFormState,
+  formData: FormData,
+): Promise<ResolveDrawingsFormState> {
+  const productionPlanRevisionId = String(formData.get('productionPlanRevisionId'));
+
+  let message: string;
+  try {
+    const actor = await requireAuthContext();
+    const result = await resolveDrawingReferences({ actor, productionPlanRevisionId });
+
+    if (result.checked === 0) {
+      message = 'Kein offener Zeichnungsverweis vorhanden.';
+    } else if (result.resolved === 0) {
+      message = `${result.checked} offene Verweise geprüft, keiner gefunden. Die Zeichnungen liegen noch nicht freigegeben im Projekt.`;
+    } else if (result.bindingBlocked) {
+      message =
+        `${result.resolved} von ${result.checked} Zeichnungen gefunden und zugeordnet — aber ` +
+        'nicht verbindlich gebunden: die Planrevision ist nicht mehr im Entwurf. Verbindlich ' +
+        'wird die Zeichnung erst mit einer neuen Planrevision.';
+    } else {
+      message =
+        `${result.bound} von ${result.checked} Zeichnungen gefunden und verbindlich gebunden.` +
+        (result.stillOpen > 0 ? ` ${result.stillOpen} weiterhin offen.` : '');
+    }
+  } catch (error) {
+    if (error instanceof DomainError || error instanceof AuthzError) {
+      return { error: error.message, message: null };
+    }
+    throw error;
+  }
+
+  revalidatePath(`/production-plans/${productionPlanRevisionId}`);
+  return { error: null, message };
 }
 
 export async function submitPlanForReviewAction(formData: FormData): Promise<void> {

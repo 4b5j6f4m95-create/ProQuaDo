@@ -36,6 +36,34 @@ export async function getProductionPlanRevision(actor: Actor, revisionId: string
                 },
               },
             },
+            // Die im Gebäudemodell genannten Zeichnungen. Bisher sah der
+            // Planer sie nicht — sie standen nur in der Werkeransicht, also
+            // dort, wo niemand mehr etwas daran ändern kann. Wer den Plan
+            // baut, ist aber genau die Person, die eine fehlende Zeichnung
+            // besorgt.
+            //
+            // Alle, nicht nur die unaufgelösten: dieselbe Unterscheidung wie
+            // in der Werkeransicht. Ein Verweis, der nachgeschlagen wurde,
+            // aber an einer freigegebenen Revision nicht gebunden werden
+            // konnte, ist für den Planer die eigentliche Nachricht — er ist
+            // der Einzige, der daraus eine neue Planrevision machen kann.
+            ifcDrawingReferences: {
+              orderBy: [{ identification: 'asc' }, { name: 'asc' }],
+              select: {
+                id: true,
+                name: true,
+                identification: true,
+                location: true,
+                documentRevisionId: true,
+                documentRevision: {
+                  select: {
+                    id: true,
+                    revisionNumber: true,
+                    document: { select: { id: true, documentNumber: true } },
+                  },
+                },
+              },
+            },
           },
         },
       },

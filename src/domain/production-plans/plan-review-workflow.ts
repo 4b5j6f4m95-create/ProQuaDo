@@ -7,6 +7,7 @@ import { InvalidStateTransitionError, NotFoundError, ValidationError } from '@/l
 import type { Actor } from '@/domain/shared/actor';
 import { isValidPlanRevisionTransition, type PlanRevisionStatus } from './plan-revision-status';
 import { validatePlanGraph, type PlanGraphValidationResult } from './plan-graph';
+import { resolveDrawingReferencesWithin } from './resolve-drawing-references';
 
 async function loadRevisionOrThrow(tx: Prisma.TransactionClient, revisionId: string) {
   const revision = await tx.productionPlanRevision.findFirst({ where: { id: revisionId } });
@@ -95,6 +96,23 @@ export async function submitProductionPlanForReview(command: SubmitPlanForReview
 
   return withOrgContext(command.actor.organizationId, async (tx) => {
     const revision = await loadRevisionOrThrow(tx, command.productionPlanRevisionId);
+
+    // Letzter Moment, zu dem eine Bindung noch entstehen kann: gleich danach
+    // verlässt die Revision den Entwurfsstatus, und ab dann ist eine im
+    // Modell genannte Zeichnung nur noch nachschlagbar, nicht mehr
+    // verbindlich zu machen. Ein Plan aus einem Gebäudemodell soll nicht
+    // deshalb mit offenen Verweisen zur Prüfung gehen, weil zwischen Import
+    // und Einreichen niemand auf einen Knopf gedrückt hat — die Zeichnungen
+    // treffen typischerweise genau in diesem Zeitraum ein.
+    //
+    // Ohne Wirkung, wenn der Plan nicht aus einem Import stammt: dann gibt es
+    // keine Verweise, und die Abfrage findet nichts.
+    await resolveDrawingReferencesWithin(tx, {
+      organizationId: command.actor.organizationId,
+      actorId: command.actor.userId,
+      productionPlanRevisionId: revision.id,
+    });
+
     const updated = await tx.productionPlanRevision.update({
       where: { id: revision.id },
       data: { status: 'IN_REVIEW' },
