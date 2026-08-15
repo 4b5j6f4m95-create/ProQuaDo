@@ -52,3 +52,9 @@ next-env.d.ts
 
 # Local infra volumes
 .docker-data/
+
+# Vom Designer geliefertes Material. Es liegt im Arbeitsverzeichnis, damit
+# man es ansehen kann — versioniert gehört es nicht: mehrere hundert
+# Kilobyte fremdes HTML samt eigener support.js, die weder gebaut noch
+# geprüft noch gepflegt wird.
+*Designvorschl*/
