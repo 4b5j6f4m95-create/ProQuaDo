@@ -161,7 +161,9 @@ a {
 
 nav {
   display: flex;
-  flex-wrap: wrap;
+  /* Kein Umbruch mehr: die Menüreihe scrollt stattdessen — siehe
+     „Die Menüreihe" weiter unten. */
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.15rem;
   margin-bottom: 1.75rem;
@@ -267,6 +269,75 @@ nav > a:first-child {
      das eine Information und keine Zierde (SC 1.4.11: 3:1). */
   background: #55c975;
   flex-shrink: 0;
+}
+
+/* ── Die Menüreihe ────────────────────────────────────────────
+   Elf Menüpunkte plus Sitzungsblock brauchen **1422 px**; das Band ist
+   durch `max-width: 1240px` auf 1192 px Innenbreite begrenzt. Die
+   Leiste passt damit **bei keiner Breite** in eine Zeile — bei 1280 px
+   sind es zwei Zeilen, bei 1024 (dem echten Hallentablet) drei, bei
+   768 ebenfalls drei. Auf der früheren weißen Leiste fiel das kaum
+   auf; auf dem dunklen Band ist es ein Klotz, der ein Drittel des
+   Bildschirms frisst.
+
+   **Deshalb keine Ausnahme für schmale Bildschirme, sondern der
+   Regelfall.** Der erste Anlauf hing das an `@media (max-width: 900px)`
+   — mit der Begründung, die Grenze solle unter der Auflösung der
+   E2E-Prüfung liegen. Das war doppelt falsch: die Leiste bricht auch
+   darüber um, und eine Grenze, die sich nach der geprüften Breite
+   richtet statt nach dem Gerät, optimiert die Prüfung statt die
+   Anwendung. Nachgemessen bei 768, 1024 und 1280.
+
+   Gelöst mit einer waagrecht scrollenden Reihe statt mit einer
+   Auswahl. Der Entwurf 1d „Kiosk" zeigt eine Bottom-Bar mit vier
+   Zielen; die ist für den Daumen besser, nimmt aber sieben Ziele weg.
+   Wer am schmalen Fenster die Administration sucht, fände sie nicht
+   mehr, und Tastatur wie Vorlesehilfe verlören sie ebenfalls.
+   Waagrecht wischen ruiniert kein Handschuh — **zielen** tut es. */
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  /* Nimmt den Platz zwischen Wortmarke und Sitzungsblock und gibt ihn
+     wieder her, wenn es eng wird. */
+  flex: 1 1 0;
+  min-width: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 35%) transparent;
+  /* Ohne Rand klebt der erste Punkt an der Wortmarke, sobald gescrollt
+     wurde, und man sieht nicht, dass da noch etwas war. */
+  scroll-padding-inline: 0.5rem;
+  /* **Der abgeschnittene Menüpunkt braucht ein Zeichen.** Ohne ihn las
+     sich „Meine Aufträg" wie ein Textfehler und lief scheinbar in die
+     Sync-Anzeige hinein; niemand kommt darauf, dass dort zu wischen
+     ist. Die Blende verschwindet von selbst, wenn alle Punkte
+     hineinpassen — dann steht dort nichts, das ausbleichen könnte. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 1.75rem), transparent);
+  padding-right: 0.5rem;
+}
+
+.nav-links a {
+  /* Ein umbrechender Menüpunkt macht die Zeile hoch und die Reihe
+     unruhig. */
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Der Sitzungsblock schrumpft nicht mit: wer angemeldet ist und wie man
+   es beendet, gehört nicht hinter eine Wischgeste. */
+.nav-session {
+  flex-shrink: 0;
+}
+
+/* Auf sehr schmalen Geräten weicht der Name — der Abmelde-Knopf und die
+   Sync-Anzeige bleiben. Der Name steht dann noch unter „Mein Konto";
+   dass man angemeldet ist, sagt die Anwesenheit des Knopfes. */
+@media (max-width: 560px) {
+  .nav-session .muted {
+    display: none;
+  }
 }
 
 /* ── Flächen ──────────────────────────────────────────────────── */
