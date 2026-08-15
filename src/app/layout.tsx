@@ -22,16 +22,32 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <div className="nav-band">
           <nav>
             <Link href="/">ProQuaDo</Link>
-            <Link href="/dashboard">Übersicht</Link>
-            <Link href="/projects">Projekte</Link>
-            <Link href="/my-orders">Meine Aufträge</Link>
-            <Link href="/quality/ncrs">Abweichungen</Link>
-            <Link href="/quality/equipment">Prüfmittel</Link>
-            <Link href="/offline">Offline</Link>
-            <Link href="/sync/conflicts">Konflikte</Link>
-            <Link href="/search">Suche</Link>
-            <Link href="/notifications">Benachrichtigungen</Link>
-            <Link href="/admin">Administration</Link>
+            {/* **Eigener Behälter, damit die Leiste auf schmalen
+                Bildschirmen eine Zeile bleibt.** Bei 768 px brachen elf
+                Menüpunkte plus Sitzungsblock auf drei Zeilen um — auf
+                dem dunklen Band ein Klotz, der ein Drittel des
+                Hallentablets fraß. Hier scrollt die Reihe stattdessen
+                waagrecht.
+
+                **Kein Menüpunkt verschwindet dabei.** Der Entwurf 1d
+                „Kiosk" zeigt eine Bottom-Bar mit vier Zielen; das ist
+                ergonomisch besser, nimmt aber sieben Ziele weg. Wer am
+                schmalen Fenster die Administration sucht, fände sie
+                nicht mehr — und Tastatur wie Vorlesehilfe verlören sie
+                ebenfalls. Waagrecht wischen ruiniert kein Handschuh;
+                Zielen tut es. */}
+            <div className="nav-links">
+              <Link href="/dashboard">Übersicht</Link>
+              <Link href="/projects">Projekte</Link>
+              <Link href="/my-orders">Meine Aufträge</Link>
+              <Link href="/quality/ncrs">Abweichungen</Link>
+              <Link href="/quality/equipment">Prüfmittel</Link>
+              <Link href="/offline">Offline</Link>
+              <Link href="/sync/conflicts">Konflikte</Link>
+              <Link href="/search">Suche</Link>
+              <Link href="/notifications">Benachrichtigungen</Link>
+              <Link href="/admin">Administration</Link>
+            </div>
 
             {/* Who is signed in, and how to stop being them. Both were missing
                 until Phase 7: the application had no sign-out at all, so a
