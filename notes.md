@@ -653,6 +653,38 @@ CodeQL gehört **nicht** in `contexts`, solange Code Scanning nicht eingeschalte
 
 **Lehre:** Eine Schutzeinstellung, die an der Sichtbarkeit des Repositories hängt, ist keine Eigenschaft des Projekts, sondern des Tarifs. Wer die Sichtbarkeit ändert, ändert die Sicherungen mit — und beim Zurückschalten kommen sie nicht von allein wieder. Verwandt mit „Eine Aussage im Dokument ist keine Funktion" am Ende dieser Datei: dass hier oben „mit Branch Protection" stand, machte sie nicht wirksam.
 
+### `git checkout -b` nimmt den Zweig, auf dem man steht — nicht `main`
+
+Dreimal an einem Tag, und die Folgen waren jedes Mal andere:
+
+1. **Der Zweig für PR #71 entstand auf `feat/load-test-series`** statt auf `main`. Damit trug #71 die beiden Commits von #70 huckepack, und sein Squash-Merge nahm sie mit. Nichts ging verloren — aber #70 war danach ein PR ohne Inhalt, musste geschlossen statt gemergt werden, und die Historie schreibt den Lasttest jetzt einem Commit zu, dessen Titel von Kanten und Kontrast spricht.
+2. **Ein Commit landete auf dem Zweig von #72**, nachdem dessen Auto-Merge schon gefeuert hatte. Der Push gelang, der PR war zu — der Commit hing an einem toten Zweig.
+3. Beim Aufräumen fiel derselbe Reflex ein drittes Mal auf.
+
+**Was daran täuscht:** `git checkout -b` sagt nichts darüber, worauf es aufsetzt. Es fühlt sich an wie „neuer Zweig", heißt aber „neuer Zweig **von hier**". Nach einem `git push` bleibt man auf dem gepushten Zweig stehen, und genau dort greift man zum nächsten Vorhaben.
+
+**Der Handgriff davor**, jedes Mal:
+
+```bash
+git switch main && git pull && git switch -c <neuer-zweig>
+```
+
+Wer schon danebengegriffen hat, setzt den Commit sauber neu auf, statt den Zweig zu reparieren:
+
+```bash
+git switch main && git pull && git switch -c <neuer-zweig> && git cherry-pick <commit>
+```
+
+**Und die Gegenprobe vor dem PR**, die alle drei Fälle gefunden hätte:
+
+```bash
+git log --oneline origin/main..HEAD
+```
+
+Steht dort mehr als die eigene Arbeit, sitzt der Zweig falsch. Das kostet zwei Sekunden und hat an diesem Tag dreimal gefehlt.
+
+**Lehre:** Ein Kommando, dessen Wirkung vom unsichtbaren Zustand „wo bin ich gerade" abhängt, braucht den Blick auf diesen Zustand als festen Teil des Ablaufs — nicht als Ausnahme, wenn etwas schiefging. Dasselbe Muster wie bei „Ein privates Repository verliert seine Schutzregel": nicht der Befehl war falsch, sondern die Annahme über die Lage, in der er ausgeführt wurde.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -1097,6 +1129,14 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 - Bei jedem gefundenen Fehler zusätzlich fragen, warum die vorhandenen Kontrollen ihn nicht gesehen haben — die lehrreichsten Einträge unter „Bekannte Stolpersteine" sind so entstanden.
 - **Einen Ablauf einmal ganz durchspielen, nicht nur seine Teile testen.** Der Offline-Durchlauf in Phase 7 fand drei Fehler, obwohl jeder einzelne Baustein grüne Tests hatte. Der schwerste entstand erst aus der Kombination: mehrere Kommandos mit demselben `baseVersion` in einem Stapel — eine Form, die kein Test erzeugte, weil jeder Test seine Kommandos mit dem Wissen des Servers baut, das ein echter Client nicht hat. Wo Tests Eingaben konstruieren, konstruieren sie leicht die bequemen.
 - **Was nur in Production greift, muss auch einmal in Production laufen.** Die CSP war in der gesamten Prüfkette abgeschaltet und verhinderte dort, wo sie galt, jede Hydration — sieben Phasen lang unbemerkt, weil niemand `next start` ausgeführt hatte. Grün heißt nur „geprüft, was geprüft wurde".
+- **Jeder Zweig beginnt auf `main`, und das wird geprüft, nicht gehofft.** `git checkout -b` setzt auf dem Zweig auf, auf dem man gerade steht — nach einem `git push` ist das der eben gepushte. An einem Tag hat dieser Reflex dreimal zugeschlagen (siehe „`git checkout -b` nimmt den Zweig, auf dem man steht"): einmal trug ein PR die Commits eines anderen huckepack und machte ihn dadurch inhaltslos, einmal landete ein Commit auf einem Zweig, dessen PR schon gemergt war. Deshalb `git switch main && git pull && git switch -c <zweig>` als eine Handlung — und vor jedem PR die Gegenprobe:
+
+  ```bash
+  git log --oneline origin/main..HEAD
+  ```
+
+  Steht dort mehr als die eigene Arbeit, sitzt der Zweig falsch.
+
 - **Das Mergen vor grünen Checks verhindert jetzt GitHub, nicht mehr die Aufmerksamkeit.** Auf `main` liegt eine Branch-Protection-Regel mit allen fünf CI-Jobs als erforderlichen Checks, `strict` und `enforce_admins` eingeschlossen — sie gilt also auch für Administratoren. Zwei Folgen für die tägliche Arbeit: direktes `git push` auf `main` geht nicht mehr, alles läuft über PRs; und `gh pr merge --auto` tut endlich, was der Name sagt. Vorgeschichte: PR #3 landete vor seinen eigenen Checks, weil `--auto` ohne erforderliche Checks sofort mergt, und die Regel selbst war damals gesperrt — Branch Protection ist bei GitHub für **private** Repositories dem Pro-Plan vorbehalten. Seit das Repository öffentlich ist, greift sie. **Diese Bedingung ist keine Fußnote**: das Repository war zwischenzeitlich wieder privat, damit war die Regel weg, und beim Zurückschalten kam sie nicht von allein wieder — siehe „Ein privates Repository verliert seine Schutzregel". Wer an der Sichtbarkeit dreht, prüft danach `gh api .../branches/main/protection`.
 - **Eine Betriebsanweisung, die hier hineingeschrieben wird, sollte einmal ausgeführt worden sein.** Der `--force-recreate`-Hinweis für Keycloak stand eine halbe Phase lang da, war plausibel formuliert und entwertete beim Befolgen jede Kontoverknüpfung. Dokumentation, die man nur zu Ende gedacht hat, ist eine Vermutung mit Befehlszeile.
 - **Zahlen, die eine Begründung tragen, gehören in einen Test.** Zweimal an einem Tag hatte ein Kommentar eine Größenordnung behauptet, die nicht stimmte (Dauer eines PIN-Durchprobierens, Anzahl gefundener Fehler). Wo eine Zahl das Argument ist, prüft sie am besten die Testsuite — siehe `lockSecondsForAttempts`.
