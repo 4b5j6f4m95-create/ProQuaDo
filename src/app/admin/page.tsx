@@ -1,4 +1,6 @@
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
+import { can } from '@/lib/authz/can';
+import { PermissionDenied } from '@/components/PermissionDenied';
 import {
   listSites,
   listCustomers,
@@ -29,6 +31,23 @@ import {
  */
 export default async function AdminPage() {
   const actor = await requirePageAuth();
+
+  // **Erst fragen, dann laden.** Die Abfragen unten rufen
+  // `assertPermission('user.manage')` und werfen bei fehlender Berechtigung.
+  // Geworfen landete die Ablehnung in `error.tsx` — und dort steht in einem
+  // Production-Build nicht ihr Text, sondern „Minified React error #441".
+  // Die Menüleiste bietet diese Seite jeder Rolle an; wer als Projektleitung
+  // darauf klickte, las einen Absturz statt einer Auskunft. Eine fehlende
+  // Berechtigung ist keine Ausnahme, sondern ein Ergebnis.
+  const erlaubt = await can({
+    userId: actor.userId,
+    organizationId: actor.organizationId,
+    action: 'user.manage',
+  });
+  if (!erlaubt.allowed) {
+    return <PermissionDenied what="die Administration" permission="user.manage" />;
+  }
+
   const [users, sites, customers, departments] = await Promise.all([
     listUsersForAdministration(actor),
     listSites(actor),
