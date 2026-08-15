@@ -27,6 +27,7 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import os from 'node:os';
 
 import { assertDockerAvailable, startInfra } from './support/infra';
 import { formatMeasurement, printVerdicts, type Verdict } from './support/metrics';
@@ -64,6 +65,13 @@ const RESULT_FILE = process.env.LOAD_RESULT_FILE;
 const SYNC_TARGET_MS = 3_000;
 
 async function main(): Promise<void> {
+  // **Zuerst, vor allem anderen.** Der Steckbrief entsteht erst nach dem
+  // Start der Container; würde die Vorlast dort gelesen, enthielte sie den
+  // Containerstart und die Migrationen dieses Laufs. Auf der Zielhardware
+  // ergab das 1,37 statt der tatsächlichen 0,42 — und eine Warnung, die
+  // fast immer anschlägt, liest bald niemand mehr.
+  const baselineLoad = os.loadavg()[0]!;
+
   assertDockerAvailable();
 
   console.log(
@@ -77,7 +85,7 @@ async function main(): Promise<void> {
   // Der Steckbrief steht **vor** den Messwerten und nicht danach: wer die
   // Ausgabe abbricht oder nur den Anfang kopiert, soll trotzdem sehen, worauf
   // gemessen wurde.
-  const environment = captureEnvironment(infra.connectionLimit);
+  const environment = captureEnvironment(infra.connectionLimit, baselineLoad);
   console.log(`\n${formatEnvironment(environment)}`);
   const busyWarning = warnIfBusy(environment);
   if (busyWarning) console.log(`\n⚠ ${busyWarning}`);

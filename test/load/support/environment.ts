@@ -33,7 +33,20 @@ export interface EnvironmentFingerprint {
   connectionLimit: number;
 }
 
-export function captureEnvironment(connectionLimit: number): EnvironmentFingerprint {
+/**
+ * @param baselineLoad Vorlast **vor** dem Start der Infrastruktur. Ohne
+ *   diesen Wert wäre die Angabe irreführend: `startInfra()` fährt zwei
+ *   Container hoch und spielt die Migrationen ein, und auf einer kleinen
+ *   Maschine hebt allein das die Ein-Minuten-Vorlast über die Schwelle.
+ *   Gemessen wurde dann teils das Werkzeug statt die Maschine — auf der
+ *   Zielhardware meldete der Lauf 1,37, während unmittelbar vor dem Start
+ *   0,42 anlag. Die Warnung schlug damit fast immer an und wurde dadurch
+ *   wertlos.
+ */
+export function captureEnvironment(
+  connectionLimit: number,
+  baselineLoad: number,
+): EnvironmentFingerprint {
   const cpus = os.cpus();
   return {
     hostname: os.hostname(),
@@ -43,10 +56,9 @@ export function captureEnvironment(connectionLimit: number): EnvironmentFingerpr
     cpuModel: cpus[0]?.model.trim() ?? 'unbekannt',
     cpuCount: cpus.length,
     totalMemoryGb: Math.round((os.totalmem() / 1024 ** 3) * 10) / 10,
-    // Die Vorlast zum Startzeitpunkt. Eine Messung auf einer Maschine, die
-    // schon arbeitet, misst nicht die Maschine — und genau das war der Fehler
-    // hinter zwei falschen Schlüssen in der ersten Messreihe.
-    loadAverage1m: Math.round(os.loadavg()[0]! * 100) / 100,
+    // Die Vorlast **vor** dem Start der Infrastruktur, hereingereicht statt
+    // hier gelesen — siehe den Parameterkommentar oben.
+    loadAverage1m: Math.round(baselineLoad * 100) / 100,
     nodeVersion: process.version,
     dockerVersion: readDockerVersion(),
     uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE ?? '(nicht gesetzt, Vorgabe 4)',
