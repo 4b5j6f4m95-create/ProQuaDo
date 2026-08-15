@@ -1150,6 +1150,30 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Und der zweite Lauf hat einen Fehler in der Messtechnik selbst aufgedeckt.** Er meldete Vorlast 1,37, obwohl unmittelbar vor dem Start 0,42 anlag — `captureEnvironment` lief **nach** `startInfra()`, die Angabe enthielt also den Start zweier Container und die Migrationen des Laufs. Auf einer kleinen Maschine hebt allein das die Ein-Minuten-Vorlast über die Schwelle, die Warnung schlug fast immer an und wurde dadurch wertlos. Der Messpunkt liegt jetzt am Anfang von `main()`, vor allem anderen. Nachgeprüft: der gemeldete Wert stimmt mit dem von `uptime` zum selben Zeitpunkt überein (3,28 gegen 3,26).
 
+   **Kapazität dieser Maschine: 19 Geräte** (15.08.2026, je 3 Läufe, Vorlast unter 0,3 je Kern).
+
+   **Das ist ausdrücklich nicht das Ziel aus docs/09**, sondern die Antwort auf eine andere Frage. Das Ziel lautet 200 Geräte unter 3 s; ein bestandener Lauf mit 19 Geräten sagt darüber nichts. Gemessen wurde, was diese Maschine trägt — um daraus abzuleiten, wie viel Hardware 200 Geräte brauchen.
+
+   | Geräte | p95 Median | Spanne        | Stapel/s | Fehler | Ausgang               |
+   | ------ | ---------- | ------------- | -------- | ------ | --------------------- |
+   | 200    | 16 499     | 16 423–18 595 | 8,2      | 340    | über dem Ziel         |
+   | 100    | 9795       | 9379–11 309   | 10,1     | 0      | über dem Ziel         |
+   | 50     | 6598       | 5275–6723     | 7,5      | 0      | über dem Ziel         |
+   | 25     | 2724       | 2412–**3912** | 9,1      | 0      | **nicht entschieden** |
+   | 22     | 2360       | 2136–**3734** | 9,3      | 0      | **nicht entschieden** |
+   | 19     | 2100       | 1992–2899     | 9,0      | 0      | unter dem Ziel        |
+   | 13     | 1568       | 1390–2133     | 8,3      | 0      | unter dem Ziel        |
+
+   **Der dritte Ausgang hat sich hier zum ersten Mal wirklich bezahlt gemacht, und zwar zweimal.** Bei 25 und 22 Geräten lag der **Median unter 3000 ms** — ein Urteil über den Median allein hätte „bestanden" gemeldet und die Kapazität mit **25** statt 19 angegeben. Einzelne Läufe gingen aber auf 3912 bzw. 3734 ms. Wer eine Anlage nach dem Median auslegt, plant für den guten Tag.
+
+   **Der Zusammenhang ist eine Warteschlange, kein Rätsel.** Der Durchsatz liegt über alle Stufen bei **7,5–10,1 Stapel/s** und hängt nicht an der Gerätezahl; der p95 ist schlicht die Zeit, die die Schlange zum Leerlaufen braucht:
+
+       p95 ≈ Geräte / 9 Stapel je Sekunde
+
+   Nachgerechnet: 19/9 = 2,1 s (gemessen 2100 ms), 100/9 = 11,1 s (gemessen 9795), 200/9 = 22 s (gemessen 16 499 — dort half der zweite Kern beim Nachziehen). Die Fehler bei 200 Geräten waren **kein** eigener Effekt, sondern erschöpfte Verbindungen am oberen Ende: ab 100 Geräten abwärts sind es durchgehend null.
+
+   **Was das für die Auslegung heißt.** Für 200 Geräte unter 3 s braucht es rund **67 Stapel/s**, also etwa das **7,5-fache** des heutigen Durchsatzes. Unterstellt man, dass der Durchsatz mit den Kernen skaliert, wären das grob **15 Kerne** — aber genau das ist eine Annahme und keine Messung. Sie zu prüfen kostet einen Lauf auf einer größeren Maschine; das Skript dafür liegt als `~/ProQuaDo/kapazitaet.sh` bereit.
+
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie viele Kerne die Anlage bekommt** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
    **Die Hebel sind durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. **`UV_THREADPOOL_SIZE=16`** ist ein risikoloser Gewinn von etwa 5 % und gehört in die Deployment-Konfiguration — dass er allein die Lücke schließt, ist allerdings **nicht belegt**: eine verschränkte Probe mit fünf Paaren blieb im Rauschen.
