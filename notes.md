@@ -685,6 +685,30 @@ Steht dort mehr als die eigene Arbeit, sitzt der Zweig falsch. Das kostet zwei S
 
 **Lehre:** Ein Kommando, dessen Wirkung vom unsichtbaren Zustand „wo bin ich gerade" abhängt, braucht den Blick auf diesen Zustand als festen Teil des Ablaufs — nicht als Ausnahme, wenn etwas schiefging. Dasselbe Muster wie bei „Ein privates Repository verliert seine Schutzregel": nicht der Befehl war falsch, sondern die Annahme über die Lage, in der er ausgeführt wurde.
 
+### Ein fehlendes `postinstall` fällt nur auf einem fremden Rechner auf
+
+Der Messlauf auf der Zielhardware starb sofort:
+
+```
+Error: Cannot find module '.prisma/client/default'
+```
+
+Kein Bedienfehler. `package.json` hatte **kein `postinstall`**, der Prisma-Client wurde also nie automatisch erzeugt — `pnpm install` allein genügte nie, und das stand nirgends.
+
+**Warum es jahrelang niemandem auffiel:** Auf jedem Rechner, auf dem einmal `pnpm run prisma:generate`, `prisma migrate` oder ein Integrationstest gelaufen war, lag der Client bereits da. Und die CI ruft `pnpm exec prisma generate` an **fünf** Stellen ausdrücklich auf — sie war die Einzige, die den Schritt kannte, und sie erzählt es niemandem. Ein frischer Klon auf einer fremden Maschine ist der einzige Zustand, in dem die Lücke sichtbar wird, und den stellt man auf dem eigenen Rechner nie her.
+
+Behoben an der Ursache statt in der Anleitung: `"postinstall": "prisma generate"`.
+
+**Die Probe war schwerer als der Fix, und zweimal habe ich mich selbst getäuscht.** Erst prüfte ich auf `node_modules/.prisma/client` — seit Prisma 7 liegt der Client aber **im Paketverzeichnis**, das Kriterium war also falsch und meldete „FEHLT", obwohl der Haken lief. Dann versuchte ich es mit `pnpm install --force`: pnpm meldet „Already up to date" und führt die Skripte **nicht** erneut aus. Belastbar war erst `rm -rf node_modules && pnpm install` — und als Kriterium nicht ein Pfad, sondern die Frage, ob der Import durchkommt:
+
+```bash
+pnpm exec tsx -e "import('@/lib/db/client')"
+```
+
+Vorher scheiterte er am Modulladen, nachher erst an der fehlenden `DATABASE_URL` — also genau eine Ebene weiter, und das ist der Beleg.
+
+**Lehre:** Ein Einrichtungsschritt, den nur die CI kennt, ist kein dokumentierter Schritt. Wo eine Anleitung „installieren und starten" sagt, gehört das, was dazwischen nötig ist, in ein `postinstall` — nicht in einen Satz, den jemand lesen müsste. Und: wer eine Installationsprobe schreibt, prüft **das Ergebnis** (lädt es?) statt eines Pfades, von dem er glaubt, dass er dort liegt.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -1091,12 +1115,30 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er ist der einzige Zielwert aus docs/09, der nicht mit Reserve besteht — und der einzige, den kein Entwicklungsrechner entscheiden kann. **Das Kommando steht bereit und dauert etwa eine Minute:**
 
    ```bash
+   pnpm install    # erzeugt den Prisma-Client mit (postinstall)
    UV_THREADPOOL_SIZE=16 LOAD_REPEAT=5 LOAD_RESULT_FILE=sync-zielhardware.json pnpm run test:load
    ```
 
    Auf der Zielhardware braucht es dafür **Docker, Node ≥ 22.13 und pnpm**, sonst nichts — der Lauf bringt Postgres und MinIO als Container selbst mit. `LOAD_REPEAT=5` ist kein Feinschliff: ein einzelner Lauf beantwortet die Frage auch dort nicht, weil die Streuung vom Szenario kommt und nicht von der Maschine. Die Reihe kennt deshalb „nicht entschieden" als eigenen Ausgang — siehe „Der Lauf urteilt jetzt über eine Reihe, nicht über eine Zahl". `LOAD_RESULT_FILE` schreibt Messwerte samt Maschinensteckbrief als JSON; ohne den ist ein Wert später keiner Hardware zuzuordnen.
 
-   **Vergleichswert vom 13.08.2026** (Apple M5 Pro, 18 Kerne, `UV_THREADPOOL_SIZE` nicht gesetzt): p95 3064–3554 ms über 5 Läufe, **alle über dem Ziel**. Ein schneller Laptop reißt die Marke also deutlich — wer einen Server mietet, sollte das einrechnen und nicht auf die Hebel allein setzen.
+   **Auf der Zielhardware gemessen (15.08.2026) — und das Ziel wird um das Siebenfache verfehlt.**
+
+   |                          | Zielhardware                | Entwicklungsrechner           | Ziel      |
+   | ------------------------ | --------------------------- | ----------------------------- | --------- |
+   | Maschine                 | 2 vCPU (EPYC 9354P), 7,8 GB | Apple M5 Pro, 18 Kerne, 48 GB |           |
+   | p95, Median aus 5 Läufen | **21 373 ms**               | 3112 ms                       | < 3000 ms |
+   | Spanne                   | 19 669 – 26 175 ms          | 3064 – 3554 ms                |           |
+   | Durchsatz                | 4,1 Stapel/s                | ~50 Stapel/s                  |           |
+   | Fehler je Lauf           | 88–122                      | 0                             | 0         |
+   | Dashboard p95            | 1133 ms                     | 132 ms                        | < 500 ms  |
+
+   Alle fünf Läufe über dem Ziel, also **gerissen** und nicht „nicht entschieden". PDF (0,9 s) und ZIP (0,1 s) halten ihre Ziele dagegen mit großer Reserve, Deadlocks null.
+
+   **Die Fehler sind der eigentliche Befund, nicht die Millisekunden.** 88–122 Stapel je Lauf brachen mit `Transaction API error: Unable to start a transaction in the given time` ab — bei `DATABASE_POOL_MAX=25` auf **zwei** Kernen bekommen die Kommandos schlicht keine Verbindung mehr. Das System hat dabei abgewiesen statt Daten zu beschädigen, und genau das soll es; aber 200 gleichzeitige Geräte sind auf dieser Maschinengröße kein Engpass, sondern eine Überforderung.
+
+   **Vorbehalt, und er steht auch im Lauf selbst:** die Maschine war beim Start mit **1,47 je Kern** ausgelastet (Warnschwelle 0,3), weil dort ein Pilot mit acht Containern läuft. Ein Faktor 7 lässt sich damit nicht wegerklären — die exakte Zahl aber schon. Vor einer Entscheidung über die Serverklasse im Leerlauf wiederholen.
+
+   **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie viele Kerne die Anlage bekommt** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
    **Die Hebel sind durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. **`UV_THREADPOOL_SIZE=16`** ist ein risikoloser Gewinn von etwa 5 % und gehört in die Deployment-Konfiguration — dass er allein die Lücke schließt, ist allerdings **nicht belegt**: eine verschränkte Probe mit fünf Paaren blieb im Rauschen.
 

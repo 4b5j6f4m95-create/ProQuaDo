@@ -193,8 +193,11 @@ Was die dritte Zeile davon vorwegnimmt: die **Adressen stimmen**. Genau daran is
 **Sync-Durchsatz.** Der Harness ruft die Domänendienste direkt auf, misst also die Arbeit des Servers ohne HTTP und Netzweg. Er bringt seine Infrastruktur selbst mit (Testcontainers: Postgres und MinIO) — auf der Zielhardware braucht es **Docker, Node ≥ 22.13 und pnpm**, sonst nichts. Das Kommando lautet:
 
 ```bash
+pnpm install    # erzeugt den Prisma-Client mit (postinstall)
 UV_THREADPOOL_SIZE=16 LOAD_REPEAT=5 LOAD_RESULT_FILE=sync-zielhardware.json pnpm run test:load
 ```
+
+**Die erste Zeile stand hier nicht, und der Lauf scheiterte deshalb** — am 15.08.2026 auf dem echten Server, mit `Cannot find module '.prisma/client/default'`. Ursache war kein Bedienfehler: Es gab **kein `postinstall`**, der Prisma-Client wurde also nie automatisch erzeugt. Auf einem Rechner, auf dem schon einmal `prisma generate`, `prisma migrate` oder ein Test gelaufen war, fiel das nie auf; die CI ruft den Schritt an fünf Stellen ausdrücklich auf und kannte ihn damit als Einzige. Seit `package.json` ein `postinstall` trägt, genügt `pnpm install`.
 
 **`LOAD_REPEAT=5` ist der Kern und keine Feinheit.** Ein einzelner Lauf beantwortet die Frage nicht: dieselbe Konfiguration auf derselben Maschine lieferte p95 2856 **und** 3446 ms — beidseits der Zielmarke von 3000 ms. Wer einmal misst, würfelt. Der Lauf fasst die Reihe zusammen und kennt deshalb einen dritten Ausgang neben bestanden und gerissen:
 
