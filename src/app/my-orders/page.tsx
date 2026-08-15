@@ -43,6 +43,25 @@ export default async function MyOrdersPage() {
             )}
           </p>
 
+          {/* Der Fortschrittsbalken aus dem Entwurf „Kontrollstand",
+              übertragen — **die Verdichtung ausdrücklich nicht.** Der
+              Entwurf ist ein Desktop-Dashboard; dieser Bildschirm ist
+              der Einstieg am Hallentablet und wird mit Handschuhen
+              bedient. Übernommen wird also, was hier besser trägt: die
+              Strecke auf einen Blick, statt sie aus „7 von 18" im Kopf
+              auszurechnen. Die Zahl darüber bleibt stehen — der Balken
+              ergänzt sie und ersetzt sie nicht, deshalb `aria-hidden`. */}
+          <span
+            className={`progress-bar${order.completedSteps === 0 ? ' is-planned' : ''}`}
+            aria-hidden="true"
+          >
+            <span
+              style={{
+                width: `${order.totalSteps > 0 ? Math.round((order.completedSteps / order.totalSteps) * 100) : 0}%`,
+              }}
+            />
+          </span>
+
           {order.currentStep ? (
             <Link className="button-link" href={`/work-steps/${order.currentStep.id}`}>
               Öffnen →
