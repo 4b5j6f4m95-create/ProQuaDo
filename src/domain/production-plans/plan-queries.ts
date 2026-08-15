@@ -13,7 +13,17 @@ export async function getProductionPlanRevision(actor: Actor, revisionId: string
       include: {
         // The plan's project, so the editor can offer the documents that
         // belong to it rather than everything in the organization.
-        productionPlan: { select: { id: true, projectId: true, name: true } },
+        // Der Projektname trägt den Rückweg der Seite. Ohne ihn stand dort
+        // der **Plan**name über einem Verweis, der ins Projekt führt — ein
+        // Etikett, das etwas anderes benennt als sein Ziel.
+        productionPlan: {
+          select: {
+            id: true,
+            projectId: true,
+            name: true,
+            project: { select: { name: true } },
+          },
+        },
         steps: {
           orderBy: { stepNumber: 'asc' },
           include: {

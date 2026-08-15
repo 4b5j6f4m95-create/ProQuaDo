@@ -47,6 +47,34 @@ export default async function ProductionOrderPage(props: { params: Promise<{ id:
         <StatusChip status={order.status} />
         {order.serialNumber ? ` · SN ${order.serialNumber}` : ''} · Menge {order.quantity}
       </p>
+
+      {/* Der Fortschritt im Kopf, wie auf der Übersicht und in „Meine
+          Aufträge" — die Zahl stand bisher nur verstreut in der
+          Schritt-Tabelle weiter unten, und wer wissen wollte, wie weit der
+          Auftrag ist, musste sie abzählen.
+
+          **Lokal abgeschlossene Schritte zählen nicht mit.** Ein Schritt,
+          den ein Gerät gemeldet hat, den der Server aber noch nicht
+          bestätigt hat, ist nicht fertig — dieselbe Regel wie in docs/07 B1
+          auf der Übersicht. Er steht darum als eigener Satz daneben und
+          nicht im Balken. */}
+      {order.workStepInstances.length > 0 && (
+        <p className="muted">
+          <span className="progress-bar" aria-hidden="true">
+            <span
+              style={{
+                width: `${Math.round(
+                  (order.workStepInstances.filter((i) => i.status === 'COMPLETED').length /
+                    order.workStepInstances.length) *
+                    100,
+                )}%`,
+              }}
+            />
+          </span>
+          {order.workStepInstances.filter((i) => i.status === 'COMPLETED').length} von{' '}
+          {order.workStepInstances.length} Schritten abgeschlossen
+        </p>
+      )}
       <p>
         Fertigungsplan:{' '}
         <Link href={`/production-plans/${order.productionPlanRevision.id}`}>

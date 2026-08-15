@@ -31,7 +31,9 @@ export default async function DossierPage(props: { params: Promise<{ id: string 
   return (
     <main>
       <p>
-        <Link href={`/production-orders/${params.id}`}>← {dossier.identification.orderNumber}</Link>
+        <Link className="action-link" href={`/production-orders/${params.id}`}>
+          ← {dossier.identification.orderNumber}
+        </Link>
       </p>
 
       <h1>Produktionsakte</h1>
