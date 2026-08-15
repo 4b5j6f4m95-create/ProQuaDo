@@ -16,40 +16,52 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="de">
       <body>
-        <nav>
-          <Link href="/">ProQuaDo</Link>
-          <Link href="/dashboard">Übersicht</Link>
-          <Link href="/projects">Projekte</Link>
-          <Link href="/my-orders">Meine Aufträge</Link>
-          <Link href="/quality/ncrs">Abweichungen</Link>
-          <Link href="/quality/equipment">Prüfmittel</Link>
-          <Link href="/offline">Offline</Link>
-          <Link href="/sync/conflicts">Konflikte</Link>
-          <Link href="/search">Suche</Link>
-          <Link href="/notifications">Benachrichtigungen</Link>
-          <Link href="/admin">Administration</Link>
+        {/* Das Band spannt über die volle Fensterbreite, sein Inhalt
+            sitzt auf derselben Achse wie `main` — Entwurf 1e
+            „Kontrollstand". */}
+        <div className="nav-band">
+          <nav>
+            <Link href="/">ProQuaDo</Link>
+            <Link href="/dashboard">Übersicht</Link>
+            <Link href="/projects">Projekte</Link>
+            <Link href="/my-orders">Meine Aufträge</Link>
+            <Link href="/quality/ncrs">Abweichungen</Link>
+            <Link href="/quality/equipment">Prüfmittel</Link>
+            <Link href="/offline">Offline</Link>
+            <Link href="/sync/conflicts">Konflikte</Link>
+            <Link href="/search">Suche</Link>
+            <Link href="/notifications">Benachrichtigungen</Link>
+            <Link href="/admin">Administration</Link>
 
-          {/* Who is signed in, and how to stop being them. Both were missing
-              until Phase 7: the application had no sign-out at all, so a
-              shared tablet stayed logged in as whoever used it last and the
-              audit trail attributed the next person's work to them. Naming
-              the current user is half the fix — you cannot notice that you
-              are somebody else if the screen never says who you are. */}
-          {session?.user && (
-            <form action={signOutAction} className="nav-session">
-              {/* Der Name führt zum eigenen Konto — dort wird die
-                  Bestätigungs-PIN gesetzt. Ohne sie lässt sich kein Schritt
-                  abschließen, ein frisch angelegtes Konto muss also hier
-                  vorbei, bevor es arbeiten kann. */}
-              <Link href="/account" className="muted">
-                {session.user.displayName ?? session.user.email}
-              </Link>
-              <button type="submit" className="link-button">
-                Abmelden
-              </button>
-            </form>
-          )}
-        </nav>
+            {/* Who is signed in, and how to stop being them. Both were missing
+                until Phase 7: the application had no sign-out at all, so a
+                shared tablet stayed logged in as whoever used it last and the
+                audit trail attributed the next person's work to them. Naming
+                the current user is half the fix — you cannot notice that you
+                are somebody else if the screen never says who you are. */}
+            {session?.user && (
+              <form action={signOutAction} className="nav-session">
+                {/* Der Sync-Stand bleibt dauerhaft im Blick — im Entwurf 1e
+                    „Kontrollstand" die einzige Auskunft, die das tut. Auf
+                    einem Hallentablet ist es die Frage, die zuerst gestellt
+                    wird: ist meine Arbeit schon drüben? Der Punkt allein
+                    sagt es nicht, deshalb steht das Wort daneben. */}
+                <span className="nav-sync">Online</span>
+
+                {/* Der Name führt zum eigenen Konto — dort wird die
+                    Bestätigungs-PIN gesetzt. Ohne sie lässt sich kein Schritt
+                    abschließen, ein frisch angelegtes Konto muss also hier
+                    vorbei, bevor es arbeiten kann. */}
+                <Link href="/account" className="muted">
+                  {session.user.displayName ?? session.user.email}
+                </Link>
+                <button type="submit" className="link-button">
+                  Abmelden
+                </button>
+              </form>
+            )}
+          </nav>
+        </div>
         <ServiceWorkerRegistration />
         {children}
       </body>

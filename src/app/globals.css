@@ -79,12 +79,29 @@ body {
     sans-serif;
   margin: 0;
   margin-inline: auto;
-  padding: 1.5rem 1.5rem 4rem;
-  max-width: 1240px;
+  /* **Breite und Innenabstand sind vom Körper nach innen gewandert.**
+     Das Kopfband des Entwurfs „Kontrollstand" spannt über die volle
+     Fensterbreite; ein Körper mit `max-width` schnitte es an beiden
+     Rändern ab und ließe es wie eine Karte aussehen statt wie eine
+     Leiste. Die Inhaltsbreite trägt jetzt `main` — dieselbe Zahl, nur
+     eine Ebene tiefer. */
+  padding: 0;
+  max-width: none;
   color: var(--text);
   font-size: 1rem;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+}
+
+main,
+.band-inner {
+  max-width: 1240px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+main {
+  padding-bottom: 4rem;
 }
 
 /* Sichtbarer Fokus überall — Tastatur und Screenreader sind auf dem
@@ -126,21 +143,45 @@ a {
   text-underline-offset: 2px;
 }
 
-/* ── Navigation ───────────────────────────────────────────────
-   Eine eigene weiße Leiste über dem Inhalt: wo man hin kann, ist
-   etwas anderes als das, was gerade auf dem Schirm steht. */
+/* ── Kopfband ─────────────────────────────────────────────────
+   Entwurf „Kontrollstand" (1e): ein dunkles Band über die volle
+   Breite statt der weißen Karte von vorher. Wo man hin kann, ist etwas
+   anderes als das, was gerade auf dem Schirm steht — das galt schon
+   für die weiße Leiste; das Band sagt es deutlicher, weil es nicht
+   aussieht wie noch eine Karte unter Karten.
+
+   **Die Farbe ist `--brand-hover` und kein neuer Wert.** Der Entwurf
+   nennt `oklch(0.28 0.05 260)` = #1a2941, ein etwas graueres Marine.
+   Der Unterschied ist mit bloßem Auge kaum zu sehen, eine zweite
+   Palette dagegen sehr wohl: sie wäre ab dem ersten Tag zu pflegen.
+   Weiß darauf liegt bei 12,98:1.
+
+   Alle Werte nachgerechnet, keiner geschätzt — siehe den Kopf dieser
+   Datei und src/app/__tests__/design-tokens.test.ts. */
 
 nav {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.15rem;
-  margin-bottom: 2rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.75rem;
+  padding-block: 0;
+  min-height: 56px;
+  background: var(--brand-hover);
+  color: #fff;
+  /* Volle Fensterbreite, Inhalt aber auf derselben Achse wie `main`. */
+  max-width: 1240px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+.nav-band {
+  background: var(--brand-hover);
+  margin-bottom: 1.75rem;
+}
+
+.nav-band nav {
+  margin-bottom: 0;
 }
 
 /* Eng gesetzt, weil elf Menüpunkte plus Sitzungsblock auf einem
@@ -149,28 +190,30 @@ nav {
 nav a {
   display: inline-flex;
   align-items: center;
-  min-height: 40px;
-  padding: 0.35rem 0.6rem;
+  min-height: 44px;
+  padding: 0.35rem 0.7rem;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  /* Weiß bei 75 % ergibt #c6cad0 auf dem Band — 8,88:1. Der Entwurf
+     benutzt `opacity`; hier steht die gemischte Farbe direkt, weil
+     `opacity` auch den Fokusrahmen mit ausbleicht. */
+  color: #c6cad0;
   font-size: 0.9rem;
   text-decoration: none;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
+  border-bottom: 3px solid transparent;
+  transition: color 120ms ease;
 }
 
 nav a:hover {
-  background: var(--surface-sunken);
-  color: var(--text);
+  color: #fff;
+  background: rgb(255 255 255 / 12%);
 }
 
 /* Der Produktname ist kein Menüpunkt unter vielen. */
 nav > a:first-child {
-  color: var(--brand);
+  color: #fff;
   font-weight: 700;
   font-size: 1.0625rem;
-  margin-right: 0.5rem;
+  margin-right: 0.75rem;
 }
 
 /* Sitzt am Ende der Navigation, sichtbar abgesetzt: wer man ist, ist
@@ -181,12 +224,49 @@ nav > a:first-child {
      baut die Leiste unnötig hoch. */
   flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.75rem;
   margin-block: 0;
   margin-left: auto;
-  padding-left: 0.75rem;
-  border-left: 1px solid var(--border);
+  padding-left: 0;
+  border-left: none;
   max-width: none;
+}
+
+.nav-session .muted {
+  color: #dddfe3;
+}
+
+.nav-session .link-button {
+  color: #fff;
+  min-height: 44px;
+}
+
+/* Sync-Anzeige im Band — im Entwurf „Kontrollstand" die einzige
+   Auskunft, die dauerhaft im Blick bleibt. Auf einem Hallentablet ist
+   das die Frage, die zuerst gestellt wird: ist meine Arbeit schon
+   drüben? */
+.nav-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius-sm);
+  background: rgb(255 255 255 / 12%);
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.nav-sync::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* 4,00:1 gegen den aufgehellten Pillengrund — als Zustandspunkt ist
+     das eine Information und keine Zierde (SC 1.4.11: 3:1). */
+  background: #55c975;
+  flex-shrink: 0;
 }
 
 /* ── Flächen ──────────────────────────────────────────────────── */
@@ -226,21 +306,51 @@ table {
   box-shadow: var(--shadow-sm);
 }
 
+/* Enger gesetzt als vorher (0,75rem/1rem) — Entwurf „Kontrollstand"
+   nennt 9px/14px. Eine Auftragsübersicht wird überflogen, nicht
+   gelesen: je mehr Zeilen ohne Scrollen dastehen, desto eher fällt
+   die eine auf, die klemmt. */
 th,
 td {
   text-align: left;
-  padding: 0.75rem 1rem;
+  padding: 0.5625rem 0.875rem;
   border-bottom: 1px solid var(--border);
 }
 
 thead th {
   background: var(--surface-sunken);
   color: var(--text-muted);
-  font-size: 0.8125rem;
-  font-weight: 600;
+  font-size: 0.78rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+/* Der Bezeichner einer Zeile ist ihr Anker beim Überfliegen. */
+td.row-key {
+  font-weight: 600;
+}
+
+/* Zeitstempel neben der Überschrift: woher der Stand kommt und wann.
+   Auf einem Bildschirm, der Zahlen zeigt, ist „von wann" Teil der
+   Zahl. */
+.page-subtitle {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1.1rem;
+  margin: 0.5rem 0 1.1rem;
+}
+
+.page-head h1 {
+  margin: 0;
 }
 
 tbody tr:last-child td {
@@ -595,34 +705,140 @@ li > .inline-form {
 
 /* ── Dashboard-Kennzahlen (docs/07 B1) ────────────────────────── */
 
+/* ── Kennzahlenstreifen ───────────────────────────────────────
+   Entwurf „Kontrollstand": **ein** gerahmter Block mit Haarlinien
+   dazwischen statt vier einzelner Karten. Der Unterschied ist nicht
+   Geschmack — vier Karten lesen sich als vier Dinge, ein Streifen als
+   ein Messwerk mit vier Anzeigen. Genau das ist es.
+
+   Der Haarstrich entsteht aus `gap: 1px` auf einem Grund in der
+   Rahmenfarbe; die Zellen liegen weiß darüber. Eine echte Linie je
+   Zelle wäre an den Rändern doppelt. */
 .metric-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
   margin-bottom: 1.5rem;
 }
 
 .metric-card {
-  flex: 1 1 10rem;
-  text-align: center;
-  padding: 1.25rem 1rem;
+  background: var(--surface);
+  padding: 0.9rem 1.1rem;
+  /* Der Streifen trägt Rahmen und Radius; die Zelle darf beides nicht
+     noch einmal mitbringen. */
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  margin: 0;
+  /* Platz für den 3-px-Streifen der Warnzellen, damit alle vier Zahlen
+     auf derselben Höhe stehen. */
+  border-top: 3px solid transparent;
 }
 
 .metric-value {
-  font-size: 2.25rem;
+  font-size: 1.625rem;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.15;
   color: var(--brand);
   margin: 0;
 }
 
 .metric-label {
-  margin: 0.35rem 0 0;
+  margin: 0.1rem 0 0;
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+}
+
+/* Warnzellen: farbiger Streifen **und** eingefärbte Zahl. Der Streifen
+   allein wäre eine Aussage nur über Farbe; die Zahl trägt sie mit. */
+.metric-card.blocked-card {
+  background: var(--surface);
+  border-top-color: var(--danger);
+}
+
+.metric-card.blocked-card .metric-value {
+  color: var(--danger);
+}
+
+.metric-card.warn-card {
+  border-top-color: var(--warning);
+}
+
+.metric-card.warn-card .metric-value {
+  color: var(--warning);
+}
+
+/* ── Entscheidungsband ────────────────────────────────────────
+   Der Entwurf fasst die offenen Entscheidungen in **eine** Zeile statt
+   in eine Karte je Vorgang. Bei zwei Entscheidungen sind zwei Karten
+   Platzverschwendung; bei acht wären acht Karten eine Wand, durch die
+   niemand mehr sieht, dass überhaupt etwas dringend ist. */
+.decision-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.65rem 1rem;
+  margin: 1rem 0 1.5rem;
+  background: #f6e9d5;
+  /* **Die Kante des Entwurfs trug die Grenze nicht.** Er nennt
+     `oklch(0.8 0.08 80)` = #d9b982 — 1,66:1 gegen den Seitengrund. Das
+     fällt nicht auf, und die Füllung hilft nicht: #f6e9d5 gegen #eef1f7
+     sind 1,06:1, also praktisch dieselbe Fläche. Ein Band, das man nur
+     bemerkt, wenn man es sucht, ist kein Band.
+
+     Gelöst wie bei `.notice` nebenan, statt eine zweite Lösung für
+     dasselbe Problem zu erfinden: dünne Kante bei 3,33:1, dazu ein
+     kräftiger linker Balken bei 4,90:1, der die Grenze wirklich zieht. */
+  border: 1px solid #a87c22;
+  border-left: 4px solid #8a6100;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+
+.decision-banner .button-link {
+  margin-left: auto;
+}
+
+/* ── Fortschrittsbalken ───────────────────────────────────────
+   Ein Balken trägt Information und ist damit kein Schmuck: die Füllung
+   muss 3:1 gegen die Spur halten (SC 1.4.11). Der Entwurf verfehlte
+   das an einer Stelle — sein Grau für „Geplant" liegt bei 2,12:1
+   gegen die eigene Spur. Hier tragen die Füllungen deshalb Token:
+   --brand 7,69:1, --text-muted 5,13:1, --danger 5,81:1 gegen --border.
+
+   Die Zahl daneben bleibt stehen. Ein Balken ohne Zahl zwingt zum
+   Schätzen, und „6 von 18" ist die Auskunft, nicht „ungefähr ein
+   Drittel". */
+.progress-bar {
+  display: inline-block;
+  width: 90px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--border);
+  vertical-align: middle;
+  margin-right: 0.5rem;
+  overflow: hidden;
+}
+
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--brand);
+}
+
+.progress-bar.is-planned > span {
+  background: var(--text-muted);
+}
+
+.progress-bar.is-overdue > span {
+  background: var(--danger);
 }
 
 /* ── Schlüssel-Wert-Listen der Produktionsakte ────────────────── */

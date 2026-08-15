@@ -46,6 +46,15 @@ const config = [
       '**/node_modules/',
       '**/.next/',
       '.claude/worktrees/',
+      // Vom Designer geliefertes Material — HTML-Entwürfe samt ihrer
+      // mitgelieferten `support.js`. Fremder Code, den niemand hier
+      // pflegt, und der die Prüfung mit sieben Beanstandungen rot färbte,
+      // sobald die Mappe im Arbeitsverzeichnis lag.
+      // Ohne Umlaut im Muster: macOS legt Dateinamen **zerlegt** ab
+      // (NFD, „ä" = a + Trema), die Konfigurationsdatei steht in NFC.
+      // Ein Muster mit „ä" trifft den Ordner deshalb nicht — er blieb
+      // sichtbar, obwohl `git check-ignore` ihn längst ignorierte.
+      '**/*Designvorschl*/',
       'dist/',
       'coverage/',
       'prisma/migrations/',
