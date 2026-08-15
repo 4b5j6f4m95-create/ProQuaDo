@@ -32,14 +32,47 @@ export interface LoadTestInfra {
   stop(): Promise<void>;
 }
 
+/**
+ * Begrenzt Datenbank und Objektspeicher auf einen Bruchteil der CPU — für
+ * die eine Frage, an der die Hochrechnung auf größere Hardware hängt:
+ * **wächst der Durchsatz mit der Kernzahl?**
+ *
+ * **Warum das nicht mit `taskset` geht.** Der Engpass ist die Datenbank,
+ * und die läuft in einem Container: ein `taskset` auf den Node-Prozess
+ * beschränkt sie **nicht**. Gemessen wäre dann etwas, das wie ein
+ * Ein-Kern-Lauf aussieht und keiner ist.
+ *
+ * `LOAD_CPU_QUOTA=1` gibt beiden Containern eine CPU, `=2` zwei; leer
+ * bleibt alles wie bisher. Der Vergleich zweier Quoten isoliert die
+ * Skalierung der **Datenbank** — der Node-Prozess bleibt in beiden Fällen
+ * unbeschränkt, und genau das macht den Unterschied aussagekräftig: was
+ * sich ändert, ist nur die Quote.
+ *
+ * Eine Quote ist keine Kernbindung. Sie begrenzt Rechenzeit, nicht
+ * Parallelität — für „doppelt so viel Maschine" ist das die passendere
+ * Nachbildung, weil eine größere Anlage ebenfalls mehr Zeit und nicht
+ * andere Kerne bekommt.
+ */
+function cpuQuota(): number | undefined {
+  const raw = process.env.LOAD_CPU_QUOTA;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`LOAD_CPU_QUOTA muss eine positive Zahl sein, war: ${raw}`);
+  }
+  return value;
+}
+
 export async function startInfra(): Promise<LoadTestInfra> {
   const connectionLimit = Number(process.env.LOAD_DB_CONNECTION_LIMIT ?? 25);
+  const quota = cpuQuota();
 
-  const pg = await new PostgreSqlContainer('postgres:16-alpine')
+  let pgBuilder = new PostgreSqlContainer('postgres:16-alpine')
     .withDatabase('proquado')
     .withUsername('proquado')
-    .withPassword('proquado_dev_only')
-    .start();
+    .withPassword('proquado_dev_only');
+  if (quota !== undefined) pgBuilder = pgBuilder.withResourcesQuota({ cpu: quota });
+  const pg = await pgBuilder.start();
 
   const host = pg.getHost();
   const port = pg.getPort();
@@ -53,7 +86,7 @@ export async function startInfra(): Promise<LoadTestInfra> {
     stdio: 'pipe',
   });
 
-  const minio = await startMinio();
+  const minio = await startMinio(quota);
 
   // Seit Prisma 7 steuert nicht mehr die URL die Poolgröße, sondern der
   // Treiber-Adapter — siehe src/lib/db/client.ts. `connection_limit` bleibt
@@ -82,13 +115,14 @@ export async function startInfra(): Promise<LoadTestInfra> {
   };
 }
 
-async function startMinio(): Promise<StartedTestContainer> {
-  const container = await new GenericContainer('minio/minio:latest')
+async function startMinio(quota?: number): Promise<StartedTestContainer> {
+  let builder = new GenericContainer('minio/minio:latest')
     .withCommand(['server', '/data'])
     .withEnvironment({ MINIO_ROOT_USER: 'loaduser', MINIO_ROOT_PASSWORD: 'loadpassword' })
     .withExposedPorts(9000)
-    .withWaitStrategy(Wait.forHttp('/minio/health/live', 9000))
-    .start();
+    .withWaitStrategy(Wait.forHttp('/minio/health/live', 9000));
+  if (quota !== undefined) builder = builder.withResourcesQuota({ cpu: quota });
+  const container = await builder.start();
 
   const endpoint = `http://${container.getHost()}:${container.getMappedPort(9000)}`;
   process.env.S3_ENDPOINT = endpoint;

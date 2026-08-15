@@ -31,6 +31,15 @@ export interface EnvironmentFingerprint {
   uvThreadpoolSize: string;
   databasePoolMax: string;
   connectionLimit: number;
+  /**
+   * Die CPU-Quote der Container, falls gesetzt — die Stellschraube der
+   * Skalierungsmessung. Sie **muss** hier stehen: zwei Läufe mit einer und
+   * mit zwei CPUs unterscheiden sich sonst in keinem aufgezeichneten Feld,
+   * und der Vergleich, für den sie gemacht wurden, wäre nicht mehr
+   * nachvollziehbar. `os.cpus()` hilft nicht, denn die Quote beschränkt die
+   * Container, nicht die Maschine.
+   */
+  containerCpuQuota: string;
 }
 
 /**
@@ -64,6 +73,7 @@ export function captureEnvironment(
     uvThreadpoolSize: process.env.UV_THREADPOOL_SIZE ?? '(nicht gesetzt, Vorgabe 4)',
     databasePoolMax: process.env.DATABASE_POOL_MAX ?? '(nicht gesetzt)',
     connectionLimit,
+    containerCpuQuota: process.env.LOAD_CPU_QUOTA ?? '(keine, Container nutzen die ganze Maschine)',
   };
 }
 
@@ -85,6 +95,7 @@ export function formatEnvironment(env: EnvironmentFingerprint): string {
     line,
     `  Maschine    ${env.hostname} · ${env.platform} ${env.release} · ${env.arch}`,
     `  CPU         ${env.cpuModel} · ${env.cpuCount} Kerne · Vorlast ${env.loadAverage1m}`,
+    `  Container   CPU-Quote ${env.containerCpuQuota}`,
     `  Speicher    ${env.totalMemoryGb} GB`,
     `  Node        ${env.nodeVersion}`,
     `  Docker      ${env.dockerVersion}`,
