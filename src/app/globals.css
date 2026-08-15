@@ -841,6 +841,19 @@ li > .inline-form {
   background: var(--danger);
 }
 
+/* Auf dem Tablet breiter und höher. Der Balken ist dort keine
+   Randnotiz neben einer Zahl, sondern das, was aus zwei Metern
+   Entfernung noch zu sehen ist. */
+.tablet .progress-bar {
+  width: 160px;
+  height: 12px;
+  border-radius: 6px;
+}
+
+.tablet .progress-bar > span {
+  border-radius: 6px;
+}
+
 /* ── Schlüssel-Wert-Listen der Produktionsakte ────────────────── */
 
 .key-values {
@@ -865,6 +878,31 @@ li > .inline-form {
 
 .tablet {
   font-size: 1.05rem;
+}
+
+/* **Die Verdichtung des Entwurfs „Kontrollstand" gilt hier nicht.**
+   Er bezeichnet sich selbst als Desktop-Dashboard; enger gesetzte
+   Tabellenzeilen sind dort richtig, weil eine Auftragsübersicht
+   überflogen wird. Auf einem Hallentablet wird nicht überflogen,
+   sondern mit Handschuhen getroffen.
+
+   Das war keine theoretische Sorge: `th, td` gilt global, und
+   `IfcComponentList` steht **innerhalb** von `<main class="tablet">`
+   des Arbeitsschritts. Die Bauteilliste in der Halle war damit von
+   0,75rem/1rem auf 0,5625rem/0,875rem geschrumpft und ihre
+   Spaltenköpfe von 13 auf 12,5 px — unbemerkt, weil kein Test eine
+   Zeilenhöhe misst und die Übersicht, an der ich es angesehen habe,
+   kein Tablet-Bildschirm ist. Dieselbe Art Fehler wie bei der Regel
+   in der Selektorliste (notes.md, Stolperstein #31): global geändert,
+   lokal nicht nachgesehen. */
+.tablet th,
+.tablet td {
+  padding: 0.75rem 1rem;
+}
+
+.tablet thead th {
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
 }
 
 .touch-target,

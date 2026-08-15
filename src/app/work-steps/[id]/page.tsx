@@ -108,6 +108,37 @@ export default async function WorkStepPage(props: { params: Promise<{ id: string
       <h1>
         Schritt {step.stepNumber} von {siblings.length}: {step.planStep.title}
       </h1>
+
+      {/* Wo im Auftrag man steht — aus dem Entwurf „Kontrollstand"
+          übernommen, seine Verdichtung ausdrücklich nicht: dies ist ein
+          Hallentablet, kein Schreibtisch.
+
+          Gezählt wird über die **Geschwister**, nicht über diesen
+          Schritt: `stepNumber` trägt die Nummer aus dem Gebäudemodell
+          (4, 20, 130 …) und ist keine Position. Ein Balken, der „130
+          von 3" anzeigte, wäre schlimmer als keiner. */}
+      {siblings.length > 1 && (
+        <p className="muted">
+          <span className="progress-bar" aria-hidden="true">
+            <span
+              style={{
+                width: `${Math.round(
+                  (siblings.filter((s) => s.status === 'COMPLETED').length / siblings.length) * 100,
+                )}%`,
+              }}
+            />
+          </span>
+          {/* **Die Zahl steht daneben, nicht statt dessen.** Der erste
+              Anlauf hatte den Balken allein unter die Überschrift
+              gesetzt; bei null abgeschlossenen Schritten war er eine
+              leere graue Leiste ohne Aussage und sah aus wie ein
+              Darstellungsfehler. Auf der Übersicht fiel das nicht auf,
+              weil dort „0% (0/2)" danebensteht. */}
+          {siblings.filter((s) => s.status === 'COMPLETED').length} von {siblings.length} Schritten
+          abgeschlossen
+        </p>
+      )}
+
       <p aria-live="polite">
         <StatusChip status={step.status} />
         {step.stepKind !== 'PRODUCTION' && (
