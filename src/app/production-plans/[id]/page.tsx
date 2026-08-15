@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { requirePageAuth } from '@/lib/authz/require-page-auth';
 import {
   getProductionPlanRevision,
@@ -44,6 +45,17 @@ export default async function ProductionPlanRevisionPage(props: {
 
   return (
     <main>
+      {/* **Die einzige Detailseite ohne Rückweg.** Jede andere beginnt mit
+          „← <Übergeordnetes>"; hier landete man und kam nur über die
+          Menüleiste wieder heraus — die aber führt zu den Projekten
+          insgesamt und nicht zu dem, aus dem man kam. Der Plan trägt den
+          Namen seines Projekts ohnehin schon in der Abfrage. */}
+      <p>
+        <Link className="action-link" href={`/projects/${revision.productionPlan.projectId}`}>
+          ← {revision.productionPlan.project.name}
+        </Link>
+      </p>
+
       <h1>
         Fertigungsplan-Revision {revision.revisionNumber} —{' '}
         <span className="status-badge">{revision.status}</span>

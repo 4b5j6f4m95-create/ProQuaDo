@@ -30,7 +30,9 @@ export default async function SyncConflictPage(props: { params: Promise<{ id: st
   return (
     <main>
       <p>
-        <Link href="/sync/conflicts">← Konfliktcenter</Link>
+        <Link className="action-link" href="/sync/conflicts">
+          ← Konfliktcenter
+        </Link>
       </p>
 
       <h1>Konflikt: {conflict.conflictType}</h1>
