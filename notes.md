@@ -1136,7 +1136,19 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Die Fehler sind der eigentliche Befund, nicht die Millisekunden.** 88–122 Stapel je Lauf brachen mit `Transaction API error: Unable to start a transaction in the given time` ab — bei `DATABASE_POOL_MAX=25` auf **zwei** Kernen bekommen die Kommandos schlicht keine Verbindung mehr. Das System hat dabei abgewiesen statt Daten zu beschädigen, und genau das soll es; aber 200 gleichzeitige Geräte sind auf dieser Maschinengröße kein Engpass, sondern eine Überforderung.
 
-   **Vorbehalt, und er steht auch im Lauf selbst:** die Maschine war beim Start mit **1,47 je Kern** ausgelastet (Warnschwelle 0,3), weil dort ein Pilot mit acht Containern läuft. Ein Faktor 7 lässt sich damit nicht wegerklären — die exakte Zahl aber schon. Vor einer Entscheidung über die Serverklasse im Leerlauf wiederholen.
+   **Im Leerlauf wiederholt (15.08.2026), und das Urteil bleibt.** Der erste Lauf fand die Maschine mit 1,47 je Kern vor — meine eigene Einrichtung plus der laufende Pilot. Also gewartet, bis die Ein-Minuten-Vorlast unter 0,3 je Kern lag (nach 90 s bei 0,24), und erneut gefahren:
+
+   |               | belastet        | Leerlauf         | Ziel      |
+   | ------------- | --------------- | ---------------- | --------- |
+   | p95, Median   | 21 373 ms       | **16 499 ms**    | < 3000 ms |
+   | Spanne        | 19 669 – 26 175 | 16 423 – 18 595  |           |
+   | Durchsatz     | 4,1 Stapel/s    | **8,2** Stapel/s |           |
+   | Fehler gesamt | 526             | 340              | 0         |
+   | Dashboard p95 | 1133 ms         | 712 ms           | < 500 ms  |
+
+   **Leerlauf ändert die Zahl, nicht die Antwort:** 23 % besser, doppelter Durchsatz — und immer noch **5,5-fach** über dem Ziel. Der Vorbehalt aus dem ersten Lauf ist damit ausgeräumt; die Aussage „2 vCPU reichen für 200 gleichzeitige Geräte nicht" steht ohne ihn.
+
+   **Und der zweite Lauf hat einen Fehler in der Messtechnik selbst aufgedeckt.** Er meldete Vorlast 1,37, obwohl unmittelbar vor dem Start 0,42 anlag — `captureEnvironment` lief **nach** `startInfra()`, die Angabe enthielt also den Start zweier Container und die Migrationen des Laufs. Auf einer kleinen Maschine hebt allein das die Ein-Minuten-Vorlast über die Schwelle, die Warnung schlug fast immer an und wurde dadurch wertlos. Der Messpunkt liegt jetzt am Anfang von `main()`, vor allem anderen. Nachgeprüft: der gemeldete Wert stimmt mit dem von `uptime` zum selben Zeitpunkt überein (3,28 gegen 3,26).
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie viele Kerne die Anlage bekommt** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
