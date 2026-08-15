@@ -24,6 +24,7 @@
     "test:restore": "tsx test/restore/run.ts",
     "ifc:orphans": "tsx scripts/ifc-orphans.ts",
     "test:coverage": "jest --config jest.unit.config.js --coverage",
+    "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
