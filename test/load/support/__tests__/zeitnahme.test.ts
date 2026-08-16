@@ -13,7 +13,7 @@
  * bei der Vereinigung nicht.
  */
 
-import { vereinigteDauer, normalisiere, kategorie } from '../zeitnahme';
+import { vereinigteDauer, normalisiere, kategorie, stelleAusStapel } from '../zeitnahme';
 
 describe('vereinigteDauer', () => {
   it('ist null ohne Abschnitte', () => {
@@ -145,5 +145,39 @@ describe('kategorie', () => {
   it('ist unempfindlich gegen führenden Leerraum und Kleinschreibung', () => {
     expect(kategorie('  begin')).toBe('Transaktionsgerüst');
     expect(kategorie('\n  select 1')).toBe('Lesen');
+  });
+});
+
+describe('stelleAusStapel', () => {
+  const stapel = [
+    'Error',
+    '    at Object.query (/repo/test/load/support/zeitnahme.ts:120:20)',
+    '    at PrismaClient._transaction (/repo/node_modules/.pnpm/@prisma+client/index.js:9:1)',
+    '    at withOrgContext (/repo/src/lib/db/tenant-context.ts:23:18)',
+    '    at async claimCommand (/repo/src/domain/sync/sync-commands.ts:172:10)',
+    '    at async processOne (/repo/src/domain/sync/sync-commands.ts:150:17)',
+  ].join('\n');
+
+  it('nennt den Aufrufer von withOrgContext, nicht withOrgContext selbst', () => {
+    // `tenant-context` öffnet jede Transaktion und wäre damit bei allen
+    // dieselbe Antwort — die Auswertung bestünde aus einer einzigen Zeile.
+    expect(stelleAusStapel(stapel)).toBe('claimCommand  src/domain/sync/sync-commands.ts:172');
+  });
+
+  it('überspringt Bibliotheken und die Messdatei selbst', () => {
+    const stelle = stelleAusStapel(stapel)!;
+    expect(stelle).not.toContain('node_modules');
+    expect(stelle).not.toContain('zeitnahme');
+  });
+
+  it('gibt null zurück, wenn kein Anwendungsrahmen enthalten ist', () => {
+    // Genau der Fall des ersten Versuchs: am `BEGIN` abgegriffen reichte der
+    // Abzug nur bis in Prismas Transaktionsmanager. Ein `null` ist hier die
+    // ehrliche Antwort — eine erfundene Stelle wäre schlimmer als keine.
+    expect(stelleAusStapel('Error\n    at q (/repo/node_modules/pg/lib/client.js:1:1)')).toBeNull();
+  });
+
+  it('kommt ohne Stapelabzug zurecht', () => {
+    expect(stelleAusStapel(undefined)).toBeNull();
   });
 });

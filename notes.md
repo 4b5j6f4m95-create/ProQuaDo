@@ -1150,7 +1150,8 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - Der größere CPU-Verbraucher ist **Node** (0,70 Kerne) und nicht Postgres (0,47), und keiner von beiden ist ausgelastet.
    - **Gewartet wird auf eine freie Datenbankverbindung**, und der Grund sind **179 Datenbankaufrufe je Stapel** (rund 45 je Kommando). Bei 9 Stapeln/s sind das 1600 Aufrufe je Sekunde — die Decke dieser Maschine.
    - **Der Hebel ist deshalb kein Hardwarehebel**, sondern die Zahl der Aufrufe je Kommando. Halbiert man sie, halbiert sich die benötigte Maschine.
-   - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos —, und die Berechtigung wird achtmal je Stapel gelesen. Beides zusammen wäre rund ein Drittel weniger Aufrufe; für den Faktor 7,5 müssten es 179 auf 25 sein, und das ist eine fachliche Entscheidung und keine Optimierung.
+   - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos, davon zwölf reine Buchführung der Sync-Strecke —, und die Berechtigung wird achtmal je Stapel gelesen.
+   - **Realistisch einzusparen sind davon rund 15 %**, nicht mehr: zwei der drei festen Transaktionen je Kommando sind der Preis dafür, dass ein Stapel teilweise ankommen darf. Für den Faktor 7,5 müsste man an die 90 Lesevorgänge je Stapel — eine andere Untersuchung.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
 
@@ -1319,11 +1320,39 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Die zweitauffälligste ist die Berechtigungsprüfung.** `user_roles` und `order_assignments` werden je **acht**mal gelesen, also viermal je Kommando — dieselbe Frage, mehrfach an dieselbe Datenbank gestellt, innerhalb eines Vorgangs, in dem sich die Antwort nicht ändern kann.
 
-   **Was daraus folgt, als Rechnung und nicht als Messung.** Käme ein Kommando mit **einer** Transaktion aus statt mit fünf, fielen 15 Transaktionen weg und mit ihnen 45 der 179 Aufrufe. Würde die Berechtigung je Stapel einmal aufgelöst statt achtmal, kämen 14 weitere dazu. Zusammen rund **ein Drittel weniger Aufrufe** — und da der Durchsatz an der Zahl der Aufrufe hängt, entsprechend mehr Stapel je Sekunde.
+   > ⚠️ **Hier stand eine Rechnung, die die Nachmessung halbiert hat.** Sie lautete: käme ein Kommando mit **einer** Transaktion aus statt mit fünf, fielen 45 der 179 Aufrufe weg, mit der Berechtigung zusammen rund **ein Drittel**. Die Herkunftsmessung darunter zeigt, dass „eine Transaktion je Kommando" nicht zu haben ist, ohne eine Eigenschaft aufzugeben, die absichtlich so gebaut ist. Realistisch sind **rund 15 %**, nicht 33 %.
 
    **Und die Grenze dieser Rechnung, damit sie niemand als Zusage liest.** Ein Drittel ist nicht der Faktor 7,5. Um 200 Geräte auf dieser Maschine zu tragen, müssten die 179 Aufrufe auf etwa **25** sinken. Das ist keine Optimierung mehr, sondern ein anderer Zuschnitt des Sync — und ob er zulässig ist, ist eine **fachliche** Frage: dass jedes Kommando für sich angenommen oder abgewiesen wird, ist kein Versehen, sondern die Eigenschaft, die einen halb angekommenen Stapel überhaupt erst verarbeitbar macht. Wer Transaktionen zusammenlegt, gibt das auf.
 
-   **Was ausdrücklich nicht gemessen ist:** **warum** ein Kommando fünf Transaktionen braucht. Die Gruppierung zählt Anweisungen, sie ordnet sie keinem Kommando zu. Das wäre der nächste Schnitt — und die eigentlich interessante Frage, weil ein Kommando nach der Fachlogik mit einer auskommen sollte.
+   **Warum ein Kommando fünf Transaktionen braucht — gemessen am 16.08.2026.** `LOAD_TRANSAKTIONSHERKUNFT=1` nimmt bei jedem `prisma.$transaction` einen Stapelabzug und nennt die Aufrufstelle. Je Stapel:
+
+   | je Stapel | Aufrufstelle                                                |
+   | --------- | ----------------------------------------------------------- |
+   | **4×**    | `claimCommand` — `sync-commands.ts:172`                     |
+   | **4×**    | `runPreflight` — `sync-commands.ts:528`                     |
+   | **4×**    | `finalizeCommand` — `sync-commands.ts:245`                  |
+   | 1×        | `processSyncCommands` — die Geräteprüfung, einmal je Stapel |
+   | 1×        | `startWorkStepIdempotently` + 1× `startWorkStep`            |
+   | 1×        | `recordChecklistResponse` · 1× `recordMeasurementResult`    |
+   | 1×        | `confirmWithPin` + 1× `submitWorkStepCompletion`            |
+
+   **Zwölf der 19 Transaktionen sind Buchführung der Sync-Strecke, nicht die Arbeit.** Jedes Kommando bekommt drei feste — Anspruch anmelden, Vorprüfung, Abschluss schreiben — und dazu eine bis zwei für das, was es tatsächlich tut.
+
+   **Die eigentliche Ursache ist eine Eigenschaft von `withOrgContext`:** es ist der einzige Weg zur Datenbank (RLS braucht `SET LOCAL app.current_org_id`), und es öffnet **immer** eine neue Transaktion. Es gibt keine Fassung, die sich in eine laufende einklinkt. Wer fünf Helfer nacheinander ruft, zahlt fünf Transaktionen — auch wenn alle fünf zum selben Kommando gehören.
+
+   **Zwei der drei festen sind mit Absicht getrennt, und das steht so im Code.** `claimCommand` schreibt die Zeile **vor** der Ausführung, damit ein Absturz zwischen „angewendet" und „bestätigt" eine `PENDING`-Zeile hinterlässt statt gar nichts; `finalizeCommand` schreibt das Ergebnis auch dann, wenn die Ausführung zurückgerollt wurde. Beide zusammenzulegen hieße, die Wiederaufnahme nach einem Absturz aufzugeben.
+
+   **`runPreflight` ist die eine ohne solchen Grund.** Sie liest Berechtigung und Version und gibt entweder einen Konflikt zurück oder nichts — beides könnte in der Transaktion geschehen, die danach ohnehin geöffnet wird. Sie ist zugleich der Grund für die doppelte Berechtigungsprüfung: die Vorprüfung fragt, und der Fachdienst fragt noch einmal (`assertPermissionWithin`), weil er auch von der Oberfläche aus aufrufbar sein muss.
+
+   **Was realistisch einzusparen ist**, mit dem Muster, das im Code bereits existiert (`hasPermissionWithin(tx, …)`, `assertPermissionWithin(tx, …)`, `isAssignedToOrder(tx, …)` — die `*Within`-Familie nimmt eine Transaktion entgegen, statt eine zu öffnen):
+
+   - `runPreflight` in die Arbeitstransaktion ziehen: **−4** Transaktionen und die doppelte Berechtigungsprüfung dazu
+   - `startWorkStepIdempotently` mit `startWorkStep` zusammenlegen: **−1**
+   - `confirmWithPin` in `submitWorkStepCompletion` ziehen: **−1**
+
+   Macht 19 → 13 Transaktionen (−18 Gerüstaufrufe) und `user_roles`/`order_assignments` von je acht auf je vier (−8 Aufrufe). Zusammen **26 von 179, also rund 15 %** — nicht das Drittel, das oben stand.
+
+   **Und damit ist auch die Obergrenze schärfer.** Der Faktor 7,5 ist über den Zuschnitt der Sync-Strecke nicht zu holen. Die drei festen Transaktionen je Kommando sind der Preis dafür, dass ein Stapel teilweise ankommen und einzeln beurteilt werden darf; wer sie zusammenlegt, gibt genau das auf. Wer 200 Geräte auf zwei Kernen tragen will, muss deshalb an die **90 Lesevorgänge** je Stapel — und das ist eine andere Untersuchung als diese.
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 

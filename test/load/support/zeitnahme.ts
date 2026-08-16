@@ -106,6 +106,54 @@ let installiert = false;
 const anweisungen = new Map<string, { anzahl: number; dauerMs: number }>();
 
 /**
+ * Woher die Transaktionen kommen — Aufrufstelle je `BEGIN`.
+ *
+ * Die Gruppierung nach Anweisung sagt „19 Transaktionen für 4 Kommandos",
+ * aber nicht, **welche Stelle im Code** sie öffnet. Das ließe sich aus den
+ * Aufrufen von `withOrgContext` ablesen; ablesen ist aber raten, solange es
+ * nicht gezählt ist, und in dieser Messreihe sind schon zwei plausible
+ * Ableitungen an der Messung gescheitert.
+ *
+ * **Angesetzt wird an `prisma.$transaction`, nicht am `BEGIN`.** Der erste
+ * Versuch nahm den Abzug beim Senden von `BEGIN` — und traf ausschließlich
+ * Prismas eigenen Transaktionsmanager: bis dorthin ist die Anweisung durch
+ * eine Warteschlange gelaufen, und die Rahmen des Aufrufers sind weg. Eine
+ * Ebene höher steht der Aufrufer noch auf dem Stapel.
+ *
+ * Nur mit `LOAD_TRANSAKTIONSHERKUNFT=1`: einen Stapelabzug je Transaktion zu
+ * nehmen kostet Zeit, und diese Zeit fiele sonst in dieselbe Messung, die
+ * beantworten soll, wohin die Zeit geht.
+ */
+const herkunft = new Map<string, number>();
+
+function herkunftAufzeichnen(): void {
+  const stelle = stelleAusStapel(new Error().stack);
+  if (stelle) herkunft.set(stelle, (herkunft.get(stelle) ?? 0) + 1);
+}
+
+/**
+ * Die erste Zeile aus dem Anwendungscode in einem Stapelabzug.
+ *
+ * Übersprungen wird alles, was den Weg beschreibt statt den Grund: Bibliotheken,
+ * diese Datei — und `lib/db/tenant-context`, das zwar jede Transaktion öffnet,
+ * aber bei **jeder** dieselbe Stelle ist. Gefragt ist, wer `withOrgContext`
+ * gerufen hat.
+ */
+export function stelleAusStapel(stapel: string | undefined): string | null {
+  if (!stapel) return null;
+  for (const zeile of stapel.split('\n').slice(1)) {
+    if (zeile.includes('node_modules')) continue;
+    const treffer = /\(?((?:src|test)\/[^):]+):(\d+):\d+\)?$/.exec(zeile.trim());
+    if (!treffer) continue;
+    if (treffer[1]!.includes('support/zeitnahme')) continue;
+    if (treffer[1]!.includes('lib/db/tenant-context')) continue;
+    const name = /at\s+(?:async\s+)?([\w.<>]+)\s/.exec(zeile)?.[1] ?? '(anonym)';
+    return `${name}  ${treffer[1]}:${treffer[2]}`;
+  }
+  return null;
+}
+
+/**
  * Hängt die Zeitnahme in `pg` ein. **Muss aufgerufen werden, bevor
  * `@/lib/db/client` das erste Mal geladen wird** — danach steht der Pool
  * bereits. `run.ts` lädt Szenarien und Fixtures ohnehin erst nach dem Start
@@ -312,6 +360,40 @@ export function hoechsteGleichzeitigkeit(): number {
 export function setzeGleichzeitigkeitZurueck(): void {
   gehaltenMax = gehalten;
   anweisungen.clear();
+  herkunft.clear();
+}
+
+/**
+ * Hängt die Herkunftsaufzeichnung an den Client der Anwendung.
+ *
+ * Anders als `instrumentiere()` **nach** dem Laden von `@/lib/db/client` zu
+ * rufen: gewickelt wird die Methode des fertigen Objekts, nicht ein
+ * Modulexport — ein `import`-Binding ließe sich ohnehin nicht überschreiben.
+ */
+export function instrumentiereTransaktionen(client: object): void {
+  if (process.env.LOAD_TRANSAKTIONSHERKUNFT !== '1') return;
+  const halter = client as { $transaction: LoseFunktion };
+  const urspruenglich = halter.$transaction;
+  halter.$transaction = function (this: unknown, ...args: unknown[]): unknown {
+    herkunftAufzeichnen();
+    return urspruenglich.apply(this, args);
+  };
+}
+
+/** Aufrufstellen, die eine Transaktion öffnen — absteigend nach Häufigkeit. */
+export function fasseHerkunftZusammen(stapel: number): { stelle: string; jeStapel: number }[] {
+  return [...herkunft.entries()]
+    .map(([stelle, anzahl]) => ({ stelle, jeStapel: anzahl / stapel }))
+    .sort((a, b) => b.jeStapel - a.jeStapel);
+}
+
+export function formatHerkunft(zeilen: { stelle: string; jeStapel: number }[]): string {
+  if (zeilen.length === 0) return '';
+  const summe = zeilen.reduce((s, z) => s + z.jeStapel, 0);
+  return [
+    `  Transaktionen je Stapel nach Aufrufstelle (${summe.toFixed(1)} insgesamt):`,
+    ...zeilen.map((z) => `    ${z.jeStapel.toFixed(1).padStart(5)}×  ${z.stelle}`),
+  ].join('\n');
 }
 
 export interface Zeitbild {

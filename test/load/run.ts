@@ -33,7 +33,7 @@ import { assertDockerAvailable, startInfra } from './support/infra';
 import { formatMeasurement, printVerdicts, type Verdict } from './support/metrics';
 import { captureEnvironment, formatEnvironment, warnIfBusy } from './support/environment';
 import { summarizeRuns, judgeSeries, formatSeries, type RunResult } from './support/repeat';
-import { instrumentiere, type Zeitbild } from './support/zeitnahme';
+import { instrumentiere, instrumentiereTransaktionen, type Zeitbild } from './support/zeitnahme';
 
 // Fixtures und Szenarien werden **nach** dem Start der Infrastruktur geladen.
 // `@/lib/db/client` wertet DATABASE_URL beim Auswerten des Moduls aus; statisch
@@ -96,6 +96,10 @@ async function main(): Promise<void> {
   // und meldete lauter Nullen. Genau diese Reihenfolge ist der Grund, warum
   // Fixtures und Szenarien hier dynamisch geladen werden.
   instrumentiere();
+
+  // Erst jetzt, wo der Client der Anwendung steht: die Herkunft der
+  // Transaktionen wird an seiner `$transaction`-Methode abgegriffen.
+  instrumentiereTransaktionen((await import('@/lib/db/client')).prisma);
 
   const { seedShiftFixture, seedLargeOrder } = await import('./support/fixtures');
   const { runShiftChangeSync, runLargeDossier, runDashboardUnderLoad, countOutboxEvents } =
