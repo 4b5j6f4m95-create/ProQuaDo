@@ -28,7 +28,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
   **Und eine zweite Beobachtung, die sich erst spät zeigte:** die folgenreichsten Lücken standen nicht im Code, sondern in einer **Formulierung im Plan**. `docs/10` führt die Datenmigration als „falls Altsystem vorhanden" und stellt die andere Hälfte der Frage nie — dahinter lag, dass sich Stammdaten und PINs überhaupt nicht erfassen ließen. Ebenso hatte `docs/10` nie gefragt, wer eine vergessene PIN zurücksetzt. Beides fiel nicht durch Lesen des Codes auf, sondern durch die Frage, was ein Pilot **am ersten Tag** tun muss.
 
-- **Vor dem Piloten offen, und nichts davon ist Programmierarbeit** — die Schrittfolge dazu steht in [docs/13](docs/13_STAGING_SETUP.md), die verbindliche Liste in [docs/12 §9](docs/12_DEPLOYMENT.md): (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft, und `DATABASE_POOL_MAX` ausdrücklich setzen; (c) die Restore-Probe gegen das **echte** Backup-Verfahren fahren statt gegen ein im Test erzeugtes; (d) den Sync-Durchsatz auf der **Zielhardware** messen — der einzige Lasttest-Wert ohne Reserve; (e) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt. **Alle fünf hängen an derselben Voraussetzung**, einer Umgebung, die kein Entwicklungsrechner ist; wer sie einmal aufsetzt, erledigt sie zusammen.
+- **Vor dem Piloten offen, und nichts davon ist Programmierarbeit** — die Schrittfolge dazu steht in [docs/13](docs/13_STAGING_SETUP.md), die verbindliche Liste in [docs/12 §9](docs/12_DEPLOYMENT.md): (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft, und `DATABASE_POOL_MAX` ausdrücklich setzen; (c) die Restore-Probe gegen das **echte** Backup-Verfahren fahren statt gegen ein im Test erzeugtes; (d) ~~den Sync-Durchsatz auf der **Zielhardware** messen~~ — **gemessen (15.08.2026), und das Ergebnis ist eine Entscheidung, keine Zahl**: 2 vCPU tragen **19 Geräte**, das Ziel lautet 200, der p95 liegt beim Siebenfachen. Offen ist damit nicht mehr die Messung, sondern die **Auslegung** — und die ist nicht durch „mehr Kerne" zu erledigen, siehe Übergabe Punkt 5; (e) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt. **Alle fünf hängen an derselben Voraussetzung**, einer Umgebung, die kein Entwicklungsrechner ist; wer sie einmal aufsetzt, erledigt sie zusammen.
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
@@ -1138,7 +1138,17 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Dependabot ist dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
 
-5. **Den Sync-Wert auf der Zielhardware nachmessen, bevor der Pilot startet.** Er ist der einzige Zielwert aus docs/09, der nicht mit Reserve besteht — und der einzige, den kein Entwicklungsrechner entscheiden kann. **Das Kommando steht bereit und dauert etwa eine Minute:**
+5. **Den Sync-Wert auf der Zielhardware nachmessen — erledigt, und die Antwort verlangt eine Entscheidung.** Er war der einzige Zielwert aus docs/09, der nicht mit Reserve besteht, und der einzige, den kein Entwicklungsrechner entscheiden kann.
+
+   **Kurzfassung für Eilige** (die Herleitung steht darunter, jede Zahl gemessen):
+
+   - Die Zielhardware (2 vCPU, 7,8 GB) trägt **19 gleichzeitige Geräte** unter dem 3-Sekunden-Ziel. Verlangt sind **200**. Der p95 liegt beim Siebenfachen.
+   - **Mehr Kerne lösen das nicht** — die halbe Datenbank-CPU kostet nur 12 % Durchsatz. Aus „7,5-facher Durchsatz" folgen **nicht** „15 Kerne"; diese Rechnung stand hier und ist widerlegt.
+   - **Mehr Organisationen lösen es auch nicht** — sie bringen gemessene +8,8 %, nicht das Vielfache.
+   - Der größere CPU-Verbraucher ist **Node** (0,70 Kerne) und nicht Postgres (0,47), und keiner von beiden ist ausgelastet. **Es wird gewartet, und worauf, ist noch nicht gemessen.**
+   - Deshalb ist der nächste Schritt **kein weiterer Durchsatzlauf**, sondern eine Aufteilung der 111 ms je Stapel (siehe unten).
+
+   **Das Kommando steht bereit und dauert etwa eine Minute:**
 
    ```bash
    pnpm install    # erzeugt den Prisma-Client mit (postinstall)
