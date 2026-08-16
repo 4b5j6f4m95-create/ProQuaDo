@@ -361,6 +361,7 @@ export function setzeGleichzeitigkeitZurueck(): void {
   gehaltenMax = gehalten;
   anweisungen.clear();
   herkunft.clear();
+  zugriffe.clear();
 }
 
 /**
@@ -376,8 +377,124 @@ export function instrumentiereTransaktionen(client: object): void {
   const urspruenglich = halter.$transaction;
   halter.$transaction = function (this: unknown, ...args: unknown[]): unknown {
     herkunftAufzeichnen();
+    // Den Rückruf so umhüllen, dass der Fachcode den beobachteten Client
+    // bekommt. Nur die Rückrufform — die Feldform (`$transaction([…])`) reicht
+    // keinen Client weiter und hat nichts zu beobachten.
+    const [erstes, ...rest] = args;
+    if (typeof erstes === 'function') {
+      const rueckruf = erstes as (tx: unknown) => unknown;
+      return urspruenglich.apply(this, [(tx: unknown) => rueckruf(beobachte(tx)), ...rest]);
+    }
     return urspruenglich.apply(this, args);
   };
+}
+
+/**
+ * Aufrufstellen der einzelnen Datenbankzugriffe — nicht nur der Transaktionen.
+ *
+ * Dieselbe Falle wie beim `BEGIN`: beim Absenden der Anweisung ist der
+ * Aufrufer nicht mehr auf dem Stapel. Greifbar ist er an dem `tx`-Client, den
+ * `$transaction` an den Fachcode weiterreicht — dort steht `findFirst` noch
+ * synchron im Aufruf. Deshalb wird der Client in einen Stellvertreter
+ * gehüllt, der jeden Zugriff festhält, bevor er weiterreicht.
+ */
+const zugriffe = new Map<string, number>();
+
+function beobachte(tx: unknown): unknown {
+  if (typeof tx !== 'object' || tx === null) return tx;
+  return new Proxy(tx as Record<string, unknown>, {
+    get(ziel, name) {
+      const wert = Reflect.get(ziel, name);
+      if (typeof name !== 'string' || name.startsWith('__')) return wert;
+
+      // `$executeRaw`, `$queryRaw` — direkt am Client.
+      if (typeof wert === 'function') {
+        return (...args: unknown[]) => {
+          festhalten(name, '');
+          return (wert as LoseFunktion).apply(ziel, args);
+        };
+      }
+      // Modell-Delegierte: `tx.workStepInstance.findFirst(…)`.
+      if (typeof wert === 'object' && wert !== null) {
+        return new Proxy(wert as Record<string, unknown>, {
+          get(modell, vorgang) {
+            const fn = Reflect.get(modell, vorgang);
+            if (typeof fn !== 'function' || typeof vorgang !== 'string') return fn;
+            return (...args: unknown[]) => {
+              festhalten(name, vorgang);
+              return (fn as LoseFunktion).apply(modell, args);
+            };
+          },
+        });
+      }
+      return wert;
+    },
+  });
+}
+
+function festhalten(modell: string, vorgang: string): void {
+  const stelle = stelleAusStapel(new Error().stack);
+  const was = vorgang ? `${modell}.${vorgang}` : modell;
+  const schluessel = `${was}\u0000${stelle ?? '(unbekannt)'}`;
+  zugriffe.set(schluessel, (zugriffe.get(schluessel) ?? 0) + 1);
+}
+
+/**
+ * Ist das ein lesender Vorgang?
+ *
+ * Eingeordnet wird am **Vorgangsnamen von Prisma**, nicht am SQL-Text — auf
+ * dieser Ebene gibt es noch keinen. Die Falle ist dieselbe wie bei
+ * `SELECT set_config(…)` in der Einordnung nach Anweisungstext: greift man zu
+ * weit, wandern Schreibvorgänge in die Lesespalte und machen genau die Zahl
+ * größer, um die es hier geht. Deshalb der Vorgang **am Ende** und nicht ein
+ * Namensbestandteil.
+ */
+export function istLesend(vorgang: string): boolean {
+  return /\.(findFirst|findUnique|findMany|count|aggregate|groupBy|findFirstOrThrow|findUniqueOrThrow)$/.test(
+    vorgang,
+  );
+}
+
+export interface Zugriffszeile {
+  vorgang: string;
+  stelle: string;
+  jeStapel: number;
+  lesend: boolean;
+}
+
+export function fasseZugriffeZusammen(stapel: number): Zugriffszeile[] {
+  return [...zugriffe.entries()]
+    .map(([schluessel, anzahl]) => {
+      const [vorgang, stelle] = schluessel.split('\u0000') as [string, string];
+      return { vorgang, stelle, jeStapel: anzahl / stapel, lesend: istLesend(vorgang) };
+    })
+    .sort((a, b) => b.jeStapel - a.jeStapel);
+}
+
+export function formatZugriffe(zeilen: readonly Zugriffszeile[], grenze = 20): string {
+  if (zeilen.length === 0) return '';
+  const lesend = zeilen.filter((z) => z.lesend);
+  const summe = lesend.reduce((s, z) => s + z.jeStapel, 0);
+
+  // Nach Modell zusammengefasst — die Frage lautet „welche Zeile wird mehrfach
+  // gelesen", und die stellt sich je Tabelle und nicht je Aufrufstelle.
+  const jeModell = new Map<string, number>();
+  for (const z of lesend) {
+    const modell = z.vorgang.split('.')[0]!;
+    jeModell.set(modell, (jeModell.get(modell) ?? 0) + z.jeStapel);
+  }
+
+  return [
+    `  Lesevorgänge je Stapel: ${summe.toFixed(1)}, nach Tabelle:`,
+    ...[...jeModell.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, grenze)
+      .map(([modell, anzahl]) => `    ${anzahl.toFixed(1).padStart(5)}×  ${modell}`),
+    '  Nach Aufrufstelle:',
+    ...lesend
+      .slice(0, grenze)
+      .map((z) => `    ${z.jeStapel.toFixed(1).padStart(5)}×  ${z.vorgang}  ←  ${z.stelle}`),
+  ].join('\n');
 }
 
 /** Aufrufstellen, die eine Transaktion öffnen — absteigend nach Häufigkeit. */
