@@ -765,6 +765,8 @@ _Und ein dritter, einen Tag später:_ Der cgroup-Zähler eines Containers versch
 
   **Dritter Nachtrag (15.08.2026), auf der Zielhardware:** die Richtung hält ein drittes Mal — vier Organisationen gewinnen **5 von 6** verschränkten Runden, Median **+8,8 %**. Neu ist, was die Auslastung dazu sagt: Postgres' CPU-Verbrauch ist mit vier Organisationen **exakt derselbe** wie mit einer (0,47 Kerne im Mittel, 0,90 gegen 0,92 in der Spitze). Der Gewinn kommt also **nicht** daher, dass die Datenbank endlich parallel rechnen darf. Wer den Zähler verfeinert, um Postgres zu entfesseln, würde damit das falsche Problem angehen — die Zahlen stehen bei der Kapazitätsmessung.
 
+  **Vierter Nachtrag (16.08.2026), und er bestätigt den Satz oben:** die Zeitnahme im Harness zählt **179 Datenbankaufrufe je Stapel**, also rund 45 je Kommando. Der vermutete Kostenträger — die Zahl der Aufrufe je Kommando — ist damit gemessen und nicht mehr erschlossen. Was mit der Last wächst, ist ausschließlich das Warten auf eine freie Verbindung (1 ms bei zehn Geräten, 6783 ms bei hundert); die Arbeit in Node bleibt bei rund 200–500 ms je Stapel konstant.
+
 - **Der Revisionsvergleich sitzt in der normalen Abschlussvalidierung**, nicht im Sync-Pfad. docs/06 listet ihn unter den Bedingungen, die der Server beim Abschluss erneut prüft — und ein Online-Client kann genauso einen veralteten Dokumentsatz vor sich haben wie ein Offline-Gerät (eine Seite, die über eine Freigabe hinweg offen bleibt). Ein zweiter Erkennungspfad wäre eine zweite Gelegenheit, es falsch zu machen. Folge: `CompleteStepForm` sendet die angezeigten Revisions-IDs mit; ein leeres Feld heißt „keine Aussage" und löst deshalb keinen Konflikt aus, ein _überholte_ Bindung dagegen immer.
 - **Die Outbox darf ohne Berechtigung zugestellt werden.** `processSyncCommands` prüft absichtlich **kein** `sync.execute` — ein Rechteentzug würde sonst offline erfasste Arbeit dauerhaft auf dem Tablet einsperren, während docs/06 ausdrücklich verlangt, dass sie erhalten bleibt und zur Entscheidung wird (Negativtest #5). _Angewendet_ wird trotzdem nichts ohne Berechtigung: jedes Kommando wird einzeln autorisiert und wird andernfalls zum `PERMISSION_REVOKED`-Konflikt mit unveränderter Nutzlast. Lesen (Changes, Offline-Bundle) bleibt hinter `sync.execute` — das gibt Daten heraus, statt sie entgegenzunehmen.
 - **„Weiterhin gültig" überspringt keine Prüfungen.** Die Entscheidung lautet „die alte Revision ist weiterhin akzeptabel", nicht „Abschluss durchwinken": `acceptAsValid` schickt die Abschlussmeldung durch dieselbe `validateSubmissionWithin`, nur mit der Revisionsfrage als bereits beantwortet markiert. Ein Schritt mit fehlendem Pflichtfoto bleibt auch nach dieser Entscheidung abgelehnt.
@@ -1145,8 +1147,9 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - Die Zielhardware (2 vCPU, 7,8 GB) trägt **19 gleichzeitige Geräte** unter dem 3-Sekunden-Ziel. Verlangt sind **200**. Der p95 liegt beim Siebenfachen.
    - **Mehr Kerne lösen das nicht** — die halbe Datenbank-CPU kostet nur 12 % Durchsatz. Aus „7,5-facher Durchsatz" folgen **nicht** „15 Kerne"; diese Rechnung stand hier und ist widerlegt.
    - **Mehr Organisationen lösen es auch nicht** — sie bringen gemessene +8,8 %, nicht das Vielfache.
-   - Der größere CPU-Verbraucher ist **Node** (0,70 Kerne) und nicht Postgres (0,47), und keiner von beiden ist ausgelastet. **Es wird gewartet, und worauf, ist noch nicht gemessen.**
-   - Deshalb ist der nächste Schritt **kein weiterer Durchsatzlauf**, sondern eine Aufteilung der 111 ms je Stapel (siehe unten).
+   - Der größere CPU-Verbraucher ist **Node** (0,70 Kerne) und nicht Postgres (0,47), und keiner von beiden ist ausgelastet.
+   - **Gewartet wird auf eine freie Datenbankverbindung**, und der Grund sind **179 Datenbankaufrufe je Stapel** (rund 45 je Kommando). Bei 9 Stapeln/s sind das 1600 Aufrufe je Sekunde — die Decke dieser Maschine.
+   - **Der Hebel ist deshalb kein Hardwarehebel**, sondern die Zahl der Aufrufe je Kommando. Halbiert man sie, halbiert sich die benötigte Maschine.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
 
@@ -1269,7 +1272,29 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Der eigentliche Befund ist ein anderer: nicht die Datenbank ist der große Verbraucher, sondern die Anwendung.** Node zieht im Mittel 0,70 Kerne, Postgres 0,47 — und Postgres ist mit 0,9 Kernen in der Spitze **nicht ausgelastet**. Es bekommt schlicht nicht mehr Arbeit zugeteilt. Die Decke liegt also vor der Datenbank, nicht in ihr.
 
-   **Was damit offen ist und wie man es misst.** Beide CPUs zusammen liegen bei rund 1,2 von 2 Kernen im Mittel — es wird also gewartet, und worauf, sagt keine der bisherigen Messungen. Das nächste Instrument ist nicht noch ein Durchsatzlauf, sondern `pg_stat_activity` (Wartegründe während des Laufs) und eine Zeitnahme **innerhalb** des Harness: wie viel der 111 ms je Stapel entfällt auf Datenbankaufrufe, wie viel auf Arbeit in Node, wie viel auf Warten auf eine freie Verbindung (`DATABASE_POOL_MAX=25` bei 50 gleichzeitigen Geräten ist ein naheliegender Verdacht, aber eben nur einer).
+   **Was damit offen war.** Beide CPUs zusammen liegen bei rund 1,2 von 2 Kernen im Mittel — es wird also gewartet, und worauf, sagte keine der Messungen von außen. Die Zeitnahme im Harness (`test/load/support/zeitnahme.ts`) beantwortet das; sie steht direkt darunter.
+
+   **Wohin die Zeit geht — gemessen am 16.08.2026, und damit ist die Kette geschlossen.**
+
+   Je Gerätezahl drei Durchgänge, Vorlast unter 0,6; angegeben ist der mittlere Durchgang:
+
+   | Geräte | Stapeldauer | Datenbank offen | darunter **Verbindung** | Node   | gehaltene Verbindungen |
+   | ------ | ----------- | --------------- | ----------------------- | ------ | ---------------------- |
+   | 10     | 1152 ms     | 923 ms (80 %)   | **1 ms (0 %)**          | 213 ms | 10 von 25              |
+   | 50     | 4928 ms     | 4670 ms (95 %)  | **2024 ms (41 %)**      | 213 ms | **25 von 25**          |
+   | 100    | 9626 ms     | 9039 ms (94 %)  | **6783 ms (70 %)**      | 511 ms | **25 von 25**          |
+
+   **Node ist eine Konstante.** 213–575 ms je Stapel, unabhängig von der Gerätezahl. Der größere CPU-Verbraucher aus der Auslastungsmessung ist also **nicht** der Engpass — er ist ein fester Preis je Stapel, der bei zehn Geräten 19 % ausmacht und bei hundert noch 5 %.
+
+   **Was mit der Last wächst, ist das Warten auf eine freie Verbindung:** von 1 ms auf 6783 ms. Ab 50 Geräten ist der Pool ausgeschöpft (25 von 25), und ab da ist die Stapeldauer im Wesentlichen Wartezeit vor der Datenbank.
+
+   **Die Ursache steht in derselben Zeile: 179 Abfragen je Stapel.** Ein Stapel sind vier Kommandos — also rund **45 Datenbankaufrufe je Kommando**, verteilt auf die 22,6 Transaktionen, die weiter oben schon gezählt wurden (jede kostet für sich `BEGIN`, das Setzen von `app.current_org_id` und `COMMIT`). Eine Verbindung ist damit lange belegt, und bei 25 Verbindungen warten die übrigen Geräte.
+
+   **Damit erklärt sich alles Vorherige auf einmal.** Der Durchsatz liegt bei rund 9 Stapeln/s; das sind **etwa 1600 Datenbankaufrufe je Sekunde**, und das ist die Decke dieser Maschine. Deshalb ändert die Poolgröße nichts (die Aufrufe werden nicht weniger), deshalb kostet die halbe Datenbank-CPU nur 12 % (die Zeit vergeht im Warten, nicht im Rechnen), deshalb bringen vier Organisationen nur 8,8 % (sie verteilen dieselbe Menge Aufrufe), und deshalb erreicht der Entwicklungsrechner 57 Stapel/s — er schafft rund 10 000 Aufrufe je Sekunde statt 1600.
+
+   **Der Hebel ist damit erstmals benannt und er ist kein Hardwarehebel:** die **Zahl der Datenbankaufrufe je Kommando**. Für 200 Geräte unter 3 s braucht es 67 Stapel/s; bei 179 Aufrufen je Stapel wären das 12 000 Aufrufe je Sekunde. Halbiert man die Aufrufe je Stapel, halbiert sich die benötigte Maschine — und das ist eine Änderung im Code, keine Beschaffung.
+
+   **Was das nicht sagt.** Welche der 179 Aufrufe entbehrlich sind, ist damit **nicht** gemessen. Der nächste Schritt wäre, sie nach Anweisungstext zu gruppieren: wie viele sind Transaktionsgerüst (`BEGIN`/`SET`/`COMMIT`), wie viele wiederholte Lesevorgänge derselben Zeile, wie viele echte Schreibvorgänge. Erst das sagt, wo gekürzt werden kann.
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
