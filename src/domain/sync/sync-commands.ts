@@ -84,7 +84,7 @@ export async function processSyncCommands(
   // reach the server in the first place (Negativtest #5).
   //
   // Nothing is APPLIED without permission: every command is authorized
-  // individually in runPreflight, and one that fails becomes a
+  // individually in runPreflightWithin, and one that fails becomes a
   // PERMISSION_REVOKED conflict with its payload intact. Reading — pulling
   // changes, downloading a work package — stays behind `sync.execute`,
   // because that hands data out rather than taking it in.
@@ -142,17 +142,40 @@ async function processOne(
   command: SyncCommandEnvelope,
   batchVersions: BatchVersions,
 ): Promise<SyncCommandResult> {
+  // Die Nutzlast wird **vor** der Anmeldung geprüft, damit die Vorprüfung mit
+  // ihr in dieselbe Transaktion kann. Beantwortet wird ein Schemafehler hier
+  // aber nicht: das Kommando muss trotzdem angemeldet werden, sonst fehlte die
+  // Spur, um die es bei der Anmeldung geht. Der Fehler wird aufgehoben und
+  // unten an derselben Stelle geworfen wie zuvor — `classifyFailure` sieht
+  // denselben Fehler wie bisher.
+  const geprueft = checkPayload(command);
+
   // ── Claim ────────────────────────────────────────────────
   // The row is written BEFORE the command runs. A crash between "applied"
   // and "acknowledged" then leaves a PENDING row rather than no trace, and
   // the retry re-executes idempotently instead of being mistaken for a
   // duplicate (Negativtest #14 applied to commands rather than uploads).
-  const claim = await claimCommand(actor, deviceId, command);
+  const claim = await claimCommand(
+    actor,
+    deviceId,
+    command,
+    geprueft.ok ? geprueft.payload : undefined,
+    batchVersions,
+  );
   if (claim.kind === 'DUPLICATE') return claim.result;
+
+  // Ein Konflikt aus der Vorprüfung wird wie ein Ergebnis behandelt und nicht
+  // wie ein Fehler: die Anmeldung ist geschrieben, und der Konflikt gehört
+  // festgehalten, damit eine berechtigte Person darüber entscheiden kann.
+  if (claim.conflict) {
+    await finalizeCommand(actor, claim.commandId, command, claim.conflict, batchVersions);
+    return claim.conflict;
+  }
 
   let outcome: SyncCommandResult;
   try {
-    outcome = await executeCommand(actor, deviceId, command, batchVersions);
+    if (!geprueft.ok) throw geprueft.error;
+    outcome = await executeCommand(actor, deviceId, command, geprueft.payload);
   } catch (error) {
     outcome = await classifyFailure(actor, command, error);
   }
@@ -161,13 +184,67 @@ async function processOne(
   return outcome;
 }
 
-type Claim =
-  { kind: 'CLAIMED'; commandId: string } | { kind: 'DUPLICATE'; result: SyncCommandResult };
+/**
+ * Prüft die Nutzlast gegen das Schema ihres Kommandotyps, ohne zu werfen.
+ *
+ * Getrennt vom Ausführen, weil die Vorprüfung die **geprüfte** Nutzlast
+ * braucht und mit der Anmeldung in eine Transaktion gezogen wurde. Ungeprüft
+ * ginge etwa eine ungültige `workStepInstanceId` als Abfrage an eine
+ * `uuid`-Spalte und ließe die Anmeldung scheitern, statt das Kommando sauber
+ * abzuweisen.
+ */
+type PayloadCheck = { ok: true; payload: Record<string, unknown> } | { ok: false; error: unknown };
 
+function checkPayload(command: SyncCommandEnvelope): PayloadCheck {
+  const schema = COMMAND_PAYLOAD_SCHEMAS[command.commandType];
+  if (!schema) {
+    // The API layer's envelope schema already rejects unknown types, so
+    // reaching here means an internal caller invented one. Answered as a
+    // plain rejection rather than an internal error: there is nothing wrong
+    // with the server, the vocabulary simply does not contain this word —
+    // which is exactly how a forged `complete_work_step` dies (Negativtest #2).
+    return {
+      ok: false,
+      error: new ValidationError(`Unbekannter Kommandotyp „${command.commandType}".`),
+    };
+  }
+  const ergebnis = schema.safeParse(command.payload);
+  return ergebnis.success
+    ? { ok: true, payload: ergebnis.data as Record<string, unknown> }
+    : { ok: false, error: ergebnis.error };
+}
+
+type Claim =
+  | { kind: 'CLAIMED'; commandId: string; conflict?: SyncCommandResult }
+  | { kind: 'DUPLICATE'; result: SyncCommandResult };
+
+/**
+ * Meldet das Kommando an und prüft im selben Zug vor.
+ *
+ * **Warum beides eine Transaktion ist.** Die Vorprüfung liest nur — den
+ * Arbeitsschritt, die Berechtigung, die Zuweisung — und hatte dafür eine
+ * eigene Transaktion samt `BEGIN`, `set_config` und `COMMIT`. Bei vier
+ * Kommandos je Stapel sind das vier Transaktionen und zwölf Datenbankaufrufe
+ * für nichts als das Gerüst; gemessen wurde das mit der Zeitnahme im Lasttest
+ * (notes.md, „Warum ein Kommando fünf Transaktionen braucht"). Eine
+ * Reihenfolgebeziehung zwischen der Anmeldung und den Lesevorgängen gibt es
+ * nicht, die Trennung kaufte also nichts.
+ *
+ * **Was dabei erhalten bleibt:** die Anmeldung wird weiterhin **vor** der
+ * Ausführung festgeschrieben. Genau deshalb wandert die Vorprüfung hierher
+ * und nicht in die Transaktion des Fachdienstes — dort liefe sie erst nach
+ * der Anmeldung und wäre von deren Absturzspur getrennt.
+ *
+ * Ein Konflikt aus der Vorprüfung wird **zurückgegeben, nicht geworfen**: die
+ * Anmeldung soll trotzdem festgeschrieben werden, denn die erfassten Daten
+ * bleiben erhalten und brauchen eine Entscheidung (docs/06).
+ */
 async function claimCommand(
   actor: Actor,
   deviceId: string,
   command: SyncCommandEnvelope,
+  payload: Record<string, unknown> | undefined,
+  batchVersions: BatchVersions,
 ): Promise<Claim> {
   return withOrgContext(actor.organizationId, async (tx) => {
     const existing = await tx.syncCommand.findFirst({
@@ -189,9 +266,21 @@ async function claimCommand(
       };
     }
 
+    // Beide Wege enden gleich: das Kommando ist angemeldet, und die Vorprüfung
+    // läuft in **dieser** Transaktion. Ohne geprüfte Nutzlast entfällt sie —
+    // sie liest anhand von Feldern daraus, und der Schemafehler wird vom
+    // Aufrufer geworfen. Vorher lief sie in diesem Fall ebenso wenig, weil das
+    // Auswerten des Schemas ihr vorausging.
+    const angemeldet = async (commandId: string): Promise<Claim> => {
+      const conflict = payload
+        ? await runPreflightWithin(tx, actor, command, payload, batchVersions)
+        : null;
+      return { kind: 'CLAIMED', commandId, ...(conflict ? { conflict } : {}) };
+    };
+
     if (existing) {
       // Interrupted on a previous attempt — re-run it.
-      return { kind: 'CLAIMED' as const, commandId: existing.id };
+      return angemeldet(existing.id);
     }
 
     const created = await tx.syncCommand.create({
@@ -209,7 +298,7 @@ async function claimCommand(
       },
       select: { id: true },
     });
-    return { kind: 'CLAIMED' as const, commandId: created.id };
+    return angemeldet(created.id);
   });
 }
 
@@ -315,26 +404,10 @@ async function executeCommand(
   actor: Actor,
   deviceId: string,
   command: SyncCommandEnvelope,
-  batchVersions: BatchVersions,
+  payload: Record<string, unknown>,
 ): Promise<SyncCommandResult> {
-  const schema = COMMAND_PAYLOAD_SCHEMAS[command.commandType];
-  if (!schema) {
-    // The API layer's envelope schema already rejects unknown types, so
-    // reaching here means an internal caller invented one. Answered as a
-    // plain rejection rather than an internal error: there is nothing wrong
-    // with the server, the vocabulary simply does not contain this word —
-    // which is exactly how a forged `complete_work_step` dies (Negativtest #2).
-    throw new ValidationError(`Unbekannter Kommandotyp „${command.commandType}".`);
-  }
-  const payload = schema.parse(command.payload);
-
-  // Pre-flight, in one transaction, before anything is mutated: the two
-  // conditions that changed *while the device was away* and that must become
-  // a human decision rather than a bare error — a revoked permission and a
-  // stale entity version.
-  const preflight = await runPreflight(actor, command, payload, batchVersions);
-  if (preflight) return preflight;
-
+  // Nutzlast und Vorprüfung liegen bereits hinter uns — beides geschieht in
+  // der Transaktion der Anmeldung, siehe `claimCommand`.
   switch (command.commandType) {
     case 'start_work_step': {
       const p = payload as PayloadOf<'start_work_step'>;
@@ -516,7 +589,8 @@ async function startWorkStepIdempotently(
  * integrity, step status) is checked by the domain services themselves and
  * arrives here as a thrown error — see classifyFailure.
  */
-async function runPreflight(
+async function runPreflightWithin(
+  tx: Prisma.TransactionClient,
   actor: Actor,
   command: SyncCommandEnvelope,
   payload: Record<string, unknown>,
@@ -525,7 +599,7 @@ async function runPreflight(
   const workStepInstanceId =
     typeof payload.workStepInstanceId === 'string' ? payload.workStepInstanceId : undefined;
 
-  return withOrgContext(actor.organizationId, async (tx) => {
+  {
     const instance = workStepInstanceId
       ? await tx.workStepInstance.findFirst({
           where: { id: workStepInstanceId },
@@ -608,7 +682,7 @@ async function runPreflight(
     }
 
     return null;
-  });
+  }
 }
 
 /**
