@@ -24,6 +24,8 @@ import {
   fasseZeitenZusammen,
   formatZeitbild,
   formatAnweisungen,
+  fasseHerkunftZusammen,
+  formatHerkunft,
   setzeGleichzeitigkeitZurueck,
   type Stapelzeit,
   type Zeitbild,
@@ -170,6 +172,8 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   const zeitbild = fasseZeitenZusammen(zeiten, Number(process.env.DATABASE_POOL_MAX ?? 25));
   console.log(formatZeitbild(zeitbild));
   console.log(formatAnweisungen(zeitbild.anweisungen));
+  const herkunft = formatHerkunft(fasseHerkunftZusammen(Math.max(1, zeiten.length)));
+  if (herkunft) console.log(herkunft);
 
   return {
     measurement,
