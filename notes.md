@@ -709,6 +709,28 @@ Vorher scheiterte er am Modulladen, nachher erst an der fehlenden `DATABASE_URL`
 
 **Lehre:** Ein Einrichtungsschritt, den nur die CI kennt, ist kein dokumentierter Schritt. Wo eine Anleitung „installieren und starten" sagt, gehört das, was dazwischen nötig ist, in ein `postinstall` — nicht in einen Satz, den jemand lesen müsste. Und: wer eine Installationsprobe schreibt, prüft **das Ergebnis** (lädt es?) statt eines Pfades, von dem er glaubt, dass er dort liegt.
 
+### Ein Suchmuster trifft, was es findet — nicht, was gemeint war
+
+Bei der Skalierungsmessung (15.08.2026) haben **drei** Prüfungen hintereinander etwas Falsches gemeldet, alle nach demselben Muster: Die gesuchte Sache wurde über ein Muster identifiziert, und das Muster traf etwas anderes.
+
+1. `docker ps --filter ancestor=postgres:16-alpine` sollte den gerade gestarteten Testcontainer finden. Es traf einen **fremden, seit drei Tagen laufenden** Container. Befund: „die CPU-Quote kommt nicht am Container an" (`NanoCpus=0`) — die Quote wirkte einwandfrei.
+2. `pgrep -f "test/load/run.ts"` sollte den Lasttest-Prozess finden. Es traf **die eigene SSH-Kommandozeile**, weil der übertragene Skripttext diese Zeichenfolge enthält. Der Abtaster beobachtete daraufhin 21 Minuten lang die falsche PID und wäre nie fertig geworden.
+3. `awk "{print \$14+\$15}" /proc/$PID/stat 2>/dev/null || echo 0` sollte die CPU-Zeit lesen. Es schlug fehl, und `|| echo 0` machte aus dem Fehlschlag den **Messwert Null** — 40 Zeilen lang, ohne ein einziges Fehlerzeichen.
+
+Behoben nicht durch bessere Muster, sondern indem die Identität **übergeben statt gesucht** wird: die Container-ID vom gestarteten Container (`container.getId()`), die PID vom Aufrufer (`$!` des gestarteten Prozesses, und von dort der Prozessbaum über `/proc/PID/task/PID/children`).
+
+**Lehre:** Wer eine Sache gerade selbst gestartet hat, hat ihre Kennung in der Hand — sie danach wieder zu **suchen**, wirft diese Gewissheit weg und ersetzt sie durch eine Ähnlichkeitsabfrage. Ein Muster kann nicht wissen, welchen der Treffer man meinte. Und ein Rückfallwert wie `|| echo 0` gehört nur dorthin, wo Null eine gültige Antwort ist — sonst tarnt er den Fehlschlag als Messwert, und das ist schlimmer als ein Absturz.
+
+### Ein Mittelwert über den ganzen Lauf verwischt genau die Phase, um die es geht
+
+Derselbe Messtag, eine eigene Kategorie: Der Profillauf ergab „1,13 von 2 Kernen ausgelastet", und daraus folgte der Schluss „die Maschine hängt nicht an der CPU". Der Schluss war zu stark.
+
+Der Wert ist über die **gesamte** Laufzeit gerechnet — einschließlich Containerstart, Migrationen und Befüllung, in denen fast nichts passiert. Die Zeitreihe je Sekunde zeigt drei deutliche Berge (die drei Wiederholungen) mit **1,5–1,75 Kernen**, also 75–88 % statt 57 %. Die Aussage kippt damit von „reichlich Luft" auf „nahe an der Grenze".
+
+**Lehre:** Bei einem Lauf mit Vor- und Nachlauf sagt der Mittelwert über die Gesamtdauer wenig. Aufzuzeichnen ist die Reihe, nicht die Summe — und auszuwerten ist das Fenster, das die Frage betrifft.
+
+_Nebenbei ein zweiter Fallstrick derselben Messung:_ Wer die CPU-Zeit eines **Prozessbaums** summiert, bekommt negative Zuwächse, sobald ein Kindprozess endet — dessen verbrauchte Zeit verschwindet aus der Summe. In der Reihe steht deshalb bei Sekunde 6 eine −2,18. Kumulierte Zähler sind nur dann monoton, wenn die Menge der Zähler es auch ist.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -1121,6 +1143,8 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    Auf der Zielhardware braucht es dafür **Docker, Node ≥ 22.13 und pnpm**, sonst nichts — der Lauf bringt Postgres und MinIO als Container selbst mit. `LOAD_REPEAT=5` ist kein Feinschliff: ein einzelner Lauf beantwortet die Frage auch dort nicht, weil die Streuung vom Szenario kommt und nicht von der Maschine. Die Reihe kennt deshalb „nicht entschieden" als eigenen Ausgang — siehe „Der Lauf urteilt jetzt über eine Reihe, nicht über eine Zahl". `LOAD_RESULT_FILE` schreibt Messwerte samt Maschinensteckbrief als JSON; ohne den ist ein Wert später keiner Hardware zuzuordnen.
 
+   `LOAD_CPU_QUOTA=1` beschränkt **die Container** — nicht den Node-Prozess — auf einen Bruchteil der CPU; damit lässt sich prüfen, ob der Durchsatz überhaupt an der Rechenleistung hängt. An die Container, weil der erwartete Engpass in der Datenbank sitzt und die im Container läuft: ein `taskset` auf Node hätte etwas gemessen, das wie ein Ein-Kern-Lauf aussieht und keiner ist. Der Steckbrief zeichnet die Quote mit auf, sonst unterscheiden sich zwei Läufe, die genau dafür gemacht wurden, in keiner festgehaltenen Angabe.
+
    **Auf der Zielhardware gemessen (15.08.2026) — und das Ziel wird um das Siebenfache verfehlt.**
 
    |                          | Zielhardware                | Entwicklungsrechner           | Ziel      |
@@ -1174,7 +1198,38 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Was das für die Auslegung heißt.** Für 200 Geräte unter 3 s braucht es rund **67 Stapel/s**, also etwa das **7,5-fache** des heutigen Durchsatzes. Unterstellt man, dass der Durchsatz mit den Kernen skaliert, wären das grob **15 Kerne** — aber genau das ist eine Annahme und keine Messung. Sie zu prüfen kostet einen Lauf auf einer größeren Maschine; das Skript dafür liegt als `~/ProQuaDo/kapazitaet.sh` bereit.
 
-   **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie viele Kerne die Anlage bekommt** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
+   **Nachgemessen am 15.08.2026 — die Annahme trägt nicht, und die 15 Kerne sind damit hinfällig.** Geprüft wurde nach unten: `LOAD_CPU_QUOTA` (siehe `test/load/support/infra.ts`) beschränkt die Container auf einen Bruchteil der CPU. Halbiert die halbe Datenbank-CPU den Durchsatz, skaliert er mit Kernen.
+
+   | Lauf | Datenbank-CPU       | Durchsatz Median | Einzelläufe (Stapel/s)             |
+   | ---- | ------------------- | ---------------- | ---------------------------------- |
+   | 1.   | 2 Kerne             | 9,22/s           | 7,98 · 10,06 · 8,36 · 9,22 · 10,26 |
+   | 2.   | **1 Kern**          | **8,15/s**       | 8,14 · 5,32 · 8,15 · 9,15 · 8,93   |
+   | 3.   | 2 Kerne (Kontrolle) | 9,53/s           | 6,66 · 9,16 · 9,53 · 10,03 · 10,55 |
+
+   Je 50 Geräte, 5 Wiederholungen, Vorlast 0,51–0,57, null abgelehnte Kommandos. **50 Geräte, weil dort gesättigt** (p95 weit über dem Ziel) **und trotzdem nichts wegbricht** — bei 100 Geräten werden Kommandos abgelehnt, und der Durchsatz zählt dann teils Fehlschläge mit. Der dritte Lauf ist die Drift-Kontrolle: er trifft den Ausgangswert, die Maschine hat sich über die Reihe also nicht verändert (die Lehre aus „Blockweise verglichene Konfigurationen messen die Maschine").
+
+   **Die halbe Datenbank-CPU kostet 12 %, nicht 50 %.** Die Wertebereiche überlappen fast vollständig.
+
+   **Die Auslastung erklärt es.** Aus den kumulierten CPU-Zählern (cgroup v2 für die Container, `/proc/PID/stat` für den Prozessbaum), ohne Quote:
+
+   | Komponente | Mittel über den Lauf | in den Sync-Phasen |
+   | ---------- | -------------------- | ------------------ |
+   | Node       | 0,65 Kerne           | bis **1,52**       |
+   | Postgres   | 0,47 Kerne           | bis **0,88**       |
+   | MinIO      | 0,01 Kerne           | —                  |
+   | zusammen   | 1,13 von 2           | **1,5–1,75 von 2** |
+
+   **Postgres kommt auch mit zwei erlaubten Kernen nie über etwa einen.** Das ist der eigentliche Befund, und er passt zu dem, was oben schon steht: die Arbeit ist je Organisation über den Outbox-Zähler serialisiert, und der Lasttest fährt **eine** Organisation. Was serialisiert ist, wird durch einen zweiten Kern nicht schneller — deshalb kostet die Quote so wenig, und deshalb lässt sich aus „mehr Kerne" kein proportional höherer Durchsatz ableiten.
+
+   **Was damit nicht gezeigt ist.** Die Messung beantwortet die Frage nach **unten** und nicht die nach oben. Sie zeigt nicht, dass eine größere Maschine nichts brächte: in den Sync-Phasen liegen 1,5–1,75 der 2 Kerne an, die Kiste ist also nahe an ihrer Grenze, und **Node** — der größere Verbraucher — nutzt sehr wohl mehr als einen Kern. Der eine vorliegende Datenpunkt einer großen Maschine (MacBook, 18 Kerne) erreicht **57 Stapel/s**, nahe an den benötigten 67. Ob das an der Kernzahl oder an der deutlich höheren Einzelkernleistung liegt, ist aus den vorhandenen Daten **nicht trennbar**.
+
+   **Zwei Erklärungen wurden geprüft und scheiden aus.** Der Speicher ist es nicht: ein Commit kostet auf dieser Maschine **0,74 ms** (`synchronous_commit=on`, 200 Einzeltransaktionen in 147 ms) bzw. 0,49 ms mit `off` — die Rechnung „22,6 Transaktionen je Stapel × 5 ms `fsync` ≈ 111 ms" wäre eine hübsche Erklärung gewesen und ist falsch. Und der Objektspeicher ist es erst recht nicht (0,01 Kerne).
+
+   **Was als Nächstes zu messen wäre**, um die Auslegung zu entscheiden: ein Lauf auf einer Maschine **desselben Typs mit mehr Kernen** (etwa 8 vCPU derselben EPYC-Reihe) — das trennt Kernzahl von Kerngeschwindigkeit, was der Vergleich mit dem MacBook nicht kann. Und ein Lauf mit **mehreren Organisationen** bei sonst gleicher Gerätezahl, weil genau dort die Serialisierung sitzt, die Postgres bei einem Kern hält.
+
+   **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
+
+   _Hier stand „wie viele Kerne die Anlage bekommt". Nach der Skalierungsmessung ist das die falsche Frage: Postgres nutzt für eine Organisation nicht mehr als etwa einen Kern, Kerne allein kaufen den Faktor 7 also nicht._
 
    **Die Hebel sind durchgemessen** („Messreihe: welcher Hebel wirklich wirkt", 10.08.2026), und die Reihenfolge lautet nicht mehr „zuerst Verbindungsverwaltung": die Poolgröße ist kein Hebel mehr. Den **p95** bewegt allein die Serialisierung des Outbox-Zählers je Organisation; die Zahl der Transaktionen je Stapel bestimmt den Median und wurde bereits um 15 % gesenkt, ohne dass der Zielwert davon profitierte. **`UV_THREADPOOL_SIZE=16`** ist ein risikoloser Gewinn von etwa 5 % und gehört in die Deployment-Konfiguration — dass er allein die Lücke schließt, ist allerdings **nicht belegt**: eine verschränkte Probe mit fünf Paaren blieb im Rauschen.
 
