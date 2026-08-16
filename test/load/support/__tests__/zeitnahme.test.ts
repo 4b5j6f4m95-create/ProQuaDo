@@ -13,7 +13,7 @@
  * bei der Vereinigung nicht.
  */
 
-import { vereinigteDauer } from '../zeitnahme';
+import { vereinigteDauer, normalisiere, kategorie } from '../zeitnahme';
 
 describe('vereinigteDauer', () => {
   it('ist null ohne Abschnitte', () => {
@@ -89,5 +89,61 @@ describe('vereinigteDauer', () => {
     const fruehester = Math.min(...abschnitte.map(([a]) => a));
     const spaetestes = Math.max(...abschnitte.map(([, b]) => b));
     expect(vereinigteDauer(abschnitte)).toBeLessThanOrEqual(spaetestes - fruehester);
+  });
+});
+
+describe('normalisiere', () => {
+  it('fasst Zeilenumbrüche und Einrückung zusammen', () => {
+    expect(normalisiere('SELECT 1\n  FROM   t')).toBe('SELECT 1 FROM t');
+  });
+
+  it('legt dieselbe Abfrage mit verschieden langer Parameterliste zusammen', () => {
+    // Sonst erscheint eine Abfrage, die je nach Datenlage zwei oder drei Werte
+    // einsetzt, als zwei verschiedene — und beide sähen halb so häufig aus,
+    // wie sie sind.
+    const zwei = normalisiere('SELECT * FROM t WHERE id IN ($1,$2)');
+    const drei = normalisiere('SELECT * FROM t WHERE id IN ($1, $2, $3)');
+    expect(zwei).toBe(drei);
+  });
+
+  it('lässt einen einzelnen Parameter stehen', () => {
+    // `$1` allein ist keine Liste; ihn mitzuersetzen würde Abfragen
+    // zusammenwerfen, die sich tatsächlich unterscheiden.
+    expect(normalisiere('SELECT * FROM t WHERE id = $1')).toBe('SELECT * FROM t WHERE id = $1');
+  });
+
+  it('entfernt abschließende Semikolons', () => {
+    expect(normalisiere('COMMIT;')).toBe('COMMIT');
+  });
+});
+
+describe('kategorie', () => {
+  it.each(['BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT s1', 'RELEASE SAVEPOINT s1'])(
+    'zählt %s zum Transaktionsgerüst',
+    (sql) => {
+      expect(kategorie(sql)).toBe('Transaktionsgerüst');
+    },
+  );
+
+  it('zählt das Setzen der Organisation zum Gerüst, nicht zum Lesen', () => {
+    // Der Fall, der die Reihenfolge der Prüfungen bestimmt: die Anweisung
+    // beginnt mit SELECT, liest aber nichts — sie baut die Transaktion auf.
+    // Nach der Leseregel eingeordnet, verschöbe sie ein Sechstel aller
+    // Aufrufe in die falsche Spalte.
+    expect(kategorie("SELECT set_config('app.current_org_id', $1, true)")).toBe(
+      'Transaktionsgerüst',
+    );
+  });
+
+  it('unterscheidet Lesen und Schreiben', () => {
+    expect(kategorie('SELECT "id" FROM "work_step_instances"')).toBe('Lesen');
+    expect(kategorie('INSERT INTO "sync_commands" ("id") VALUES ($1)')).toBe('Schreiben');
+    expect(kategorie('UPDATE "sync_commands" SET "status" = $1')).toBe('Schreiben');
+    expect(kategorie('DELETE FROM "sync_commands"')).toBe('Schreiben');
+  });
+
+  it('ist unempfindlich gegen führenden Leerraum und Kleinschreibung', () => {
+    expect(kategorie('  begin')).toBe('Transaktionsgerüst');
+    expect(kategorie('\n  select 1')).toBe('Lesen');
   });
 });

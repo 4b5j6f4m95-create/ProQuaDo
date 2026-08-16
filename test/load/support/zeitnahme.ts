@@ -92,6 +92,20 @@ let gehaltenMax = 0;
 let installiert = false;
 
 /**
+ * Was tatsächlich zur Datenbank geht, nach Anweisung gruppiert.
+ *
+ * Die Zeitnahme hat 179 Aufrufe je Stapel gezählt und damit den Engpass
+ * benannt — aber nicht, **welche** davon entbehrlich sind. Eine Zahl allein
+ * sagt „zu viele", eine Gruppierung sagt „diese hier". Erst damit lässt sich
+ * entscheiden, wo gekürzt werden kann.
+ *
+ * Global und nicht je Stapel: gefragt ist die Zusammensetzung, und die ist
+ * über alle Stapel dieselbe. Je Stapel gehalten wäre es dieselbe Karte in
+ * fünfzig Kopien.
+ */
+const anweisungen = new Map<string, { anzahl: number; dauerMs: number }>();
+
+/**
  * Hängt die Zeitnahme in `pg` ein. **Muss aufgerufen werden, bevor
  * `@/lib/db/client` das erste Mal geladen wird** — danach steht der Pool
  * bereits. `run.ts` lädt Szenarien und Fixtures ohnehin erst nach dem Start
@@ -154,7 +168,22 @@ export function instrumentiere(): void {
     // `finally` und nicht `then`: eine fehlgeschlagene Abfrage hat trotzdem
     // Zeit gekostet und gehört in die Aufteilung.
     return (urspruenglicheQuery.apply(this, args) as Promise<unknown>).finally(() => {
-      speicher.getStore()?.abfragen.push([begonnen, performance.now()]);
+      const eimer = speicher.getStore();
+      // Nur innerhalb eines Stapels. Ohne diese Bedingung wanderten die
+      // Abfragen des Befüllens mit in die Gruppierung — und die sind um ein
+      // Vielfaches zahlreicher als die des Syncs.
+      if (!eimer) return;
+
+      const beendet = performance.now();
+      eimer.abfragen.push([begonnen, beendet]);
+
+      const text = anweisungstext(args[0]);
+      if (text === null) return;
+      const schluessel = normalisiere(text);
+      const eintrag = anweisungen.get(schluessel) ?? { anzahl: 0, dauerMs: 0 };
+      eintrag.anzahl += 1;
+      eintrag.dauerMs += beendet - begonnen;
+      anweisungen.set(schluessel, eintrag);
     });
   };
 }
@@ -218,6 +247,63 @@ export function vereinigteDauer(abschnitte: readonly Abschnitt[]): number {
   return summe + (offenBis - offenAb);
 }
 
+/**
+ * Die Anweisung aus dem ersten Argument von `query`.
+ *
+ * `pg` nimmt beides: eine Zeichenkette (so kommen `BEGIN` und `COMMIT`) und
+ * ein Objekt mit `text` (so kommt alles, was Prisma über den Adapter stellt).
+ * Wer nur eine der beiden Formen liest, verliert genau die Hälfte, um die es
+ * hier geht — das Transaktionsgerüst.
+ */
+function anweisungstext(erstes: unknown): string | null {
+  if (typeof erstes === 'string') return erstes;
+  if (typeof erstes === 'object' && erstes !== null) {
+    const text = (erstes as { text?: unknown }).text;
+    if (typeof text === 'string') return text;
+  }
+  return null;
+}
+
+/**
+ * Vereinheitlicht eine Anweisung, damit gleichartige zusammenfallen.
+ *
+ * Prisma stellt bereits parametrisierte Anweisungen — Werte stehen also
+ * ohnehin als `$1`, `$2` darin. Zusammenzufassen bleibt der Fall, in dem sich
+ * dieselbe Abfrage nur in der **Länge** einer Parameterliste unterscheidet
+ * (`IN ($1,$2)` gegen `IN ($1,$2,$3)`): das ist dieselbe Anweisung und darf
+ * nicht als zwei erscheinen.
+ */
+export function normalisiere(sql: string): string {
+  return sql
+    .replace(/\s+/g, ' ')
+    .replace(/\$\d+(\s*,\s*\$\d+)+/g, '$N,…')
+    .replace(/;+\s*$/, '')
+    .trim();
+}
+
+export type Kategorie = 'Transaktionsgerüst' | 'Lesen' | 'Schreiben' | 'Sonstiges';
+
+/**
+ * Ordnet eine Anweisung ein.
+ *
+ * **Das Gerüst wird zuerst geprüft, und das ist keine Formalie.**
+ * `app.current_org_id` wird über `SELECT set_config(…)` gesetzt (siehe
+ * `src/lib/db/tenant-context.ts`) — die Anweisung beginnt also mit `SELECT`
+ * und wäre nach der Leseregel ein Lesevorgang. Sie liest aber nichts; sie
+ * gehört zum Aufbau jeder einzelnen Transaktion und damit zu genau dem
+ * Anteil, dessen Größe hier zur Debatte steht.
+ */
+export function kategorie(sql: string): Kategorie {
+  const s = sql.trimStart().toUpperCase();
+  if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|SET |DEALLOCATE|DISCARD)/.test(s)) {
+    return 'Transaktionsgerüst';
+  }
+  if (s.includes('SET_CONFIG(')) return 'Transaktionsgerüst';
+  if (/^SELECT/.test(s)) return 'Lesen';
+  if (/^(INSERT|UPDATE|DELETE)/.test(s)) return 'Schreiben';
+  return 'Sonstiges';
+}
+
 /** Höchste Zahl gleichzeitig **gehaltener Verbindungen** seit dem Zurücksetzen. */
 export function hoechsteGleichzeitigkeit(): number {
   return gehaltenMax;
@@ -225,6 +311,7 @@ export function hoechsteGleichzeitigkeit(): number {
 
 export function setzeGleichzeitigkeitZurueck(): void {
   gehaltenMax = gehalten;
+  anweisungen.clear();
 }
 
 export interface Zeitbild {
@@ -247,6 +334,35 @@ export interface Zeitbild {
   /** Höchste Zahl gleichzeitig **gehaltener** Verbindungen. */
   hoechsteGleichzeitigkeit: number;
   poolMax: number;
+  /** Zusammensetzung der Aufrufe — siehe `Anweisungsbild`. */
+  anweisungen: Anweisungsbild;
+}
+
+export interface Anweisungszeile {
+  anweisung: string;
+  kategorie: Kategorie;
+  /** Aufrufe **je Stapel** — die Zahl, um die es geht. */
+  jeStapel: number;
+  anzahl: number;
+  dauerMs: number;
+}
+
+export interface Anweisungsbild {
+  /** Aufrufe je Stapel, nach Kategorie. */
+  jeKategorie: {
+    kategorie: Kategorie;
+    jeStapel: number;
+    anteilProzent: number;
+    /** Aufgewendete Zeit je Stapel. Die Zahl der Aufrufe allein sagt nicht,
+     *  ob eine Art teuer ist — `BEGIN` ist häufig und billig. */
+    dauerJeStapelMs: number;
+  }[];
+  /** Die häufigsten Anweisungen, absteigend nach Aufrufen je Stapel. */
+  haeufigste: Anweisungszeile[];
+  /** Zahl **verschiedener** Anweisungen — gegen die Gesamtzahl gelesen sagt
+   *  sie, ob wenige Abfragen oft oder viele Abfragen einmal laufen. */
+  verschiedene: number;
+  gesamtJeStapel: number;
 }
 
 function median(werte: readonly number[]): number {
@@ -269,7 +385,65 @@ export function fasseZeitenZusammen(zeiten: readonly Stapelzeit[], poolMax: numb
     medianAbfrageSummeMs: median(zeiten.map((z) => z.abfrageSummeMs)),
     hoechsteGleichzeitigkeit: hoechsteGleichzeitigkeit(),
     poolMax,
+    anweisungen: fasseAnweisungenZusammen(Math.max(1, zeiten.length)),
   };
+}
+
+export function fasseAnweisungenZusammen(stapel: number, haeufigste = 12): Anweisungsbild {
+  const zeilen: Anweisungszeile[] = [...anweisungen.entries()]
+    .map(([anweisung, { anzahl, dauerMs }]) => ({
+      anweisung,
+      kategorie: kategorie(anweisung),
+      jeStapel: anzahl / stapel,
+      anzahl,
+      dauerMs,
+    }))
+    .sort((a, b) => b.jeStapel - a.jeStapel);
+
+  const gesamtJeStapel = zeilen.reduce((summe, z) => summe + z.jeStapel, 0);
+
+  const kategorien = new Map<Kategorie, { jeStapel: number; dauerMs: number }>();
+  for (const zeile of zeilen) {
+    const eintrag = kategorien.get(zeile.kategorie) ?? { jeStapel: 0, dauerMs: 0 };
+    eintrag.jeStapel += zeile.jeStapel;
+    eintrag.dauerMs += zeile.dauerMs;
+    kategorien.set(zeile.kategorie, eintrag);
+  }
+
+  return {
+    jeKategorie: [...kategorien.entries()]
+      .map(([kat, { jeStapel, dauerMs }]) => ({
+        kategorie: kat,
+        jeStapel,
+        anteilProzent: gesamtJeStapel > 0 ? (jeStapel / gesamtJeStapel) * 100 : 0,
+        dauerJeStapelMs: dauerMs / stapel,
+      }))
+      .sort((a, b) => b.jeStapel - a.jeStapel),
+    haeufigste: zeilen.slice(0, haeufigste),
+    verschiedene: zeilen.length,
+    gesamtJeStapel,
+  };
+}
+
+export function formatAnweisungen(bild: Anweisungsbild, breite = 96): string {
+  if (bild.verschiedene === 0) return '  (keine Anweisungen aufgezeichnet)';
+
+  const zeilen = [
+    `  Aufrufe je Stapel nach Art (${bild.gesamtJeStapel.toFixed(0)} insgesamt, ` +
+      `${bild.verschiedene} verschiedene Anweisungen):`,
+  ];
+  for (const k of bild.jeKategorie) {
+    zeilen.push(
+      `    ${k.kategorie.padEnd(19)} ${k.jeStapel.toFixed(1).padStart(6)} ` +
+        `(${k.anteilProzent.toFixed(0).padStart(2)} %)   ${k.dauerJeStapelMs.toFixed(0).padStart(5)} ms`,
+    );
+  }
+  zeilen.push('  Häufigste Anweisungen je Stapel:');
+  for (const z of bild.haeufigste) {
+    const text = z.anweisung.length > breite ? `${z.anweisung.slice(0, breite - 1)}…` : z.anweisung;
+    zeilen.push(`    ${z.jeStapel.toFixed(1).padStart(5)}×  ${text}`);
+  }
+  return zeilen.join('\n');
 }
 
 export function formatZeitbild(bild: Zeitbild): string {
