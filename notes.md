@@ -1150,6 +1150,7 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - Der größere CPU-Verbraucher ist **Node** (0,70 Kerne) und nicht Postgres (0,47), und keiner von beiden ist ausgelastet.
    - **Gewartet wird auf eine freie Datenbankverbindung**, und der Grund sind **179 Datenbankaufrufe je Stapel** (rund 45 je Kommando). Bei 9 Stapeln/s sind das 1600 Aufrufe je Sekunde — die Decke dieser Maschine.
    - **Der Hebel ist deshalb kein Hardwarehebel**, sondern die Zahl der Aufrufe je Kommando. Halbiert man sie, halbiert sich die benötigte Maschine.
+   - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos —, und die Berechtigung wird achtmal je Stapel gelesen. Beides zusammen wäre rund ein Drittel weniger Aufrufe; für den Faktor 7,5 müssten es 179 auf 25 sein, und das ist eine fachliche Entscheidung und keine Optimierung.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
 
@@ -1294,7 +1295,35 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Der Hebel ist damit erstmals benannt und er ist kein Hardwarehebel:** die **Zahl der Datenbankaufrufe je Kommando**. Für 200 Geräte unter 3 s braucht es 67 Stapel/s; bei 179 Aufrufen je Stapel wären das 12 000 Aufrufe je Sekunde. Halbiert man die Aufrufe je Stapel, halbiert sich die benötigte Maschine — und das ist eine Änderung im Code, keine Beschaffung.
 
-   **Was das nicht sagt.** Welche der 179 Aufrufe entbehrlich sind, ist damit **nicht** gemessen. Der nächste Schritt wäre, sie nach Anweisungstext zu gruppieren: wie viele sind Transaktionsgerüst (`BEGIN`/`SET`/`COMMIT`), wie viele wiederholte Lesevorgänge derselben Zeile, wie viele echte Schreibvorgänge. Erst das sagt, wo gekürzt werden kann.
+   **Woraus die 179 Aufrufe bestehen — gemessen am 16.08.2026, 50 Geräte auf der Zielhardware.** Die Gruppierung nach Anweisungstext steht in `test/load/support/zeitnahme.ts`; die Zahlen sind eine Eigenschaft des Codes, die Zeiten daneben nicht.
+
+   | Art                    | Aufrufe je Stapel | Zeit je Stapel |
+   | ---------------------- | ----------------- | -------------- |
+   | Lesen                  | 90,0 (50 %)       | 1535 ms        |
+   | **Transaktionsgerüst** | **57,0 (32 %)**   | 771 ms         |
+   | Schreiben              | 32,0 (18 %)       | 1325 ms        |
+
+   71 **verschiedene** Anweisungen auf 179 Aufrufe — es sind also nicht wenige Abfragen, die oft laufen, sondern viele, die je zwei- bis dreimal laufen. Die häufigsten:
+
+   | je Stapel | Anweisung                                                                          |
+   | --------- | ---------------------------------------------------------------------------------- |
+   | **19×**   | `BEGIN`                                                                            |
+   | **19×**   | `SELECT set_config('app.current_org_id', $1, true)`                                |
+   | **19×**   | `COMMIT`                                                                           |
+   | 8×        | `SELECT … FROM order_assignments WHERE …`                                          |
+   | 8×        | `SELECT … FROM user_roles LEFT JOIN roles …`                                       |
+   | 7×        | `SELECT … FROM work_step_instances …`                                              |
+   | je 4×     | `sync_commands` lesen, einfügen, ändern · `production_orders` · `production_holds` |
+
+   **Die auffälligste Zahl ist 19 Transaktionen für 4 Kommandos** — rund fünf je Kommando. Jede kostet für sich `BEGIN`, das Setzen von `app.current_org_id` und `COMMIT`; das sind die 57 Gerüstaufrufe, also **jeder dritte Aufruf überhaupt**. Sie sind einzeln billig (771 ms gegen 1535 ms fürs Lesen), aber sie halten die Verbindung, und die Verbindung ist das, worauf gewartet wird.
+
+   **Die zweitauffälligste ist die Berechtigungsprüfung.** `user_roles` und `order_assignments` werden je **acht**mal gelesen, also viermal je Kommando — dieselbe Frage, mehrfach an dieselbe Datenbank gestellt, innerhalb eines Vorgangs, in dem sich die Antwort nicht ändern kann.
+
+   **Was daraus folgt, als Rechnung und nicht als Messung.** Käme ein Kommando mit **einer** Transaktion aus statt mit fünf, fielen 15 Transaktionen weg und mit ihnen 45 der 179 Aufrufe. Würde die Berechtigung je Stapel einmal aufgelöst statt achtmal, kämen 14 weitere dazu. Zusammen rund **ein Drittel weniger Aufrufe** — und da der Durchsatz an der Zahl der Aufrufe hängt, entsprechend mehr Stapel je Sekunde.
+
+   **Und die Grenze dieser Rechnung, damit sie niemand als Zusage liest.** Ein Drittel ist nicht der Faktor 7,5. Um 200 Geräte auf dieser Maschine zu tragen, müssten die 179 Aufrufe auf etwa **25** sinken. Das ist keine Optimierung mehr, sondern ein anderer Zuschnitt des Sync — und ob er zulässig ist, ist eine **fachliche** Frage: dass jedes Kommando für sich angenommen oder abgewiesen wird, ist kein Versehen, sondern die Eigenschaft, die einen halb angekommenen Stapel überhaupt erst verarbeitbar macht. Wer Transaktionen zusammenlegt, gibt das auf.
+
+   **Was ausdrücklich nicht gemessen ist:** **warum** ein Kommando fünf Transaktionen braucht. Die Gruppierung zählt Anweisungen, sie ordnet sie keinem Kommando zu. Das wäre der nächste Schnitt — und die eigentlich interessante Frage, weil ein Kommando nach der Fachlogik mit einer auskommen sollte.
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
