@@ -731,6 +731,8 @@ Der Wert ist über die **gesamte** Laufzeit gerechnet — einschließlich Contai
 
 _Nebenbei ein zweiter Fallstrick derselben Messung:_ Wer die CPU-Zeit eines **Prozessbaums** summiert, bekommt negative Zuwächse, sobald ein Kindprozess endet — dessen verbrauchte Zeit verschwindet aus der Summe. In der Reihe steht deshalb bei Sekunde 6 eine −2,18. Kumulierte Zähler sind nur dann monoton, wenn die Menge der Zähler es auch ist.
 
+_Und ein dritter, einen Tag später:_ Der cgroup-Zähler eines Containers verschwindet **mit** dem Container. Testcontainers räumt am Laufende ab, die letzte Ablesung ist deshalb `None` — und eine Auswertung, die die Differenz zwischen erster und letzter Probe bildet, stürzt genau dann ab, wenn die Messung fertig ist. Die Reihe war vollständig, nur ihr Schlusswert nicht. Auszuwerten ist über die **gültigen** Proben, nicht über die Endpunkte.
+
 ---
 
 ## Architekturentscheidungen mit Nachwirkung
@@ -760,6 +762,8 @@ _Nebenbei ein zweiter Fallstrick derselben Messung:_ Wer die CPU-Zeit eines **Pr
   **Nachtrag aus dem Lasttest (Ebene 8), weil diese Vermutung jetzt eine Messung hat:** dieselben 200 Geräte auf vier Organisationen verteilt — also mit vier unabhängigen Zählern statt einem — bringen **+33 % Durchsatz** (64 → 85 Stapel/s), nicht das Vierfache. Die Serialisierung je Organisation kostet also etwas, aber sie ist nicht die Wand. Die Wand ist die Zahl der Datenbankverbindungen: mit 100 statt 25 scheitern 93 von 200 Stapeln an Postgres' `max_connections`. Wer den Sync schneller machen will, sollte deshalb **zuerst** an Verbindungsverwaltung (pgbouncer, Poolgröße, `max_connections`) arbeiten und erst danach an einem feineren Zähler — die umgekehrte Reihenfolge wäre viel Umbau für ein Drittel.
 
   **Zweiter Nachtrag (10.08.2026), verschränkt gemessen — die Hälfte davon stimmt nicht mehr.** Die Richtung hält: vier Organisationen sind schneller als eine, und zwar in **4 von 4** Runden. Die Größe nicht: **+15 %**, nicht +33 % (67,9/63,7/60,7/57,1 gegen 76,7/75,4/65,1/71,1 Stapel/s). Und der zweite Satz ist falsch — **die Verbindungszahl ist unterhalb von `max_connections` gar kein Hebel**: von 10 auf 25 ist kein Unterschied messbar. Die Serialisierung je Organisation ist damit der **größere** der beiden gemessenen Effekte, nicht der kleinere. Der eigentliche Kostenträger ist aber keiner von beiden, sondern die Zahl der Transaktionen je Kommando (22,6 je Stapel) — die vollständige Reihenfolge steht bei „Messreihe: welcher Hebel wirklich wirkt".
+
+  **Dritter Nachtrag (15.08.2026), auf der Zielhardware:** die Richtung hält ein drittes Mal — vier Organisationen gewinnen **5 von 6** verschränkten Runden, Median **+8,8 %**. Neu ist, was die Auslastung dazu sagt: Postgres' CPU-Verbrauch ist mit vier Organisationen **exakt derselbe** wie mit einer (0,47 Kerne im Mittel, 0,90 gegen 0,92 in der Spitze). Der Gewinn kommt also **nicht** daher, dass die Datenbank endlich parallel rechnen darf. Wer den Zähler verfeinert, um Postgres zu entfesseln, würde damit das falsche Problem angehen — die Zahlen stehen bei der Kapazitätsmessung.
 
 - **Der Revisionsvergleich sitzt in der normalen Abschlussvalidierung**, nicht im Sync-Pfad. docs/06 listet ihn unter den Bedingungen, die der Server beim Abschluss erneut prüft — und ein Online-Client kann genauso einen veralteten Dokumentsatz vor sich haben wie ein Offline-Gerät (eine Seite, die über eine Freigabe hinweg offen bleibt). Ein zweiter Erkennungspfad wäre eine zweite Gelegenheit, es falsch zu machen. Folge: `CompleteStepForm` sendet die angezeigten Revisions-IDs mit; ein leeres Feld heißt „keine Aussage" und löst deshalb keinen Konflikt aus, ein _überholte_ Bindung dagegen immer.
 - **Die Outbox darf ohne Berechtigung zugestellt werden.** `processSyncCommands` prüft absichtlich **kein** `sync.execute` — ein Rechteentzug würde sonst offline erfasste Arbeit dauerhaft auf dem Tablet einsperren, während docs/06 ausdrücklich verlangt, dass sie erhalten bleibt und zur Entscheidung wird (Negativtest #5). _Angewendet_ wird trotzdem nichts ohne Berechtigung: jedes Kommando wird einzeln autorisiert und wird andernfalls zum `PERMISSION_REVOKED`-Konflikt mit unveränderter Nutzlast. Lesen (Changes, Offline-Bundle) bleibt hinter `sync.execute` — das gibt Daten heraus, statt sie entgegenzunehmen.
@@ -1219,13 +1223,43 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    | MinIO      | 0,01 Kerne           | —                  |
    | zusammen   | 1,13 von 2           | **1,5–1,75 von 2** |
 
-   **Postgres kommt auch mit zwei erlaubten Kernen nie über etwa einen.** Das ist der eigentliche Befund, und er passt zu dem, was oben schon steht: die Arbeit ist je Organisation über den Outbox-Zähler serialisiert, und der Lasttest fährt **eine** Organisation. Was serialisiert ist, wird durch einen zweiten Kern nicht schneller — deshalb kostet die Quote so wenig, und deshalb lässt sich aus „mehr Kerne" kein proportional höherer Durchsatz ableiten.
+   **Postgres kommt auch mit zwei erlaubten Kernen nie über etwa einen.** Deshalb kostet die Quote so wenig, und deshalb lässt sich aus „mehr Kerne" kein proportional höherer Durchsatz ableiten.
+
+   > ⚠️ **Hier stand eine Erklärung, die einen Tag später widerlegt wurde.** Sie lautete: die Decke komme daher, dass die Arbeit je Organisation über den Outbox-Zähler serialisiert ist und der Lasttest **eine** Organisation fährt. Das klang stimmig und passte zu dem, was weiter oben schon stand — es ist trotzdem falsch. Die Messung mit vier Organisationen (unten) lässt Postgres' CPU-Verbrauch **völlig unverändert**. Was die Decke wirklich verursacht, steht dort.
 
    **Was damit nicht gezeigt ist.** Die Messung beantwortet die Frage nach **unten** und nicht die nach oben. Sie zeigt nicht, dass eine größere Maschine nichts brächte: in den Sync-Phasen liegen 1,5–1,75 der 2 Kerne an, die Kiste ist also nahe an ihrer Grenze, und **Node** — der größere Verbraucher — nutzt sehr wohl mehr als einen Kern. Der eine vorliegende Datenpunkt einer großen Maschine (MacBook, 18 Kerne) erreicht **57 Stapel/s**, nahe an den benötigten 67. Ob das an der Kernzahl oder an der deutlich höheren Einzelkernleistung liegt, ist aus den vorhandenen Daten **nicht trennbar**.
 
    **Zwei Erklärungen wurden geprüft und scheiden aus.** Der Speicher ist es nicht: ein Commit kostet auf dieser Maschine **0,74 ms** (`synchronous_commit=on`, 200 Einzeltransaktionen in 147 ms) bzw. 0,49 ms mit `off` — die Rechnung „22,6 Transaktionen je Stapel × 5 ms `fsync` ≈ 111 ms" wäre eine hübsche Erklärung gewesen und ist falsch. Und der Objektspeicher ist es erst recht nicht (0,01 Kerne).
 
-   **Was als Nächstes zu messen wäre**, um die Auslegung zu entscheiden: ein Lauf auf einer Maschine **desselben Typs mit mehr Kernen** (etwa 8 vCPU derselben EPYC-Reihe) — das trennt Kernzahl von Kerngeschwindigkeit, was der Vergleich mit dem MacBook nicht kann. Und ein Lauf mit **mehreren Organisationen** bei sonst gleicher Gerätezahl, weil genau dort die Serialisierung sitzt, die Postgres bei einem Kern hält.
+   **Was als Nächstes zu messen wäre**, um die Auslegung zu entscheiden: ein Lauf auf einer Maschine **desselben Typs mit mehr Kernen** (etwa 8 vCPU derselben EPYC-Reihe) — das trennt Kernzahl von Kerngeschwindigkeit, was der Vergleich mit dem MacBook nicht kann. Und ein Lauf mit **mehreren Organisationen** bei sonst gleicher Gerätezahl — der ist inzwischen gelaufen und steht direkt darunter.
+
+   **Mehrere Organisationen: gemessen am 15.08.2026, und die Erklärung von oben fällt damit.**
+
+   Verschränkt gemessen (1, 4, 4, 1, 1, 4, …, Reihenfolge im Paar wechselnd) und **paarweise** ausgewertet, je 50 Geräte auf einer bzw. vier Organisationen:
+
+   | Runde | 1 Org | 4 Orgs | Differenz | p95 (1 / 4) |
+   | ----- | ----- | ------ | --------- | ----------- |
+   | 1     | 7,35  | 8,68   | **+1,34** | 6774 / 5966 |
+   | 2     | 7,64  | 8,55   | **+0,91** | 6503 / 6071 |
+   | 3     | 7,59  | 8,32   | **+0,73** | 6536 / 6227 |
+   | 4     | 7,88  | 5,66   | −2,21     | 6316 / 9164 |
+   | 5     | 7,92  | 8,46   | **+0,54** | 6279 / 6120 |
+   | 6     | 7,71  | 8,33   | **+0,62** | 6453 / 6235 |
+
+   **Vier Organisationen gewinnen 5 von 6 Runden, Median der Paardifferenz +0,68 Stapel/s (+8,8 %).** Runde 4 ist ein Ausreißer nach unten; die übrigen fünf liegen eng und gleichgerichtet. Der Wert passt zu den +15 %, die auf dem Entwicklungsrechner verschränkt gemessen wurden — er ist real, aber er ist ein Zehntel und nicht der Faktor 7,5, den 200 Geräte brauchen.
+
+   **Und die Auslastung sagt, dass die Serialisierung nicht die Ursache der Ein-Kern-Decke ist.** Derselbe Lauf mit Abtastung der CPU-Zähler, einmal mit einer und einmal mit vier Organisationen:
+
+   |                  | Node (Mittel / max) | Postgres (Mittel / max) | Durchsatz |
+   | ---------------- | ------------------- | ----------------------- | --------- |
+   | 1 Organisation   | 0,70 / 1,36 Kerne   | **0,47 / 0,90 Kerne**   | 9,47/s    |
+   | 4 Organisationen | 0,72 / 1,55 Kerne   | **0,47 / 0,92 Kerne**   | 10,93/s   |
+
+   Postgres' Verbrauch ist **identisch**, während der Durchsatz steigt. Wäre die Ein-Kern-Decke eine Folge der Serialisierung je Organisation, müsste Postgres mit vier unabhängigen Zählern mehr rechnen können. Es tut es nicht. Die Erklärung, die weiter oben stand, ist damit widerlegt — sie war plausibel, sie passte zu einem älteren Befund, und sie war trotzdem falsch.
+
+   **Der eigentliche Befund ist ein anderer: nicht die Datenbank ist der große Verbraucher, sondern die Anwendung.** Node zieht im Mittel 0,70 Kerne, Postgres 0,47 — und Postgres ist mit 0,9 Kernen in der Spitze **nicht ausgelastet**. Es bekommt schlicht nicht mehr Arbeit zugeteilt. Die Decke liegt also vor der Datenbank, nicht in ihr.
+
+   **Was damit offen ist und wie man es misst.** Beide CPUs zusammen liegen bei rund 1,2 von 2 Kernen im Mittel — es wird also gewartet, und worauf, sagt keine der bisherigen Messungen. Das nächste Instrument ist nicht noch ein Durchsatzlauf, sondern `pg_stat_activity` (Wartegründe während des Laufs) und eine Zeitnahme **innerhalb** des Harness: wie viel der 111 ms je Stapel entfällt auf Datenbankaufrufe, wie viel auf Arbeit in Node, wie viel auf Warten auf eine freie Verbindung (`DATABASE_POOL_MAX=25` bei 50 gleichzeitigen Geräten ist ein naheliegender Verdacht, aber eben nur einer).
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 
