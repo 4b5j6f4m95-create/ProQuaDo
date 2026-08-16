@@ -1153,7 +1153,8 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos, davon zwölf reine Buchführung der Sync-Strecke —, und die Berechtigung wird achtmal je Stapel gelesen.
    - Die 90 Lesevorgänge sind dieselbe Ursache eine Ebene tiefer: **derselbe Arbeitsschritt wird 21-mal gelesen**, die Berechtigung 16-mal, weil jeder Helfer selbst lädt.
    - **Ein Lesecache ist geprüft und scheidet aus:** alle 26 wiederholten Lesevorgänge liegen **zwischen** Transaktionen, keiner innerhalb. Ein unbedenklich abgegrenzter Cache fängt null; ein weiter gefasster gäbe die Eigenschaft auf, dass eine Prüfung in der Transaktion geschieht, die sie absichert.
-   - **Der eine Umbau, der beides löst**, ist `runPreflight` in die Arbeitstransaktion zu ziehen: eine Transaktion und eine doppelte Prüfung weniger je Kommando, ohne etwas aufzugeben.
+   - **Der Umbau ist gemacht** (16.08.2026): die Vorprüfung läuft in der Transaktion der **Anmeldung**. 19 → 15 Transaktionen je Stapel, 179 → 167 Aufrufe. Die doppelte Berechtigungsprüfung bleibt — sie liegt nicht an der Transaktionsgrenze, siehe unten.
+   - **Ein Durchsatzgewinn ist dabei nicht nachgewiesen.** Verschränkt gemessen, vier Paare: 2 von 4 Runden, Median −2,9 %. Der erwartete Effekt von rund 7 % liegt unter dem, was diese Messung auflösen kann. **Sicher ist nur die gezählte Zahl**, nicht ihre Wirkung.
    - **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei;** die Codearbeit senkt, wie viel davon nötig ist.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
@@ -1349,7 +1350,12 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Was realistisch einzusparen ist**, mit dem Muster, das im Code bereits existiert (`hasPermissionWithin(tx, …)`, `assertPermissionWithin(tx, …)`, `isAssignedToOrder(tx, …)` — die `*Within`-Familie nimmt eine Transaktion entgegen, statt eine zu öffnen):
 
-   - `runPreflight` in die Arbeitstransaktion ziehen: **−4** Transaktionen und die doppelte Berechtigungsprüfung dazu
+   - ~~`runPreflight` in die Arbeitstransaktion ziehen: **−4** Transaktionen und die doppelte Berechtigungsprüfung dazu~~ — **gemacht, aber nur die Hälfte davon stimmte.** Die Vorprüfung sitzt jetzt in der Transaktion der **Anmeldung** (nicht der des Fachdienstes: die Anmeldung wird bewusst vor der Ausführung festgeschrieben, dort wäre die Vorprüfung von dieser Spur getrennt). **−4 Transaktionen, −12 Aufrufe.** Die doppelte Berechtigungsprüfung bleibt: sie entsteht nicht aus der Transaktionsgrenze, sondern daraus, dass der Fachdienst auch von der Oberfläche aus aufrufbar ist und deshalb selbst prüfen muss. Gemessen: 19 → 15 Transaktionen, 179 → 167 Aufrufe, Lesevorgänge unverändert 90.
+
+     **Der Durchsatz ließ sich damit nicht nachweisbar verbessern.** Verschränkt auf der Zielhardware, vier Paare je drei Läufe: der Umbau gewinnt **2 von 4** Runden, Median der Paardifferenz **−2,9 %** (Spanne −1,19 bis +0,12 Stapel/s). Erwartet waren rund +7 % aus 12 Aufrufen weniger — das liegt unter der Auflösung dieser Messung, deren Streuung über 20 % beträgt. In den beiden Runden mit vergleichbarer Vorlast liegt der Umbau knapp vorn (+0,05 und +0,12), in den beiden mit ungleicher Vorlast hinten.
+
+     **Lehre für die nächste solche Messung:** einen Effekt von 7 % gegen 20 % Streuung mit vier Paaren nachweisen zu wollen, war zu optimistisch. Dafür braucht es die Größenordnung von zwanzig Paaren — oder man verlässt sich auf die **gezählte** Größe, die deterministisch ist und keine Statistik braucht. Die Zahl der Datenbankaufrufe ist gezählt; ihre Wirkung auf den Durchsatz ist es nicht.
+
    - `startWorkStepIdempotently` mit `startWorkStep` zusammenlegen: **−1**
    - `confirmWithPin` in `submitWorkStepCompletion` ziehen: **−1**
 
