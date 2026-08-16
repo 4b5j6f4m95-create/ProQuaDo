@@ -33,6 +33,7 @@ import { assertDockerAvailable, startInfra } from './support/infra';
 import { formatMeasurement, printVerdicts, type Verdict } from './support/metrics';
 import { captureEnvironment, formatEnvironment, warnIfBusy } from './support/environment';
 import { summarizeRuns, judgeSeries, formatSeries, type RunResult } from './support/repeat';
+import { instrumentiere, type Zeitbild } from './support/zeitnahme';
 
 // Fixtures und Szenarien werden **nach** dem Start der Infrastruktur geladen.
 // `@/lib/db/client` wertet DATABASE_URL beim Auswerten des Moduls aus; statisch
@@ -90,6 +91,12 @@ async function main(): Promise<void> {
   const busyWarning = warnIfBusy(environment);
   if (busyWarning) console.log(`\n⚠ ${busyWarning}`);
 
+  // **Vor** dem ersten Laden von `@/lib/db/client`. Die Zeitnahme hängt sich
+  // in `pg` ein; ist der Pool der Anwendung erst gebaut, greift sie nicht mehr
+  // und meldete lauter Nullen. Genau diese Reihenfolge ist der Grund, warum
+  // Fixtures und Szenarien hier dynamisch geladen werden.
+  instrumentiere();
+
   const { seedShiftFixture, seedLargeOrder } = await import('./support/fixtures');
   const { runShiftChangeSync, runLargeDossier, runDashboardUnderLoad, countOutboxEvents } =
     await import('./scenarios');
@@ -97,6 +104,8 @@ async function main(): Promise<void> {
   const verdicts: Verdict[] = [];
   const notes: string[] = [];
   let seriesResult: ReturnType<typeof summarizeRuns> | null = null;
+  /** Je Durchgang eine Aufteilung der Stapelzeit. */
+  const zeitbilder: Zeitbild[] = [];
   /** Begründungen abgewiesener Kommandos, über alle Durchgänge entdoppelt. */
   const countNotes = new Set<string>();
 
@@ -146,6 +155,7 @@ async function main(): Promise<void> {
         rejected: sync.rejected,
         deadlocks: sync.deadlocks,
       });
+      zeitbilder.push(sync.zeitbild);
       // Die Begründungen der abgewiesenen Kommandos kommen aus den Urteilen
       // des Laufs — aufgehoben, nicht ausgegeben: sie stehen später am
       // zusammengefassten Urteil, damit dieselbe Zeile nicht je Durchgang
@@ -235,6 +245,11 @@ async function main(): Promise<void> {
           environment,
           busyWarning,
           syncSeries: seriesResult,
+          // Je Durchgang eine Aufteilung der Stapelzeit. Nicht zusammengefasst:
+          // ein Median über Mediane verdeckt genau den Fall, für den diese
+          // Messung gebaut wurde — dass ein einzelner Durchgang plötzlich am
+          // Verbindungspool hängt und die übrigen nicht.
+          zeitbilder,
           verdicts,
           notes,
         },

@@ -19,6 +19,14 @@ import {
   type Measurement,
   type Verdict,
 } from './support/metrics';
+import {
+  messeStapel,
+  fasseZeitenZusammen,
+  formatZeitbild,
+  setzeGleichzeitigkeitZurueck,
+  type Stapelzeit,
+  type Zeitbild,
+} from './support/zeitnahme';
 
 /**
  * Der Stapel, den ein Tablet nach einer Offline-Schicht abliefert: Schritt
@@ -98,8 +106,15 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   p95Ms: number;
   throughputPerSecond: number;
   deadlocks: number;
+  /** Wohin die Zeit eines Stapels ging — siehe support/zeitnahme.ts. */
+  zeitbild: Zeitbild;
 }> {
   const measurement = createMeasurement('Sync-Stapel je Gerät (4 Kommandos)');
+  const zeiten: Stapelzeit[] = [];
+  // Je Durchgang zurücksetzen: die höchste Gleichzeitigkeit ist eine Aussage
+  // über **diesen** Lauf. Ohne das trüge der fünfte Durchgang noch die Spitze
+  // des ersten mit sich.
+  setzeGleichzeitigkeitZurueck();
   let rejected = 0;
   // Warum ein Kommando nicht angenommen wurde, ist die einzige Auskunft, die
   // hier wirklich weiterhilft — eine nackte Zahl abgewiesener Kommandos ist
@@ -109,13 +124,20 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   const startedAt = performance.now();
   await Promise.all(
     devices.map(async (device) => {
-      const results = await measure(measurement, () =>
-        processSyncCommands({
-          actor: device.actor,
-          deviceId: device.deviceId,
-          commands: shiftBatch(device, device.step1BaseVersion),
-        }),
-      );
+      const results = await measure(measurement, async () => {
+        const { ergebnis, zeit } = await messeStapel(() =>
+          processSyncCommands({
+            actor: device.actor,
+            deviceId: device.deviceId,
+            commands: shiftBatch(device, device.step1BaseVersion),
+          }),
+        );
+        // Nur erfolgreiche Stapel: ein abgebrochener hat eine Dauer, aber
+        // keine, die für die Aufteilung etwas bedeutet — dieselbe Festlegung
+        // wie bei `measure` (siehe support/metrics.ts).
+        zeiten.push(zeit);
+        return ergebnis;
+      });
       for (const result of results ?? []) {
         if (result.status === 'ACCEPTED') continue;
         rejected += 1;
@@ -144,6 +166,8 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   console.log(
     `  Durchsatz: ${throughput.toFixed(1)} Stapel/s (${(throughput * 4).toFixed(0)} Kommandos/s)`,
   );
+  const zeitbild = fasseZeitenZusammen(zeiten, Number(process.env.DATABASE_POOL_MAX ?? 25));
+  console.log(formatZeitbild(zeitbild));
 
   return {
     measurement,
@@ -151,6 +175,7 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
     p95Ms: p95,
     throughputPerSecond: throughput,
     deadlocks,
+    zeitbild,
     verdicts: [
       judge(
         'Schichtwechsel-Sync',
