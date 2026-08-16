@@ -52,6 +52,16 @@ type Abschnitt = [start: number, ende: number];
 interface Eimer {
   abfragen: Abschnitt[];
   verbindungen: Abschnitt[];
+  /**
+   * Lesevorgänge dieses **einen** Stapels, Argumente eingeschlossen.
+   *
+   * Je Stapel und nicht global: die Argumente enthalten die IDs des Geräts,
+   * also ist dieselbe Abfrage bei zwei Geräten zweimal etwas anderes. Global
+   * gezählt sähe jede Abfrage einmalig aus und die Antwort wäre immer „keine
+   * Wiederholungen" — unabhängig davon, wie oft ein Stapel dieselbe Zeile
+   * liest.
+   */
+  genaueAbfragen: Map<string, number>;
 }
 
 export interface Stapelzeit {
@@ -65,6 +75,8 @@ export interface Stapelzeit {
   abfragen: number;
   /** Summe der Abfragedauern — bei Überlappung größer als `datenbankMs`. */
   abfrageSummeMs: number;
+  /** Lesevorgänge dieses Stapels samt Argumenten, für die Wiederholungszählung. */
+  genaueAbfragen: ReadonlyMap<string, number>;
 }
 
 /**
@@ -247,7 +259,7 @@ export function instrumentiere(): void {
 export async function messeStapel<T>(
   vorgang: () => Promise<T>,
 ): Promise<{ ergebnis: T; zeit: Stapelzeit }> {
-  const eimer: Eimer = { abfragen: [], verbindungen: [] };
+  const eimer: Eimer = { abfragen: [], verbindungen: [], genaueAbfragen: new Map() };
   const begonnen = performance.now();
   const ergebnis = await speicher.run(eimer, vorgang);
   const gesamtMs = performance.now() - begonnen;
@@ -264,6 +276,7 @@ export async function messeStapel<T>(
       datenbankMs: vereinigteDauer([...eimer.verbindungen, ...eimer.abfragen]),
       abfragen: eimer.abfragen.length,
       abfrageSummeMs: eimer.abfragen.reduce((summe, [a, b]) => summe + (b - a), 0),
+      genaueAbfragen: eimer.genaueAbfragen,
     },
   };
 }
@@ -362,6 +375,7 @@ export function setzeGleichzeitigkeitZurueck(): void {
   anweisungen.clear();
   herkunft.clear();
   zugriffe.clear();
+  wiederholungJeTransaktion.length = 0;
 }
 
 /**
@@ -383,7 +397,10 @@ export function instrumentiereTransaktionen(client: object): void {
     const [erstes, ...rest] = args;
     if (typeof erstes === 'function') {
       const rueckruf = erstes as (tx: unknown) => unknown;
-      return urspruenglich.apply(this, [(tx: unknown) => rueckruf(beobachte(tx)), ...rest]);
+      return urspruenglich.apply(this, [
+        (tx: unknown) => transaktionsSpeicher.run(new Map(), () => rueckruf(beobachte(tx))),
+        ...rest,
+      ]);
     }
     return urspruenglich.apply(this, args);
   };
@@ -399,6 +416,18 @@ export function instrumentiereTransaktionen(client: object): void {
  * gehüllt, der jeden Zugriff festhält, bevor er weiterreicht.
  */
 const zugriffe = new Map<string, number>();
+
+/**
+ * Wiederholungen innerhalb **einer Transaktion** — der einzige Bereich, in
+ * dem ein Zwischenspeicher unbedenklich ist.
+ *
+ * Ein Cache über mehrere Transaktionen hinweg bediente eine Prüfung aus einer
+ * Ablesung, die außerhalb der Transaktion geschah, deren Schreibvorgänge sie
+ * absichert — genau das, was der Kommentar an `hasPermissionWithin`
+ * ausschließt. Diese Zahl sagt, was ein unbedenklicher Cache einbrächte.
+ */
+const transaktionsSpeicher = new AsyncLocalStorage<Map<string, number>>();
+const wiederholungJeTransaktion: number[] = [];
 
 function beobachte(tx: unknown): unknown {
   if (typeof tx !== 'object' || tx === null) return tx;
@@ -421,7 +450,7 @@ function beobachte(tx: unknown): unknown {
             const fn = Reflect.get(modell, vorgang);
             if (typeof fn !== 'function' || typeof vorgang !== 'string') return fn;
             return (...args: unknown[]) => {
-              festhalten(name, vorgang);
+              festhalten(name, vorgang, args[0]);
               return (fn as LoseFunktion).apply(modell, args);
             };
           },
@@ -432,11 +461,143 @@ function beobachte(tx: unknown): unknown {
   });
 }
 
-function festhalten(modell: string, vorgang: string): void {
+function festhalten(modell: string, vorgang: string, argumente?: unknown): void {
   const stelle = stelleAusStapel(new Error().stack);
   const was = vorgang ? `${modell}.${vorgang}` : modell;
   const schluessel = `${was}\u0000${stelle ?? '(unbekannt)'}`;
   zugriffe.set(schluessel, (zugriffe.get(schluessel) ?? 0) + 1);
+
+  // Zusätzlich die **vollständige** Abfrage, Argumente eingeschlossen. Ein
+  // Zwischenspeicher greift nur bei buchstäblich derselben Abfrage; zwei
+  // Lesevorgänge auf dieselbe Zeile mit verschiedenem `select` sind für ihn
+  // zwei verschiedene. Ohne diese Zahl wüsste man nicht, ob ein Cache
+  // überhaupt etwas zu fangen hätte.
+  if (!istLesend(was)) return;
+  const eimer = speicher.getStore();
+  if (!eimer) return;
+  const genau = `${was}(${formeAb(argumente)})`;
+  eimer.genaueAbfragen.set(genau, (eimer.genaueAbfragen.get(genau) ?? 0) + 1);
+
+  const inTransaktion = transaktionsSpeicher.getStore();
+  if (inTransaktion) {
+    const vorher = inTransaktion.get(genau) ?? 0;
+    inTransaktion.set(genau, vorher + 1);
+    if (vorher > 0) wiederholungJeTransaktion.push(1);
+  }
+}
+
+/** Einsparbare Lesevorgänge je Stapel, wenn der Cache je Transaktion gilt. */
+export function wiederholungenInTransaktionen(stapel: number): number {
+  return wiederholungJeTransaktion.length / Math.max(1, stapel);
+}
+
+export function formeAb(wert: unknown): string {
+  try {
+    return (
+      JSON.stringify(wert, function (this: Record<string, unknown>, schluessel, v) {
+        // **`this[schluessel]`, nicht `v`.** `JSON.stringify` ruft `toJSON`
+        // eines `Date` **vor** dem Ersetzer auf; `v` ist dort längst eine
+        // Zeichenkette, und `v instanceof Date` trifft nie zu. Der erste
+        // Anlauf prüfte genau das und ließ deshalb jede Abfrage mit einem
+        // Zeitpunkt darin einmalig aussehen — `hasPermissionWithin` fragt
+        // mit `expiresAt: { gt: new Date() }`, also millisekundengenau
+        // verschieden, und fiel aus der Wiederholungszählung heraus.
+        const roh = this[schluessel];
+        if (roh instanceof Date) return '<Zeitpunkt>';
+        return typeof v === 'bigint' ? v.toString() : v;
+      }) ?? 'undefined'
+    );
+  } catch {
+    return '<nicht abbildbar>';
+  }
+}
+
+export interface Wiederholungsbild {
+  /** Lesevorgänge je Stapel (Mittel). */
+  vorgaenge: number;
+  /** Verschiedene Abfragen je Stapel (Mittel), Argumente eingeschlossen. */
+  verschieden: number;
+  /**
+   * Vorgänge, die innerhalb **eines Stapels** buchstäblich wiederholt werden
+   * — die Obergrenze dessen, was ein Zwischenspeicher einsparen könnte. Ein
+   * Cache je **Kommando** kann höchstens diese Zahl erreichen und liegt in
+   * der Regel darunter, weil er zwischen den Kommandos geleert wird.
+   */
+  wiederholungen: number;
+  /** Die am häufigsten wiederholten Abfragen, gemittelt über die Stapel. */
+  haeufigste: { abfrage: string; jeStapel: number }[];
+  /**
+   * Wiederholungen innerhalb **einer** Transaktion. Nur diese darf ein Cache
+   * bedienen, ohne eine Prüfung aus einer Ablesung außerhalb der Transaktion
+   * zu beantworten, deren Schreibvorgänge sie absichert.
+   */
+  inTransaktion: number;
+}
+
+/**
+ * @param zeiten dieselben Stapel, für die auch die Zeiten gelten — die
+ *   Wiederholungen werden je Stapel gebildet und dann gemittelt.
+ */
+export function fasseWiederholungenZusammen(
+  proStapel: readonly ReadonlyMap<string, number>[],
+  grenze = 10,
+): Wiederholungsbild {
+  if (proStapel.length === 0) {
+    return { vorgaenge: 0, verschieden: 0, wiederholungen: 0, haeufigste: [], inTransaktion: 0 };
+  }
+  let vorgaenge = 0;
+  let verschieden = 0;
+  let wiederholungen = 0;
+  const gesamt = new Map<string, number>();
+
+  for (const karte of proStapel) {
+    for (const [abfrage, anzahl] of karte) {
+      vorgaenge += anzahl;
+      verschieden += 1;
+      wiederholungen += anzahl - 1; // der erste Aufruf muss geschehen
+      // Für die Liste ohne IDs: der Schlüssel enthält die des Geräts, also
+      // fiele über die Stapel hinweg nichts zusammen und die Liste bliebe
+      // leer — obwohl die Zahl darüber Wiederholungen ausweist.
+      const ohneIds = abfrage.replace(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+        '<id>',
+      );
+      // Gezählt werden die **einsparbaren** Aufrufe, nicht alle.
+      if (anzahl > 1) gesamt.set(ohneIds, (gesamt.get(ohneIds) ?? 0) + (anzahl - 1));
+    }
+  }
+
+  const n = proStapel.length;
+  return {
+    vorgaenge: vorgaenge / n,
+    verschieden: verschieden / n,
+    wiederholungen: wiederholungen / n,
+    haeufigste: [...gesamt.entries()]
+      .map(([abfrage, anzahl]) => ({ abfrage, jeStapel: anzahl / n }))
+      .sort((a, b) => b.jeStapel - a.jeStapel)
+      .slice(0, grenze),
+    inTransaktion: wiederholungenInTransaktionen(n),
+  };
+}
+
+export function formatWiederholungen(bild: Wiederholungsbild, breite = 110): string {
+  if (bild.vorgaenge === 0) return '';
+  return [
+    `  Buchstäblich gleiche Lesevorgänge je Stapel: ${bild.wiederholungen.toFixed(1)} von ` +
+      `${bild.vorgaenge.toFixed(1)} (${bild.verschieden.toFixed(1)} verschiedene Abfragen)`,
+    // Die entscheidende Zeile: die Zahl darüber ist über den ganzen Stapel
+    // gerechnet und damit die Obergrenze. Ein Zwischenspeicher darf aber nur
+    // innerhalb einer Transaktion antworten — sonst bedient er eine Prüfung
+    // aus einer Ablesung außerhalb der Transaktion, deren Schreibvorgänge sie
+    // absichert.
+    `    davon innerhalb einer Transaktion (was ein unbedenklicher Cache fängt): ${bild.inTransaktion.toFixed(1)}`,
+    ...bild.haeufigste
+      .filter((z) => z.jeStapel >= 0.5)
+      .map((z) => {
+        const text = z.abfrage.length > breite ? `${z.abfrage.slice(0, breite - 1)}…` : z.abfrage;
+        return `    ${z.jeStapel.toFixed(1).padStart(5)}×  ${text}`;
+      }),
+  ].join('\n');
 }
 
 /**

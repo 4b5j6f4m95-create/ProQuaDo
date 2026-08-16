@@ -28,6 +28,8 @@ import {
   formatHerkunft,
   fasseZugriffeZusammen,
   formatZugriffe,
+  fasseWiederholungenZusammen,
+  formatWiederholungen,
   setzeGleichzeitigkeitZurueck,
   type Stapelzeit,
   type Zeitbild,
@@ -178,6 +180,10 @@ export async function runShiftChangeSync(devices: readonly DeviceFixture[]): Pro
   if (herkunft) console.log(herkunft);
   const zugriffe = formatZugriffe(fasseZugriffeZusammen(Math.max(1, zeiten.length)));
   if (zugriffe) console.log(zugriffe);
+  const wdh = formatWiederholungen(
+    fasseWiederholungenZusammen(zeiten.map((z) => z.genaueAbfragen)),
+  );
+  if (wdh) console.log(wdh);
 
   return {
     measurement,

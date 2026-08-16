@@ -13,7 +13,14 @@
  * bei der Vereinigung nicht.
  */
 
-import { vereinigteDauer, normalisiere, kategorie, stelleAusStapel, istLesend } from '../zeitnahme';
+import {
+  vereinigteDauer,
+  normalisiere,
+  kategorie,
+  stelleAusStapel,
+  istLesend,
+  formeAb,
+} from '../zeitnahme';
 
 describe('vereinigteDauer', () => {
   it('ist null ohne Abschnitte', () => {
@@ -214,5 +221,45 @@ describe('istLesend', () => {
     // Ein Modell, das „find" im Namen trägt, darf nicht als Lesevorgang
     // durchgehen, wenn der Vorgang selbst schreibt.
     expect(istLesend('findingReport.create')).toBe(false);
+  });
+});
+
+describe('formeAb', () => {
+  it('macht aus einem Zeitpunkt einen festen Platzhalter', () => {
+    // Der Fehler, den diese Prüfung festhält: `JSON.stringify` ruft `toJSON`
+    // eines `Date` **vor** dem Ersetzer auf, `v instanceof Date` trifft also
+    // nie zu. Damit sah jede Abfrage mit einem Zeitpunkt darin einmalig aus —
+    // `hasPermissionWithin` fragt mit `expiresAt: { gt: new Date() }` und fiel
+    // deshalb still aus der Wiederholungszählung heraus.
+    const frueh = formeAb({ gt: new Date('2026-08-16T08:00:00.000Z') });
+    const spaet = formeAb({ gt: new Date('2026-08-16T08:00:00.001Z') });
+    expect(frueh).toBe(spaet);
+    expect(frueh).toContain('<Zeitpunkt>');
+  });
+
+  it('macht dieselbe Abfrage zu derselben Zeichenkette', () => {
+    const a = formeAb({ where: { id: 'x' }, select: { version: true } });
+    const b = formeAb({ where: { id: 'x' }, select: { version: true } });
+    expect(a).toBe(b);
+  });
+
+  it('unterscheidet Abfragen mit verschiedener Auswahl', () => {
+    // Zwei Lesevorgänge auf dieselbe Zeile mit verschiedenem `select` sind für
+    // einen Zwischenspeicher zwei verschiedene — sie zusammenzuwerfen würde
+    // die einsparbare Zahl zu groß aussehen lassen.
+    const knapp = formeAb({ where: { id: 'x' }, select: { version: true } });
+    const breit = formeAb({ where: { id: 'x' }, select: { version: true, status: true } });
+    expect(knapp).not.toBe(breit);
+  });
+
+  it('kommt mit BigInt und mit undefined zurecht', () => {
+    expect(formeAb({ n: BigInt(7) })).toContain('"7"');
+    expect(formeAb(undefined)).toBe('undefined');
+  });
+
+  it('liefert eine Ersatzangabe statt zu werfen, wenn etwas nicht abbildbar ist', () => {
+    const ring: Record<string, unknown> = {};
+    ring.selbst = ring;
+    expect(formeAb(ring)).toBe('<nicht abbildbar>');
   });
 });
