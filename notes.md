@@ -1152,7 +1152,9 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - **Der Hebel ist deshalb kein Hardwarehebel**, sondern die Zahl der Aufrufe je Kommando. Halbiert man sie, halbiert sich die benötigte Maschine.
    - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos, davon zwölf reine Buchführung der Sync-Strecke —, und die Berechtigung wird achtmal je Stapel gelesen.
    - Die 90 Lesevorgänge sind dieselbe Ursache eine Ebene tiefer: **derselbe Arbeitsschritt wird 21-mal gelesen**, die Berechtigung 16-mal, weil jeder Helfer selbst lädt.
-   - **Zusammen sind rund 30–40 % weniger Aufrufe erreichbar**, ohne eine fachliche Eigenschaft aufzugeben — also ein Drittel mehr Durchsatz, nicht das Siebenfache. **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei;** die Codearbeit senkt, wie viel davon nötig ist.
+   - **Ein Lesecache ist geprüft und scheidet aus:** alle 26 wiederholten Lesevorgänge liegen **zwischen** Transaktionen, keiner innerhalb. Ein unbedenklich abgegrenzter Cache fängt null; ein weiter gefasster gäbe die Eigenschaft auf, dass eine Prüfung in der Transaktion geschieht, die sie absichert.
+   - **Der eine Umbau, der beides löst**, ist `runPreflight` in die Arbeitstransaktion zu ziehen: eine Transaktion und eine doppelte Prüfung weniger je Kommando, ohne etwas aufzugeben.
+   - **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei;** die Codearbeit senkt, wie viel davon nötig ist.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
 
@@ -1374,9 +1376,28 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    **Das ist dieselbe Ursache wie bei den 19 Transaktionen, nur eine Ebene tiefer.** Dort öffnete jeder Helfer seine eigene Transaktion, weil `withOrgContext` keine Fassung hat, die sich in eine laufende einklinkt; hier lädt jeder Helfer seine eigenen Daten, weil ein Helfer eine `tx` bekommt und nichts, was schon geladen wäre. Die Sync-Strecke reicht **Zugriff** weiter, aber keine **Ergebnisse**.
 
-   **Was das an Aufrufen wert wäre.** Ein Lesecache je Kommando für den Arbeitsschritt und die Berechtigungsentscheidung brächte `workStepInstance` von 21 auf etwa 5 und die Berechtigung von 16 auf 8 — rund **24 der 58 Vorgänge**, und wegen der Beziehungsauflösung überproportional viele der 90 Anweisungen.
+   > ⚠️ **Hier stand eine Empfehlung, die die Nachmessung aufgehoben hat.** Sie lautete: ein Lesecache je Kommando brächte rund 24 der 58 Vorgänge. Die Zählung der buchstäblich gleichen Abfragen darunter zeigt, dass ein Cache in der einzigen unbedenklichen Abgrenzung **null** einspart.
 
-   **Und die Grenze auch hier.** Je **Kommando** neu zu prüfen ist Absicht: `PERMISSION_REVOKED` ist ein eigener Konflikttyp, und eine Berechtigung, die während des Stapels entzogen wurde, soll auffallen. Redundant ist nur die **zweite** Prüfung innerhalb desselben Kommandos. Ebenso beim Arbeitsschritt: zwischen zwei Kommandos hat sich seine Version geändert, ein Cache über den ganzen Stapel wäre falsch — je Kommando ist er richtig.
+   **Der Lesecache wurde geprüft und ist das falsche Werkzeug — gemessen am 16.08.2026.**
+
+   Ein Zwischenspeicher greift nur bei **buchstäblich derselben** Abfrage. Zwei Lesevorgänge auf dieselbe Zeile mit verschiedenem `select` sind für ihn zwei verschiedene. Gezählt wurde deshalb, wie viele der Lesevorgänge sich mitsamt ihren Argumenten wiederholen:
+
+   |                                       | je Stapel |
+   | ------------------------------------- | --------- |
+   | Lesevorgänge                          | 58,0      |
+   | davon buchstäbliche Wiederholungen    | **26,0**  |
+   | davon innerhalb **einer Transaktion** | **0,0**   |
+
+   **Alle 26 Wiederholungen liegen zwischen Transaktionen, keine einzige innerhalb einer.** Das entscheidet die Frage:
+
+   - Ein Cache je **Transaktion** ist unbedenklich — und fängt **nichts**.
+   - Ein Cache je **Kommando** oder je **Stapel** fängt die 26, beantwortet dafür aber eine Prüfung aus einer Ablesung, die **außerhalb** der Transaktion geschah, deren Schreibvorgänge sie absichert. Genau das schließt der Kommentar an `hasPermissionWithin` aus, und zwar mit Begründung: die Funktion existiert, damit eine datenabhängige Prüfung **keine** zweite, unabhängige Transaktion mitten in einer Änderung aufmachen muss.
+
+   Die größten Wiederholungen sind denn auch genau die Prüfungen: `orderAssignment` siebenmal, `userRole` sechsmal je Stapel — je zweimal pro Kommando, einmal in der Vorprüfung und einmal im Fachdienst.
+
+   **Das richtige Werkzeug ist deshalb kein Cache, sondern die Zusammenlegung, die bei den Transaktionen schon benannt ist:** `runPreflight` in die Arbeitstransaktion ziehen. Dann geschieht die Prüfung **einmal**, **innerhalb** der Transaktion, die sie absichert — die Eigenschaft bleibt erhalten statt aufgeweicht zu werden, die doppelte Lesung entfällt, und eine Transaktion je Kommando verschwindet obendrein. Ein Cache hätte dieselbe Zahl gekauft und die Eigenschaft dafür hergegeben.
+
+   **Was am Arbeitsschritt bleibt.** Zwischen zwei Kommandos ändert sich seine Version, ein Cache über den Stapel wäre auch fachlich falsch. Die drei Wiederholungen je Stapel auf `select: { version: true }` stammen aus `finalizeCommand` — also **nach** dem Schreiben, wo eine zwischengespeicherte Antwort veraltet wäre.
 
    **Was damit für die Auslegung feststeht.** Beide Untersuchungen zusammen — Transaktionen und Lesevorgänge — geben eine Größenordnung von **30 bis 40 % weniger Datenbankaufrufen** her, ohne eine fachliche Eigenschaft aufzugeben. Das ist ein Drittel mehr Durchsatz, nicht das Siebenfache. **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei**; die Codearbeit senkt, wie viel davon nötig ist.
 
