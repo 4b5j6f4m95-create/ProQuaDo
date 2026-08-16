@@ -1151,7 +1151,8 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
    - **Gewartet wird auf eine freie Datenbankverbindung**, und der Grund sind **179 Datenbankaufrufe je Stapel** (rund 45 je Kommando). Bei 9 Stapeln/s sind das 1600 Aufrufe je Sekunde — die Decke dieser Maschine.
    - **Der Hebel ist deshalb kein Hardwarehebel**, sondern die Zahl der Aufrufe je Kommando. Halbiert man sie, halbiert sich die benötigte Maschine.
    - Aufgeschlüsselt: **jeder dritte Aufruf ist Transaktionsgerüst** — 19 Transaktionen für 4 Kommandos, davon zwölf reine Buchführung der Sync-Strecke —, und die Berechtigung wird achtmal je Stapel gelesen.
-   - **Realistisch einzusparen sind davon rund 15 %**, nicht mehr: zwei der drei festen Transaktionen je Kommando sind der Preis dafür, dass ein Stapel teilweise ankommen darf. Für den Faktor 7,5 müsste man an die 90 Lesevorgänge je Stapel — eine andere Untersuchung.
+   - Die 90 Lesevorgänge sind dieselbe Ursache eine Ebene tiefer: **derselbe Arbeitsschritt wird 21-mal gelesen**, die Berechtigung 16-mal, weil jeder Helfer selbst lädt.
+   - **Zusammen sind rund 30–40 % weniger Aufrufe erreichbar**, ohne eine fachliche Eigenschaft aufzugeben — also ein Drittel mehr Durchsatz, nicht das Siebenfache. **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei;** die Codearbeit senkt, wie viel davon nötig ist.
 
    **Das Kommando steht bereit und dauert etwa eine Minute:**
 
@@ -1352,7 +1353,32 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    Macht 19 → 13 Transaktionen (−18 Gerüstaufrufe) und `user_roles`/`order_assignments` von je acht auf je vier (−8 Aufrufe). Zusammen **26 von 179, also rund 15 %** — nicht das Drittel, das oben stand.
 
-   **Und damit ist auch die Obergrenze schärfer.** Der Faktor 7,5 ist über den Zuschnitt der Sync-Strecke nicht zu holen. Die drei festen Transaktionen je Kommando sind der Preis dafür, dass ein Stapel teilweise ankommen und einzeln beurteilt werden darf; wer sie zusammenlegt, gibt genau das auf. Wer 200 Geräte auf zwei Kernen tragen will, muss deshalb an die **90 Lesevorgänge** je Stapel — und das ist eine andere Untersuchung als diese.
+   **Und damit ist auch die Obergrenze schärfer.** Der Faktor 7,5 ist über den Zuschnitt der Sync-Strecke nicht zu holen. Die drei festen Transaktionen je Kommando sind der Preis dafür, dass ein Stapel teilweise ankommen und einzeln beurteilt werden darf; wer sie zusammenlegt, gibt genau das auf. Wer 200 Geräte auf zwei Kernen tragen will, muss deshalb an die **90 Lesevorgänge** je Stapel — die stehen direkt darunter.
+
+   **Die 90 Lesevorgänge — gemessen am 16.08.2026.** Der `tx`-Client, den `$transaction` an den Fachcode weiterreicht, wird in einen Stellvertreter gehüllt; der hält jeden Zugriff samt Aufrufstelle fest, bevor er ihn weiterreicht. Damit steht der Aufrufer noch auf dem Stapel — beim Absenden der Anweisung ist er es nicht mehr.
+
+   **58 Prisma-Vorgänge ergeben 90 SQL-Lesevorgänge.** Der Unterschied ist kein Widerspruch: Prisma löst `include`-Beziehungen mit **eigenen** Anweisungen auf. `loadInstance` in `start-work-step.ts` lädt drei Beziehungen mit — ein Vorgang, vier Anweisungen.
+
+   | je Stapel | Tabelle                                                                                                                         |
+   | --------- | ------------------------------------------------------------------------------------------------------------------------------- |
+   | **21×**   | `workStepInstance`                                                                                                              |
+   | **8×**    | `orderAssignment`                                                                                                               |
+   | **8×**    | `userRole`                                                                                                                      |
+   | je 4×     | `syncCommand` · `productionOrder` · `productionHold`                                                                            |
+   | 2×        | `completionSubmission`                                                                                                          |
+   | je 1×     | `device` · `checklistItem` · `checklistResponse` · `inspectionCharacteristic` · `measurementResult` · `user` · `nonConformance` |
+
+   **Derselbe Arbeitsschritt wird 21-mal gelesen** — bei vier Kommandos, die alle an ihm arbeiten. Die Aufrufstellen zeigen, warum: `runPreflight` (4×), `finalizeCommand` (4×), `loadInstanceForEvidence` (2×), dazu `startWorkStepIdempotently`, `loadInstance` in `startWorkStep`, zweimal in `complete-work-step` und `validateSubmissionWithin`. **Jeder Helfer lädt selbst, was er braucht.**
+
+   **Die Berechtigung wird 16-mal gelesen** — `isAssignedToOrder` 8× und `hasPermissionWithin` 8×, also je zweimal pro Kommando: einmal in der Vorprüfung, einmal im Fachdienst.
+
+   **Das ist dieselbe Ursache wie bei den 19 Transaktionen, nur eine Ebene tiefer.** Dort öffnete jeder Helfer seine eigene Transaktion, weil `withOrgContext` keine Fassung hat, die sich in eine laufende einklinkt; hier lädt jeder Helfer seine eigenen Daten, weil ein Helfer eine `tx` bekommt und nichts, was schon geladen wäre. Die Sync-Strecke reicht **Zugriff** weiter, aber keine **Ergebnisse**.
+
+   **Was das an Aufrufen wert wäre.** Ein Lesecache je Kommando für den Arbeitsschritt und die Berechtigungsentscheidung brächte `workStepInstance` von 21 auf etwa 5 und die Berechtigung von 16 auf 8 — rund **24 der 58 Vorgänge**, und wegen der Beziehungsauflösung überproportional viele der 90 Anweisungen.
+
+   **Und die Grenze auch hier.** Je **Kommando** neu zu prüfen ist Absicht: `PERMISSION_REVOKED` ist ein eigener Konflikttyp, und eine Berechtigung, die während des Stapels entzogen wurde, soll auffallen. Redundant ist nur die **zweite** Prüfung innerhalb desselben Kommandos. Ebenso beim Arbeitsschritt: zwischen zwei Kommandos hat sich seine Version geändert, ein Cache über den ganzen Stapel wäre falsch — je Kommando ist er richtig.
+
+   **Was damit für die Auslegung feststeht.** Beide Untersuchungen zusammen — Transaktionen und Lesevorgänge — geben eine Größenordnung von **30 bis 40 % weniger Datenbankaufrufen** her, ohne eine fachliche Eigenschaft aufzugeben. Das ist ein Drittel mehr Durchsatz, nicht das Siebenfache. **Für 200 Geräte auf 3 Sekunden führt kein Weg an mehr Maschine vorbei**; die Codearbeit senkt, wie viel davon nötig ist.
 
    **Was daraus folgt:** die Hebel aus der Messreihe (`UV_THREADPOOL_SIZE=16` war gesetzt, ~5 %) sind gegen einen Faktor 7 bedeutungslos. Die Frage ist nicht mehr, welche Stellschraube gedreht wird, sondern **wie die Anlage dimensioniert wird** — und ob der Sync eines Schichtwechsels überhaupt auf derselben Maschine wie der Pilot laufen soll.
 

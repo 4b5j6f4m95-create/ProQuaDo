@@ -13,7 +13,7 @@
  * bei der Vereinigung nicht.
  */
 
-import { vereinigteDauer, normalisiere, kategorie, stelleAusStapel } from '../zeitnahme';
+import { vereinigteDauer, normalisiere, kategorie, stelleAusStapel, istLesend } from '../zeitnahme';
 
 describe('vereinigteDauer', () => {
   it('ist null ohne Abschnitte', () => {
@@ -179,5 +179,40 @@ describe('stelleAusStapel', () => {
 
   it('kommt ohne Stapelabzug zurecht', () => {
     expect(stelleAusStapel(undefined)).toBeNull();
+  });
+});
+
+describe('istLesend', () => {
+  it.each([
+    'workStepInstance.findFirst',
+    'userRole.findMany',
+    'syncCommand.findUnique',
+    'productionHold.count',
+    'auditEntry.aggregate',
+    'device.groupBy',
+    'completionSubmission.findFirstOrThrow',
+    'user.findUniqueOrThrow',
+  ])('zählt %s zu den Lesevorgängen', (vorgang) => {
+    expect(istLesend(vorgang)).toBe(true);
+  });
+
+  it.each([
+    'syncCommand.create',
+    'syncCommand.update',
+    'workStepInstance.updateMany',
+    'checklistResponse.upsert',
+    'device.delete',
+    '$executeRaw',
+  ])('zählt %s nicht zu den Lesevorgängen', (vorgang) => {
+    // Ein Schreibvorgang in der Lesespalte machte genau die Zahl größer, um
+    // die es hier geht — dieselbe Falle wie `SELECT set_config(…)` bei der
+    // Einordnung nach Anweisungstext.
+    expect(istLesend(vorgang)).toBe(false);
+  });
+
+  it('trifft nur den Vorgang am Ende, nicht einen Namensbestandteil', () => {
+    // Ein Modell, das „find" im Namen trägt, darf nicht als Lesevorgang
+    // durchgehen, wenn der Vorgang selbst schreibt.
+    expect(istLesend('findingReport.create')).toBe(false);
   });
 });
