@@ -44,6 +44,14 @@ export interface UrlCheck {
  * True for addresses that must never be reachable through a configured
  * webhook: loopback, link-local (which is where cloud metadata services
  * live), private ranges, and the unspecified address.
+ *
+ * **IPv6 wird zerlegt statt verglichen.** Der erste Anlauf prüfte
+ * Zeichenketten: `'::1'`, Präfix `fe80`, und IPv4-mapped nur in punktierter
+ * Form. Damit galten `0:0:0:0:0:0:0:1` (dasselbe Loopback, nur ausgeschrieben)
+ * und `::ffff:7f00:1` (dasselbe Loopback als IPv4-mapped in Hexschreibweise)
+ * als **öffentlich** — ebenso `::ffff:a9fe:a9fe`, der Metadatendienst. Eine
+ * Adresse hat viele Schreibweisen; verglichen werden dürfen deshalb die
+ * Zahlen, nicht der Text.
  */
 export function isPrivateAddress(address: string): boolean {
   const family = isIP(address);
@@ -61,13 +69,24 @@ export function isPrivateAddress(address: string): boolean {
   }
 
   if (family === 6) {
-    const normalized = address.toLowerCase();
-    if (normalized === '::' || normalized === '::1') return true;
-    // IPv4-mapped (::ffff:10.0.0.1) hides a v4 address inside a v6 literal.
-    const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped?.[1]) return isPrivateAddress(mapped[1]);
-    if (normalized.startsWith('fe80')) return true; // link-local
-    if (/^f[cd]/.test(normalized)) return true; // unique local
+    const groups = ipv6Groups(address);
+    // Nicht zerlegbar, obwohl `isIP` zugestimmt hat: dann lieber ablehnen.
+    if (!groups) return true;
+    const [erste, , , , , sechste, siebte, achte] = groups;
+
+    // Unspezifiziert (::) und Loopback (::1).
+    if (groups.slice(0, 7).every((g) => g === 0) && (achte === 0 || achte === 1)) return true;
+
+    // IPv4-mapped: ::ffff:a.b.c.d — und dieselbe Adresse in Hexschreibweise,
+    // ::ffff:7f00:1. Beide sind dieselbe Adresse; nur die erste wurde vorher
+    // erkannt, die zweite nicht.
+    if (groups.slice(0, 5).every((g) => g === 0) && sechste === 0xffff) {
+      const v4 = [siebte >> 8, siebte & 0xff, achte >> 8, achte & 0xff].join('.');
+      return isPrivateAddress(v4);
+    }
+
+    if ((erste & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+    if ((erste & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
     return false;
   }
 
@@ -106,9 +125,16 @@ export async function checkWebhookUrl(
 
   // A literal address needs no resolution; a name does, and what matters is
   // where it points, not how it is spelled.
-  const addresses = isIP(url.hostname)
-    ? [url.hostname]
-    : await resolveAll(url.hostname).catch(() => null);
+  //
+  // **Die Klammern gehören zur URL, nicht zur Adresse.** `url.hostname` gibt
+  // ein IPv6-Literal als `[::1]` zurück; `isIP` erkennt das nicht, die Adresse
+  // fiel deshalb in die Namensauflösung und scheiterte dort. Das sah wie ein
+  // Schutz aus — jede IPv6-Umgehung endete als UNRESOLVABLE_HOST — war aber
+  // keiner: es machte lediglich **jeden** IPv6-Endpunkt unkonfigurierbar, auch
+  // den legitimen. Der Schutz liegt jetzt dort, wo er hingehört, nämlich in
+  // `isPrivateAddress`.
+  const literal = entklammert(url.hostname);
+  const addresses = isIP(literal) ? [literal] : await resolveAll(url.hostname).catch(() => null);
 
   if (!addresses || addresses.length === 0) {
     return {
@@ -130,6 +156,65 @@ export async function checkWebhookUrl(
   }
 
   return { ok: true };
+}
+
+/**
+ * Zerlegt eine IPv6-Adresse in ihre acht 16-Bit-Gruppen.
+ *
+ * Eigenhändig und nicht über eine Bibliothek, weil es genau eine Stelle gibt,
+ * die es braucht, und weil die Regeln kurz sind: `::` steht für eine beliebig
+ * lange Folge von Nullgruppen und darf höchstens einmal vorkommen; eine
+ * abschließende punktierte IPv4-Adresse besetzt die letzten beiden Gruppen.
+ */
+type Ipv6Gruppen = [number, number, number, number, number, number, number, number];
+
+function ipv6Groups(address: string): Ipv6Gruppen | null {
+  let text = address.toLowerCase();
+
+  // Zonenkennung (fe80::1%eth0) gehört nicht zur Adresse.
+  const zone = text.indexOf('%');
+  if (zone >= 0) text = text.slice(0, zone);
+
+  // Abschließende IPv4-Form in zwei Gruppen umrechnen.
+  const punktiert = text.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (punktiert) {
+    const [a, b, c, d] = punktiert.slice(1).map(Number) as [number, number, number, number];
+    if ([a, b, c, d].some((n) => n > 255)) return null;
+    const hex = `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+    text = text.slice(0, punktiert.index) + hex;
+  }
+
+  const haelften = text.split('::');
+  if (haelften.length > 2) return null;
+
+  const zuGruppen = (teil: string): number[] | null => {
+    if (teil === '') return [];
+    const stuecke = teil.split(':');
+    const zahlen: number[] = [];
+    for (const stueck of stuecke) {
+      if (!/^[0-9a-f]{1,4}$/.test(stueck)) return null;
+      zahlen.push(Number.parseInt(stueck, 16));
+    }
+    return zahlen;
+  };
+
+  const links = zuGruppen(haelften[0] ?? '');
+  const rechts = haelften.length === 2 ? zuGruppen(haelften[1] ?? '') : [];
+  if (!links || !rechts) return null;
+
+  if (haelften.length === 1) return links.length === 8 ? (links as Ipv6Gruppen) : null;
+
+  const fehlend = 8 - links.length - rechts.length;
+  if (fehlend < 1) return null;
+  const alle = [...links, ...Array<number>(fehlend).fill(0), ...rechts];
+  // Die Länge ist durch die Rechnung oben festgelegt; die Prüfung steht hier,
+  // damit der Tupeltyp nicht auf einer Zusicherung allein ruht.
+  return alle.length === 8 ? (alle as Ipv6Gruppen) : null;
+}
+
+/** `[::1]` → `::1`; alles andere unverändert. */
+function entklammert(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
 }
 
 async function resolveAll(hostname: string): Promise<string[]> {
