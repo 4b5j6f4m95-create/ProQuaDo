@@ -57,6 +57,73 @@ describe('isPrivateAddress', () => {
     // Failing closed: the caller resolved something unexpected.
     expect(isPrivateAddress('nicht-einmal-eine-adresse')).toBe(true);
   });
+
+  /**
+   * Dieselben Adressen in anderer Schreibweise.
+   *
+   * Der erste Anlauf verglich Zeichenketten und ließ deshalb genau diese
+   * durch: `0:0:0:0:0:0:0:1` ist dasselbe Loopback wie `::1`, nur
+   * ausgeschrieben, und `::ffff:7f00:1` dasselbe wie `::ffff:127.0.0.1`, nur
+   * in Hexschreibweise. Eine Adresse hat viele Schreibweisen; verglichen
+   * werden dürfen die Zahlen, nicht der Text.
+   */
+  it.each([
+    ['0:0:0:0:0:0:0:1', 'Loopback ausgeschrieben'],
+    ['0:0:0:0:0:0:0:0', 'unspezifiziert ausgeschrieben'],
+    ['::ffff:7f00:1', 'v4-mapped Loopback in Hex'],
+    ['::ffff:a9fe:a9fe', 'v4-mapped Cloud-Metadaten in Hex'],
+    ['0:0:0:0:0:ffff:7f00:1', 'v4-mapped Loopback ohne ::'],
+    ['fe80:0:0:0:0:0:0:1', 'link-local ausgeschrieben'],
+    ['febf::1', 'oberer Rand von fe80::/10'],
+    ['fc00::1', 'unterer Rand von fc00::/7'],
+    ['fdff::1', 'oberer Rand von fc00::/7'],
+    ['fe80::1%eth0', 'link-local mit Zonenkennung'],
+  ])('refuses %s (%s)', (address) => {
+    expect(isPrivateAddress(address)).toBe(true);
+  });
+
+  it.each([
+    ['fec0::1', 'site-local — abgeschafft, aber nicht privat im Sinne dieser Prüfung'],
+    ['::ffff:8.8.8.8', 'v4-mapped öffentlich'],
+    ['::ffff:808:808', 'v4-mapped öffentlich in Hex'],
+  ])('allows %s (%s)', (address) => {
+    expect(isPrivateAddress(address)).toBe(false);
+  });
+});
+
+describe('checkWebhookUrl und IPv6-Literale', () => {
+  /**
+   * **Warum das eine eigene Gruppe ist.** `url.hostname` gibt ein
+   * IPv6-Literal mit Klammern zurück (`[::1]`). `isIP` erkennt das nicht, die
+   * Adresse fiel deshalb in die Namensauflösung und scheiterte dort. Jede
+   * IPv6-Umgehung endete damit als `UNRESOLVABLE_HOST` — das sah wie ein
+   * Schutz aus, war aber keiner: es machte lediglich **jeden** IPv6-Endpunkt
+   * unkonfigurierbar, auch den legitimen.
+   *
+   * Beide Richtungen gehören geprüft, sonst behebt jemand die eine und öffnet
+   * dabei die andere.
+   */
+  it('nimmt einen öffentlichen IPv6-Endpunkt an', async () => {
+    await expect(
+      checkWebhookUrl('https://[2606:4700:4700::1111]/hook', { requireHttps: false }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    'http://[::1]/hook',
+    'http://[0:0:0:0:0:0:0:1]/hook',
+    'http://[::ffff:127.0.0.1]/hook',
+    'http://[::ffff:7f00:1]/hook',
+    'http://[::ffff:a9fe:a9fe]/hook',
+    'http://[fe80::1]/hook',
+  ])('weist %s als interne Adresse ab — nicht als unauflösbaren Namen', async (url) => {
+    // Der Ablehnungsgrund ist Teil der Aussage: PRIVATE_ADDRESS heißt, der
+    // Filter hat gegriffen. UNRESOLVABLE_HOST hieße, es war wieder Zufall.
+    await expect(checkWebhookUrl(url, { requireHttps: false })).resolves.toMatchObject({
+      ok: false,
+      reason: 'PRIVATE_ADDRESS',
+    });
+  });
 });
 
 describe('checkWebhookUrl', () => {
