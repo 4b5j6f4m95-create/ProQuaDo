@@ -56,14 +56,14 @@ export const authConfig: NextAuthConfig = {
         logger.warn('Login denied: OIDC profile missing sub or email claim');
         return false;
       }
-      const resolved = await resolveLogin(externalId, email);
+      const resolved = await resolveLogin(externalId, email, isEmailVerified(profile));
       return resolved !== null;
     },
     async jwt({ token, profile }) {
       const externalId = profile?.sub as string | undefined;
       const email = (profile?.email as string | undefined) ?? token.email;
       if (externalId && email) {
-        const resolved = await resolveLogin(externalId, email);
+        const resolved = await resolveLogin(externalId, email, isEmailVerified(profile));
         if (resolved) {
           token.userId = resolved.userId;
           token.organizationId = resolved.organizationId;
@@ -85,3 +85,20 @@ export const authConfig: NextAuthConfig = {
     signIn: '/login',
   },
 };
+
+/**
+ * Hat der Anbieter die E-Mail-Adresse als bestätigt gemeldet?
+ *
+ * Der Claim heißt `email_verified` und ist in OpenID Connect als **Boolean**
+ * festgelegt — manche Anbieter senden ihn aber als Zeichenkette `"true"`.
+ * Beides wird angenommen; alles andere, auch ein fehlender Claim, gilt als
+ * **nicht** bestätigt. Fail closed: wo die Anwendung es nicht weiß, darf sie
+ * es nicht unterstellen.
+ *
+ * Wirksam wird die Angabe nur auf dem Einladungspfad — siehe `resolveLogin`.
+ */
+function isEmailVerified(profile: unknown): boolean {
+  if (typeof profile !== 'object' || profile === null) return false;
+  const claim = (profile as { email_verified?: unknown }).email_verified;
+  return claim === true || claim === 'true';
+}
