@@ -94,62 +94,53 @@ export async function confirmWithPin(
   pin: string,
   context: PinConfirmationContext,
 ): Promise<void> {
-  const user = await withOrgContext(actor.organizationId, (tx) =>
-    tx.user.findFirst({
-      where: { id: actor.userId },
-      select: {
-        id: true,
-        confirmationPinHash: true,
-        confirmationPinFailedAttempts: true,
-        confirmationPinLockedUntil: true,
-      },
-    }),
-  );
-  if (!user) throw new NotFoundError('Benutzer');
-
   const now = new Date();
-  if (user.confirmationPinLockedUntil && user.confirmationPinLockedUntil > now) {
-    const retryAfterSeconds = Math.ceil(
-      (user.confirmationPinLockedUntil.getTime() - now.getTime()) / 1000,
-    );
-    // Not counted as another failure: otherwise hammering a locked account
-    // would extend its own lock, and a worker who taps twice would be shut
-    // out for a quarter of an hour.
-    throw new ConfirmationLockedError(retryAfterSeconds);
-  }
 
-  if (!user.confirmationPinHash) {
+  // ── Versuch anmelden, **bevor** er geprüft wird ──────────────
+  const reservation = await reserveAttempt(actor, now, context);
+
+  if (reservation.kind === 'MISSING') throw new NotFoundError('Benutzer');
+  if (reservation.kind === 'NO_PIN') {
     throw new ConfirmationFailedError(
       'Für Ihr Konto ist keine Bestätigungs-PIN hinterlegt — bitte an die Administration wenden.',
     );
   }
+  if (reservation.kind === 'LOCKED') {
+    throw new ConfirmationLockedError(reservation.retryAfterSeconds);
+  }
+  if (reservation.kind === 'TOO_MANY_IN_FLIGHT') {
+    // Der Versuch wird **nicht geprüft**. Das ist der Sinn der Anmeldung:
+    // gleichzeitige Versuche bekommen fortlaufende Nummern, und wer über die
+    // Grenze hinaus kommt, rät nicht mehr mit.
+    throw new ConfirmationLockedError(reservation.retryAfterSeconds);
+  }
 
-  if (await verifyConfirmationPin(pin, user.confirmationPinHash)) {
-    // Only write when there is something to clear — the overwhelmingly
-    // common case is a correct PIN on an untouched counter.
-    if (user.confirmationPinFailedAttempts > 0 || user.confirmationPinLockedUntil) {
-      await withOrgContext(actor.organizationId, (tx) =>
-        tx.user.update({
-          where: { id: user.id },
-          data: { confirmationPinFailedAttempts: 0, confirmationPinLockedUntil: null },
-        }),
-      );
-    }
+  const { hash, attempt } = reservation;
+
+  // Die Prüfung selbst läuft **außerhalb** jeder Transaktion. scrypt ist
+  // absichtlich teuer; hielte man dabei die Zeile gesperrt, könnte ein
+  // einzelnes Konto den Verbindungspool blockieren — eine Abwehr, die zur
+  // Selbstbehinderung wird.
+  if (await verifyConfirmationPin(pin, hash)) {
+    await withOrgContext(actor.organizationId, (tx) =>
+      tx.user.update({
+        where: { id: actor.userId },
+        data: { confirmationPinFailedAttempts: 0, confirmationPinLockedUntil: null },
+      }),
+    );
     return;
   }
 
-  const failedAttempts = user.confirmationPinFailedAttempts + 1;
-  const lockSeconds = lockSecondsForAttempts(failedAttempts);
+  const lockSeconds = lockSecondsForAttempts(attempt);
   const lockedUntil = lockSeconds > 0 ? new Date(now.getTime() + lockSeconds * 1000) : null;
 
   await withOrgContext(actor.organizationId, async (tx) => {
-    await tx.user.update({
-      where: { id: user.id },
-      data: {
-        confirmationPinFailedAttempts: failedAttempts,
-        confirmationPinLockedUntil: lockedUntil,
-      },
-    });
+    if (lockedUntil) {
+      await tx.user.update({
+        where: { id: actor.userId },
+        data: { confirmationPinLockedUntil: lockedUntil },
+      });
+    }
 
     // A wrong PIN on a step confirmation is a security event, not a typo to
     // swallow: the audit trail is where "somebody tried eleven times last
@@ -159,11 +150,11 @@ export async function confirmWithPin(
       organizationId: actor.organizationId,
       eventType: lockedUntil ? 'confirmation_pin.locked' : 'confirmation_pin.failed',
       resourceType: 'user',
-      resourceId: user.id,
+      resourceId: actor.userId,
       actorId: actor.userId,
       newValues: {
         purpose: context.purpose,
-        failedAttempts,
+        failedAttempts: attempt,
         lockedUntil: lockedUntil?.toISOString() ?? null,
       },
       result: 'FAILURE',
@@ -177,7 +168,125 @@ export async function confirmWithPin(
     throw new ConfirmationLockedError(lockSeconds);
   }
   throw new ConfirmationFailedError(
-    `Die eingegebene PIN ist nicht korrekt. Noch ${PIN_ATTEMPTS_BEFORE_LOCK - failedAttempts} Versuch(e), ` +
+    `Die eingegebene PIN ist nicht korrekt. Noch ${PIN_ATTEMPTS_BEFORE_LOCK - attempt} Versuch(e), ` +
       'danach wird die Bestätigung vorübergehend gesperrt.',
   );
+}
+
+type Reservation =
+  | { kind: 'MISSING' }
+  | { kind: 'NO_PIN' }
+  | { kind: 'LOCKED'; retryAfterSeconds: number }
+  | { kind: 'TOO_MANY_IN_FLIGHT'; retryAfterSeconds: number }
+  | { kind: 'RESERVED'; hash: string; attempt: number };
+
+/**
+ * Zählt den Versuch, bevor er geprüft wird, und gibt seine laufende Nummer
+ * zurück.
+ *
+ * **Warum vorher und nicht nachher.** Vorher wurde gelesen, dann geprüft,
+ * dann der Zähler **absolut** zurückgeschrieben
+ * (`confirmationPinFailedAttempts + 1`). Bei READ COMMITTED — und die
+ * Isolationsstufe wird nirgends angehoben — lesen gleichzeitige Versuche
+ * alle denselben Stand und schreiben alle dieselbe Zahl: **20 Fehlversuche
+ * ergaben den Zähler 1**, das Konto wurde nie gesperrt, und die richtige PIN
+ * galt danach weiter. Nachgewiesen in
+ * `test/integration/phase7-confirmation-pin-race.integration.test.ts`.
+ *
+ * Das ist keine Kleinigkeit: der Kommentar an
+ * `users.confirmation_pin_failed_attempts` benennt die Sperre selbst als den
+ * Schutz, den eine vierstellige PIN hinter 100 Anfragen je Minute braucht.
+ * Ohne sie ist der Raum in gut einer Stunde durchprobiert — und wer eine
+ * fremde PIN hat, zeichnet in fremdem Namen ab (ADR-005).
+ *
+ * **Ein atomares `increment` allein genügt nicht.** Es macht den Zähler
+ * richtig, aber alle gleichzeitigen Versuche sind dann bereits geprüft,
+ * bevor die Sperre greift — ein Angreifer bekäme je Sperrfenster so viele
+ * Rateversuche, wie er gleichzeitig abschicken kann. Deshalb wird die Nummer
+ * **vor** der Prüfung vergeben und alles jenseits der Grenze gar nicht erst
+ * geprüft.
+ *
+ * Gezählt werden damit begonnene Versuche, nicht nur gescheiterte. Eine
+ * richtige PIN setzt den Zähler zurück; für den Nutzer ändert sich nichts.
+ */
+async function reserveAttempt(
+  actor: Actor,
+  now: Date,
+  context: PinConfirmationContext,
+): Promise<Reservation> {
+  return withOrgContext(actor.organizationId, async (tx) => {
+    const user = await tx.user.findFirst({
+      where: { id: actor.userId },
+      select: {
+        id: true,
+        confirmationPinHash: true,
+        confirmationPinLockedUntil: true,
+      },
+    });
+    if (!user) return { kind: 'MISSING' };
+
+    if (user.confirmationPinLockedUntil && user.confirmationPinLockedUntil > now) {
+      // Not counted as another failure: otherwise hammering a locked account
+      // would extend its own lock, and a worker who taps twice would be shut
+      // out for a quarter of an hour.
+      return {
+        kind: 'LOCKED',
+        retryAfterSeconds: secondsUntil(user.confirmationPinLockedUntil, now),
+      };
+    }
+
+    if (!user.confirmationPinHash) return { kind: 'NO_PIN' };
+
+    // `increment` und nicht „lesen, rechnen, schreiben": Postgres führt
+    // `SET x = x + 1` unter der Zeilensperre aus, gleichzeitige Versuche
+    // reihen sich damit auf und bekommen jeder eine eigene Nummer.
+    const updated = await tx.user.update({
+      where: { id: user.id },
+      data: { confirmationPinFailedAttempts: { increment: 1 } },
+      select: { confirmationPinFailedAttempts: true },
+    });
+    const attempt = updated.confirmationPinFailedAttempts;
+
+    if (attempt > PIN_ATTEMPTS_BEFORE_LOCK) {
+      // Jenseits der Grenze wird nicht mehr geprüft. Die Sperre wird hier
+      // gesetzt, weil dieser Weg an der Fehlerbehandlung unten vorbeiläuft —
+      // sonst zählte der Angreifer weiter hoch, ohne dass je gesperrt würde.
+      const lockSeconds = lockSecondsForAttempts(attempt);
+      const lockedUntil = new Date(now.getTime() + lockSeconds * 1000);
+      await tx.user.update({
+        where: { id: user.id },
+        data: { confirmationPinLockedUntil: lockedUntil },
+      });
+
+      // **Auch ein ungeprüfter Versuch gehört ins Audit.** Vor der Korrektur
+      // schrieb jeder Versuch ein Ereignis, weil jeder bis zur Prüfung kam;
+      // dieser Weg bricht davor ab und würde die Spur sonst genau dort dünner
+      // machen, wo jemand offensichtlich rät.
+      await writeAuditEvent(tx, {
+        organizationId: actor.organizationId,
+        eventType: 'confirmation_pin.locked',
+        resourceType: 'user',
+        resourceId: user.id,
+        actorId: actor.userId,
+        newValues: {
+          purpose: context.purpose,
+          failedAttempts: attempt,
+          lockedUntil: lockedUntil.toISOString(),
+          notVerified: true,
+        },
+        result: 'FAILURE',
+        failureReason: 'CONFIRMATION_LOCKED',
+        deviceId: context.deviceId,
+        source: context.deviceId ? 'mobile' : 'web',
+      });
+
+      return { kind: 'TOO_MANY_IN_FLIGHT', retryAfterSeconds: lockSeconds };
+    }
+
+    return { kind: 'RESERVED', hash: user.confirmationPinHash, attempt };
+  });
+}
+
+function secondsUntil(moment: Date, now: Date): number {
+  return Math.ceil((moment.getTime() - now.getTime()) / 1000);
 }
