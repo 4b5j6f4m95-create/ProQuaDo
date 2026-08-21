@@ -305,7 +305,9 @@ describe('Einen Menschen arbeitsfähig machen', () => {
     expect(employee.employeeNumber).toBe('MN-42');
 
     // Der erste SSO-Login tauscht das Sentinel gegen die echte Subject-ID.
-    const resolved = await resolveLogin('oidc-subject-neue-person', 'neue.person@t.local');
+    // `true`: die Einladung wird über die Adresse zugeordnet, und die muss
+    // der Anbieter bestätigt haben — siehe resolve-login.ts.
+    const resolved = await resolveLogin('oidc-subject-neue-person', 'neue.person@t.local', true);
     expect(resolved).not.toBeNull();
     expect(resolved!.userId).toBe(invited.id);
 

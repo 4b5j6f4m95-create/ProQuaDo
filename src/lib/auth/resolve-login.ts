@@ -24,10 +24,26 @@ interface OrgMatch {
  * Returns null if the person has no corresponding `users` row (unknown to
  * this system) or their account has been deactivated — callers MUST treat
  * both cases identically (deny login) to avoid leaking which case applies.
+ *
+ * ## Warum `emailVerified` gebraucht wird
+ *
+ * Ein vorbereitetes Konto (`pending:<email>`) wird **allein über die
+ * E-Mail-Adresse** zugeordnet. Wer sich beim Identitätsanbieter mit einer
+ * fremden Adresse anmelden kann, übernimmt damit die Einladung samt ihrer
+ * Rollen — ein Kontoübernahmepfad, gegen den die Anwendung bis hierher nichts
+ * hatte. docs/12 hält den Anbieter ausdrücklich generisch („Keycloak ist das
+ * Entwicklungsbeispiel"), und ob dort Selbstregistrierung offen ist oder
+ * Adressen ungeprüft bleiben, weiß die Anwendung nicht.
+ *
+ * **Verlangt wird die Bestätigung nur auf dem Einladungspfad.** Der zweite
+ * Weg ordnet über `sub` zu, und den bestimmt der Anbieter, nicht der
+ * Anmeldende — dort wäre die Forderung wirkungslos und bräche nur die
+ * Anbieter, die den Claim gar nicht senden.
  */
 export async function resolveLogin(
   externalId: string,
   email: string,
+  emailVerified: boolean,
 ): Promise<ResolvedLogin | null> {
   const matches = await prisma.$queryRaw<OrgMatch[]>`
     SELECT * FROM resolve_org_for_login(${externalId}, ${email})
@@ -38,6 +54,16 @@ export async function resolveLogin(
       { externalIdHash: hashForLog(externalId) },
       'Login denied: no matching user record',
     );
+    return null;
+  }
+
+  if (match.matched_by === 'pending_invite' && !emailVerified) {
+    logger.warn(
+      { externalIdHash: hashForLog(externalId) },
+      'Login denied: invite matched by an unverified email address',
+    );
+    // Dieselbe Antwort wie „kein Konto": der Anmeldende darf nicht erfahren,
+    // dass es zu dieser Adresse eine Einladung gibt.
     return null;
   }
 

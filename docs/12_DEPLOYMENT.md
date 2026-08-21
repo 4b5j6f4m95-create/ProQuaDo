@@ -17,7 +17,7 @@ Ergänzt docs/01 (Zieltopologie, nichtfunktionale Anforderungen) und docs/08 (Be
 | Node.js                        | **≥ 22.13**                     | `packageManager` ist pnpm 11, das `node:sqlite` lädt. Node 20 scheitert schon bei `pnpm install`.        |
 | PostgreSQL                     | 15+ (erprobt: 16)               | Datenbankname **muss `proquado`** sein — er steht fest in einer Migration (`GRANT CONNECT ON DATABASE`). |
 | S3-kompatibler Objektspeicher  | Bucket muss vorab existieren    | MinIO, AWS S3, Ceph. Die Anwendung legt keinen Bucket an.                                                |
-| OIDC-Provider                  | Discovery-Endpunkt erreichbar   | Generisch (ADR-001). Keycloak ist das Entwicklungsbeispiel, keine Voraussetzung.                         |
+| OIDC-Provider                  | Discovery-Endpunkt erreichbar; **`email_verified` im Profil**, siehe §3.3   | Generisch (ADR-001). Keycloak ist das Entwicklungsbeispiel, keine Voraussetzung.                         |
 | clamd (ClamAV)                 | über TCP erreichbar, **x86-64** | Pflicht: `MALWARE_SCANNER=stub` wird in Produktion mit hartem Fehler abgelehnt. Das gepinnte `clamav/clamav:1.4` gibt es **nur für amd64** — siehe §8. |
 | Reverse Proxy                  | TLS 1.3                         | Auch zuständig für unauthentifizierte Fluten — die App drosselt erst nach der Anmeldung (docs/08).       |
 | Scheduler (cron o. ä.)         | nur bei genutzten Webhooks      | Ruft den Dispatch-Endpunkt auf, siehe §6.                                                                |
@@ -98,6 +98,19 @@ Beide Listen müssen gepflegt sein:
 - `post.logout.redirect.uris` — Rücksprung nach der **Abmeldung**
 
 Fehlt die zweite, scheitert die Abmeldung mit „Invalid redirect uri". Sie wird gebraucht: auf einem geteilten Hallentablet ist die Abmeldung der einzige Weg, den Benutzer zu wechseln, und die App ermittelt den `end_session_endpoint` über die Discovery — ein fest verdrahteter Keycloak-Pfad wäre ein Bruch von ADR-001.
+
+#### Der Anbieter muss bestätigte Adressen melden
+
+Ein von der Administration **vorbereitetes** Konto wird beim ersten Login allein über die **E-Mail-Adresse** zugeordnet (`pending:<adresse>`, siehe `src/lib/auth/resolve-login.ts`). Wer sich beim Anbieter mit einer fremden Adresse anmelden kann, übernähme damit die Einladung samt ihrer Rollen.
+
+Die Anwendung verlangt deshalb auf diesem Pfad den Claim **`email_verified`**. Fehlt er oder ist er `false`, wird die Anmeldung abgewiesen — mit derselben Antwort wie bei einem unbekannten Konto, damit niemand erfährt, dass es zu dieser Adresse eine Einladung gibt.
+
+Am Anbieter ist deshalb zweierlei einzustellen:
+
+- **`email_verified` im Profil ausliefern.** Bei Keycloak ist der Mapper voreingestellt; andere Anbieter brauchen ihn gegebenenfalls im Scope `email`.
+- **Adressen tatsächlich prüfen** — also Selbstregistrierung schließen oder die Bestätigung erzwingen. Der Claim ist nur so viel wert wie das Verfahren dahinter.
+
+Bereits verknüpfte Konten sind davon nicht betroffen: sie werden über `sub` zugeordnet, und den bestimmt der Anbieter, nicht der Anmeldende.
 
 ---
 
@@ -249,6 +262,7 @@ Reihenfolge nach Messung (die vollständige Reihe steht in notes.md unter „wel
 - [ ] `proquado_app` mit eigenem Passwort angelegt, **vor** der ersten Migration
 - [ ] Bucket existiert, Versionierung und Verschlüsselung aktiv
 - [ ] OIDC-Client mit Redirect- **und** Post-Logout-URIs
+- [ ] Anbieter liefert `email_verified` und prüft Adressen wirklich (§3.3) — sonst ist jede vorbereitete Einladung übernehmbar
 - [ ] `MALWARE_SCANNER=clamav`, clamd erreichbar, `/api/health/ready` meldet `scannerKind: "clamav"`
 - [ ] `NODE_ENV=production`, TLS am Proxy, Rate-Limit-Speicher auf `postgres`
 - [ ] Alle Geheimnisse aus einem Secret-Store, keines aus `.env.example`
