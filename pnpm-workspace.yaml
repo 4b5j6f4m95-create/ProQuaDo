@@ -32,3 +32,17 @@ allowBuilds:
   # Build-Skript wird also auch dann nicht gebraucht, wenn es einmal
   # dazukommt.
   sharp: false
+
+# Erzwungene Fassungen transitiver Abhängigkeiten.
+#
+# deepmerge-ts: GHSA-ggr8-5vv4-36mx (Stack-Erschöpfung beim Zusammenführen
+# rekursiver Objektgraphen). Der verwundbare Stand hängt unter
+# `prisma > @prisma/config`, und Prisma 7.9.1 ist die neueste Fassung — es
+# gibt also keine Aktualisierung, die ihn mitzieht.
+#
+# Erreichbar ist die Stelle nur über `prisma.config.ts`, eine Datei aus dem
+# Repository und nicht aus fremder Hand. Der Override steht trotzdem hier:
+# eine bekannte Schwachstelle unbehandelt stehen zu lassen, weil sie gerade
+# nicht erreichbar ist, verlagert die Prüfung auf jeden künftigen Leser.
+overrides:
+  deepmerge-ts: '>=8.0.0'
