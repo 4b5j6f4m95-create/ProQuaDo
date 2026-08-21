@@ -263,7 +263,10 @@ describe('Login resolution (RLS bootstrap problem, see src/lib/auth/resolve-logi
   });
 
   it('resolves an already-linked account by external_id', async () => {
-    const resolved = await resolveLogin('oidc-sub-linked-user', 'linked@test.local');
+    // `false`: der bereits verknüpfte Weg ordnet über `sub` zu, nicht über
+    // die Adresse — eine Bestätigung wird dort nicht verlangt und wäre
+    // wirkungslos.
+    const resolved = await resolveLogin('oidc-sub-linked-user', 'linked@test.local', false);
     expect(resolved).toEqual({
       userId: workerUserId,
       organizationId: orgId,
@@ -279,7 +282,7 @@ describe('Login resolution (RLS bootstrap problem, see src/lib/auth/resolve-logi
     ]);
     const invitedUserId = users['invited@test.local']!;
 
-    const resolved = await resolveLogin('brand-new-oidc-sub', 'invited@test.local');
+    const resolved = await resolveLogin('brand-new-oidc-sub', 'invited@test.local', true);
     expect(resolved?.userId).toBe(invitedUserId);
 
     const linkedUser = await ownerClient.user.findUniqueOrThrow({ where: { id: invitedUserId } });
@@ -294,7 +297,38 @@ describe('Login resolution (RLS bootstrap problem, see src/lib/auth/resolve-logi
   });
 
   it('returns null for a completely unknown user (no leak, no crash)', async () => {
-    const resolved = await resolveLogin('nobody-sub', 'nobody@test.local');
+    const resolved = await resolveLogin('nobody-sub', 'nobody@test.local', true);
     expect(resolved).toBeNull();
+  });
+
+  /**
+   * Kontoübernahme über eine unbestätigte Adresse.
+   *
+   * Ein vorbereitetes Konto wird **allein über die E-Mail-Adresse**
+   * zugeordnet. Wer sich beim Identitätsanbieter mit einer fremden Adresse
+   * anmelden kann, übernähme sonst die Einladung samt ihrer Rollen — und ob
+   * der Anbieter Adressen prüft, weiß die Anwendung nicht: docs/12 hält ihn
+   * ausdrücklich generisch.
+   */
+  it('verweigert eine Einladung, deren Adresse der Anbieter nicht bestätigt hat', async () => {
+    const seeded = await seedOrganizationRbac(ownerClient, 'Integration Test Org Unverified');
+    const users = await seedDemoUsers(ownerClient, seeded, [
+      { email: 'unverified@test.local', displayName: 'Eingeladen', roleCode: 'WORKER' },
+    ]);
+    const invitedUserId = users['unverified@test.local']!;
+
+    const resolved = await resolveLogin('fremder-sub', 'unverified@test.local', false);
+    expect(resolved).toBeNull();
+
+    // Und die Einladung bleibt unangetastet — kein halb verknüpftes Konto.
+    const unveraendert = await ownerClient.user.findUniqueOrThrow({
+      where: { id: invitedUserId },
+    });
+    expect(unveraendert.externalId).toBe('pending:unverified@test.local');
+
+    // Mit Bestätigung geht derselbe Weg durch: die Ablehnung liegt an der
+    // fehlenden Bestätigung und nicht an etwas anderem.
+    const mitBestaetigung = await resolveLogin('fremder-sub', 'unverified@test.local', true);
+    expect(mitBestaetigung?.userId).toBe(invitedUserId);
   });
 });
