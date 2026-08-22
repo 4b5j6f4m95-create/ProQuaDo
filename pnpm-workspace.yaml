@@ -46,3 +46,31 @@ allowBuilds:
 # nicht erreichbar ist, verlagert die Prüfung auf jeden künftigen Leser.
 overrides:
   deepmerge-ts: '>=8.0.0'
+
+# Geflickte Abhängigkeiten.
+#
+# eslint-plugin-react: eine Zeile, die ESLint 10 blockierte. `resolveBasedir`
+# in `lib/util/version.js` rief `context.getFilename()` ungeschützt auf — eine
+# Methode, die ESLint 10 entfernt hat. Der Lauf starb sofort und für jede
+# Datei, beim Ermitteln der React-Fassung für `react/display-name`.
+#
+# Bemerkenswert ist, wo der Fehler NICHT sitzt: dieselbe Datei hat für alle
+# anderen entfernten Methoden eine Rückfalllogik (`sourceCode.x ?? context.x`).
+# Genau diese eine Stelle hat sie nicht. Der Patch setzt sie ein, in derselben
+# Form wie die Nachbarn.
+#
+# **Warum geflickt und nicht gewartet.** Das Plugin steht seit April 2025 auf
+# 7.37.5 und nennt `^9.7` als Peer-Obergrenze; die Sperre in
+# `.github/dependabot.yml` hätte auf ein Release gewartet, das seit über einem
+# Jahr nicht kommt. Geprüft wurde nicht nur, dass der Lauf durchgeht, sondern
+# dass die Regeln danach noch **greifen**: 33 react-Regeln aktiv, und eine
+# absichtlich fehlerhafte Datei wird von `react/jsx-key` gefangen.
+#
+# **Was beim nächsten Mal zu tun ist.** Der Patch hängt an der Fassung 7.37.5.
+# Zieht das Plugin nach, scheitert `pnpm install` mit einer klaren Meldung —
+# das ist die gewollte Richtung. Dann prüfen, ob die Zeile upstream
+# abgesichert ist, und den Patch samt dieses Kommentars entfernen:
+#
+#   npm view eslint-plugin-react peerDependencies
+patchedDependencies:
+  eslint-plugin-react@7.37.5: patches/eslint-plugin-react@7.37.5.patch

@@ -1215,13 +1215,26 @@ Die Gates vor dem Piloten sind abgearbeitet, ebenso die bekannten Lücken aus de
 
    Bis dahin war die Stufe zweimal gescheitert, beide Male vor dem ersten Test — siehe „Die CI war sieben Phasen lang nie gelaufen".
 
-4. **Next 16 ist gemacht, ESLint 10 bleibt offen — und zwar nicht aus Bequemlichkeit.** ESLint 10 entfernt die alten `context`-Methoden; `eslint-config-next` 16 bringt `eslint-plugin-react@7.37.5` mit, das `context.getFilename()` weiterhin aufruft. Der Lauf stirbt sofort und für **jede** Datei: `TypeError: Error while loading rule 'react/display-name': contextOrFilename.getFilename is not a function`. Die Paketstände sagen dasselbe voraus — `eslint-plugin-react` nennt als Peer `^9.7` als Obergrenze, und 7.37.5 ist der aktuelle Stand, es gibt also keine Fassung, auf die man ausweichen könnte. Die beiden Auswege wären gewesen, die React-Regeln abzuschalten oder die Konfiguration von Hand nachzubauen; beides tauscht eine Versionsnummer gegen einen Teil der Prüfung. Deshalb: ESLint bleibt bei **9.39.5**, `eslint-config-next` und `eslint-config-prettier` sind mitgezogen. Wiederaufnehmen, sobald `eslint-plugin-react` ESLint 10 als Peer nennt — die Prüfung dafür ist ein Einzeiler:
+4. ~~**Next 16 ist gemacht, ESLint 10 bleibt offen**~~ — **erledigt am 21.08.2026, aber anders als hier vorgesehen.** Der Absatz unten beschreibt die Sperre, wie sie stand; die Auflösung steht am Ende. **Next 16 ist gemacht, ESLint 10 blieb offen — und zwar nicht aus Bequemlichkeit.** ESLint 10 entfernt die alten `context`-Methoden; `eslint-config-next` 16 bringt `eslint-plugin-react@7.37.5` mit, das `context.getFilename()` weiterhin aufruft. Der Lauf stirbt sofort und für **jede** Datei: `TypeError: Error while loading rule 'react/display-name': contextOrFilename.getFilename is not a function`. Die Paketstände sagen dasselbe voraus — `eslint-plugin-react` nennt als Peer `^9.7` als Obergrenze, und 7.37.5 ist der aktuelle Stand, es gibt also keine Fassung, auf die man ausweichen könnte. Die beiden Auswege wären gewesen, die React-Regeln abzuschalten oder die Konfiguration von Hand nachzubauen; beides tauscht eine Versionsnummer gegen einen Teil der Prüfung. Deshalb: ESLint bleibt bei **9.39.5**, `eslint-config-next` und `eslint-config-prettier` sind mitgezogen. Wiederaufnehmen, sobald `eslint-plugin-react` ESLint 10 als Peer nennt — die Prüfung dafür ist ein Einzeiler:
 
    ```bash
    npm view eslint-plugin-react peerDependencies
    ```
 
-   **Dependabot ist dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
+   **Aufgelöst am 21.08.2026 — durch Nachmessen statt durch Warten.** Die Sperre nannte als Ausstieg „sobald das Plugin nachzieht". Es zieht nicht nach: 7.37.5 steht seit **April 2025** unverändert und nennt weiterhin `^9.7`. Der Versuch, ESLint 10 trotzdem zu installieren, zeigte dann etwas, das die Diagnose oben nicht hergab — **der Bruch ist eine einzige Zeile**:
+
+   ```
+   lib/util/version.js:31   resolveBasedir()
+     const filename = … : contextOrFilename.getFilename();
+   ```
+
+   Und das Bemerkenswerte daran: **dieselbe Datei hat für jede andere entfernte Methode eine Rückfalllogik** (`sourceCode.getScope ? … : context.getScope()` und so fort). Genau diese eine Stelle hat sie nicht. Die Diagnose „das Plugin bringt die alten Methoden mit" war richtig und trotzdem zu grob — sie ließ es nach einer grundsätzlichen Unverträglichkeit aussehen, wo ein Versehen vorlag.
+
+   Behoben über `pnpm patch` (eine Zeile, in derselben Form wie die Nachbarn), begründet in `pnpm-workspace.yaml`. **Geprüft wurde nicht nur, dass der Lauf durchgeht, sondern dass die Regeln danach greifen:** 33 react-Regeln aktiv, und eine absichtlich fehlerhafte Datei wird von `react/jsx-key` gefangen — sonst hätte man eine Versionsnummer gegen einen stillen Ausfall der Prüfung getauscht.
+
+   **Lehre:** „Der Peer-Bereich nennt unsere Version nicht" ist eine Deklaration, keine Messung. Sie taugt zum Aufschieben, nicht zum Urteil. Zwischen „unverträglich" und „an einer Stelle nicht nachgezogen" liegt hier ein Jahr Wartezeit.
+
+   **Dependabot war dafür stillgelegt**, nicht bloß dieser eine PR geschlossen: `.github/dependabot.yml` ignoriert `eslint` ab Version 10, mit der Begründung im Klartext daneben. Ein PR, der monatlich neu aufsteht und jedes Mal an derselben Stelle scheitert, erzieht dazu, rote Läufe zu übersehen — dieselbe Überlegung, aus der der Lasttest nicht in der CI steht. Patch- und Minor-Anhebungen innerhalb von ESLint 9 laufen unverändert weiter. Nennt die Probe oben eines Tages ESLint 10, gehört der `ignore`-Block weg.
 
 5. **Den Sync-Wert auf der Zielhardware nachmessen — erledigt, und die Antwort verlangt eine Entscheidung.** Er war der einzige Zielwert aus docs/09, der nicht mit Reserve besteht, und der einzige, den kein Entwicklungsrechner entscheiden kann.
 
