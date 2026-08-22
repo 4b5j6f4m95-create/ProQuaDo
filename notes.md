@@ -104,6 +104,14 @@ pnpm run dev
 
 **Ports:** Postgres `5433`, MinIO `9010`/`9011` (Console), Keycloak `8081`, clamd `3310`, App `3000` (Standard) — siehe unten zu Portkonflikten.
 
+**Wenn der App-Port belegt ist:** `.claude/launch.json` kennt neben `dev` (3002) auch **`dev3003`**. Der Keycloak-Realm hat `3000`, `3002` und `3003` als Redirect-URI hinterlegt, ein Wechsel dorthin braucht also **keine** Änderung an Keycloak — wohl aber an `AUTH_URL`, denn NextAuth baut daraus die Rücksprungadresse. Am wenigsten invasiv über eine `.env.local` (von `.gitignore` erfasst, wird von Next.js **zusätzlich** zu `.env` geladen und sticht sie):
+
+```bash
+echo 'AUTH_URL="http://localhost:3003"' > .env.local
+```
+
+Stimmt `AUTH_URL` nicht mit dem tatsächlichen Port überein, führt die Anmeldung bis zur Keycloak-Maske und scheitert danach beim Rücksprung — der Fehler zeigt sich also **nicht** dort, wo er entsteht. Wer prüfen will, ob es passt, sieht sich den `redirect_uri`-Parameter der Weiterleitung an.
+
 **Verbindungen seit Prisma 7:** Die URLs stehen nicht mehr im Schema. Die Anwendung baut ihren Client mit `DATABASE_URL` (Rolle `proquado_app`, RLS gilt), `prisma migrate` und der Seed lesen `DIRECT_DATABASE_URL` über `prisma.config.ts` (schemabesitzend). Die Poolgröße steuert `DATABASE_POOL_MAX`, **nicht** mehr `connection_limit` in der URL.
 
 `clamav` startet bewusst **nicht** mit — der erste Start lädt ~250 MB Signaturen und braucht Minuten. Wer am Upload-Pfad arbeitet oder den echten Scan sehen will:
