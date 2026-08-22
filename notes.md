@@ -28,7 +28,7 @@ Praktische Hinweise für die lokale Arbeit an ProQuaDo, ergänzend zu `docs/` (A
 
   **Und eine zweite Beobachtung, die sich erst spät zeigte:** die folgenreichsten Lücken standen nicht im Code, sondern in einer **Formulierung im Plan**. `docs/10` führt die Datenmigration als „falls Altsystem vorhanden" und stellt die andere Hälfte der Frage nie — dahinter lag, dass sich Stammdaten und PINs überhaupt nicht erfassen ließen. Ebenso hatte `docs/10` nie gefragt, wer eine vergessene PIN zurücksetzt. Beides fiel nicht durch Lesen des Codes auf, sondern durch die Frage, was ein Pilot **am ersten Tag** tun muss.
 
-- **Vor dem Piloten offen, und nichts davon ist Programmierarbeit** — die Schrittfolge dazu steht in [docs/13](docs/13_STAGING_SETUP.md), die verbindliche Liste in [docs/12 §9](docs/12_DEPLOYMENT.md): (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft, und `DATABASE_POOL_MAX` ausdrücklich setzen; (c) die Restore-Probe gegen das **echte** Backup-Verfahren fahren statt gegen ein im Test erzeugtes; (d) ~~den Sync-Durchsatz auf der **Zielhardware** messen~~ — **gemessen (15.08.2026), und das Ergebnis ist eine Entscheidung, keine Zahl**: 2 vCPU tragen **19 Geräte**, das Ziel lautet 200, der p95 liegt beim Siebenfachen. Offen ist damit nicht mehr die Messung, sondern die **Auslegung** — und die ist nicht durch „mehr Kerne" zu erledigen, siehe Übergabe Punkt 5; (e) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt. **Alle fünf hängen an derselben Voraussetzung**, einer Umgebung, die kein Entwicklungsrechner ist; wer sie einmal aufsetzt, erledigt sie zusammen.
+- **Vor dem Piloten offen, und nichts davon ist Programmierarbeit** — die Schrittfolge dazu steht in [docs/13](docs/13_STAGING_SETUP.md), die verbindliche Liste in [docs/12 §9](docs/12_DEPLOYMENT.md): (a) `MALWARE_SCANNER=clamav` samt erreichbarer clamd-Instanz in der **Zielumgebung** — Dienst, Adapter, Readiness-Check und EICAR-Nachweis stehen, die Konfiguration der realen Umgebung nicht; (b) `RATE_LIMIT_STORE` in Produktion auf `postgres` belassen (Standard), sobald mehr als eine Instanz läuft, und `DATABASE_POOL_MAX` ausdrücklich setzen; (c) die Restore-Probe gegen das **echte** Backup-Verfahren fahren statt gegen ein im Test erzeugtes; (d) ~~den Sync-Durchsatz auf der **Zielhardware** messen~~ — **gemessen (15.08.2026), und das Ergebnis ist eine Entscheidung, keine Zahl**: 2 vCPU tragen **19 Geräte**, das Ziel lautet 200, der p95 liegt beim Siebenfachen. Offen ist damit nicht mehr die Messung, sondern die **Auslegung** — und die ist nicht durch „mehr Kerne" zu erledigen, siehe Übergabe Punkt 5; (e) der externe Penetrationstest, den docs/11 §5 ausdrücklich nicht ersetzt — **ein interner White-Box-Test ist am 21.08.2026 gelaufen und hat vier Befunde behoben** (PR #90–#93, Einzelheiten unter „Interner Sicherheitstest"), er ersetzt den externen aber gerade nicht: wer den Code geschrieben hat, sucht systematisch andere Dinge. **Alle fünf hängen an derselben Voraussetzung**, einer Umgebung, die kein Entwicklungsrechner ist; wer sie einmal aufsetzt, erledigt sie zusammen.
 
 **Im Browser geprüft (angemeldet als QM):** `/dashboard`, `/search`, `/production-orders/{id}/dossier` samt ZIP-Export und Download, `/notifications`, `/sync/conflicts`, `/offline`. Die Prüfung fand zwei Fehler, die keine der anderen Kontrollen sehen konnte — siehe „pdfkit findet seine Schriftmetriken nicht" und „Der Seed legt nach dem ersten Login Doppelbenutzer an" unten.
 
@@ -719,7 +719,11 @@ Bei der Skalierungsmessung (15.08.2026) haben **drei** Prüfungen hintereinander
 
 Behoben nicht durch bessere Muster, sondern indem die Identität **übergeben statt gesucht** wird: die Container-ID vom gestarteten Container (`container.getId()`), die PID vom Aufrufer (`$!` des gestarteten Prozesses, und von dort der Prozessbaum über `/proc/PID/task/PID/children`).
 
-**Lehre:** Wer eine Sache gerade selbst gestartet hat, hat ihre Kennung in der Hand — sie danach wieder zu **suchen**, wirft diese Gewissheit weg und ersetzt sie durch eine Ähnlichkeitsabfrage. Ein Muster kann nicht wissen, welchen der Treffer man meinte. Und ein Rückfallwert wie `|| echo 0` gehört nur dorthin, wo Null eine gültige Antwort ist — sonst tarnt er den Fehlschlag als Messwert, und das ist schlimmer als ein Absturz.
+**Nachtrag (21.08.2026), vierte Wiederholung — diesmal beinahe als Sicherheitsbefund.** Beim White-Box-Test suchte `grep -rln "rateLimit" src/app/api/` nach Aufrufen der Ratenbremse und fand **keinen**. Der Schluss lag nahe und wäre grob falsch gewesen: die Bremse heißt `assertWithinRateLimit` — mit großem `R` —, und sie wird in `requireAuthContext` aufgerufen, also auf **jeder** Route. Ein gemeldeter Befund „die Ratenbremse ist nirgends angewandt" hätte Arbeit ausgelöst, die es nicht braucht, und Vertrauen gekostet.
+
+Bemerkenswert ist die Richtung: die drei Fälle oben meldeten etwas Falsches als **vorhanden**, dieser meldete etwas Vorhandenes als **fehlend**. Ein leeres Suchergebnis ist keine Abwesenheit, sondern die Abwesenheit eines Treffers für dieses Muster.
+
+**Lehre:** Wer eine Sache gerade selbst gestartet hat, hat ihre Kennung in der Hand — sie danach wieder zu **suchen**, wirft diese Gewissheit weg und ersetzt sie durch eine Ähnlichkeitsabfrage. Ein Muster kann nicht wissen, welchen der Treffer man meinte. Und ein Rückfallwert wie `|| echo 0` gehört nur dorthin, wo Null eine gültige Antwort ist — sonst tarnt er den Fehlschlag als Messwert, und das ist schlimmer als ein Absturz. Und ein **leeres** Suchergebnis wird erst dann zur Aussage, wenn man an einem bekannten Treffer geprüft hat, dass das Muster überhaupt greift.
 
 ### Ein Mittelwert über den ganzen Lauf verwischt genau die Phase, um die es geht
 
@@ -732,6 +736,50 @@ Der Wert ist über die **gesamte** Laufzeit gerechnet — einschließlich Contai
 _Nebenbei ein zweiter Fallstrick derselben Messung:_ Wer die CPU-Zeit eines **Prozessbaums** summiert, bekommt negative Zuwächse, sobald ein Kindprozess endet — dessen verbrauchte Zeit verschwindet aus der Summe. In der Reihe steht deshalb bei Sekunde 6 eine −2,18. Kumulierte Zähler sind nur dann monoton, wenn die Menge der Zähler es auch ist.
 
 _Und ein dritter, einen Tag später:_ Der cgroup-Zähler eines Containers verschwindet **mit** dem Container. Testcontainers räumt am Laufende ab, die letzte Ablesung ist deshalb `None` — und eine Auswertung, die die Differenz zwischen erster und letzter Probe bildet, stürzt genau dann ab, wenn die Messung fertig ist. Die Reihe war vollständig, nur ihr Schlusswert nicht. Auszuwerten ist über die **gültigen** Proben, nicht über die Endpunkte.
+
+### Eine Sperre, die nur nacheinander geprüft wurde, ist nicht geprüft
+
+Die Fehlversuchssperre der Bestätigungs-PIN hatte eine eigene Integrationssuite — und die prüfte sie ausschließlich **sequenziell**: vier falsche Eingaben, Zähler vier, die fünfte sperrt. Alles grün, jahrelang.
+
+**Parallel** abgeschickt fiel sie um: 20 gleichzeitige Fehlversuche ergaben den Zähler **1**, das Konto wurde nicht gesperrt, und die richtige PIN galt danach weiter.
+
+Die Ursache ist ein Lost Update. Der Zähler wurde gelesen, um eins erhöht und **absolut** zurückgeschrieben; bei READ COMMITTED — und die Isolationsstufe wird in diesem Projekt nirgends angehoben — lesen gleichzeitige Transaktionen alle denselben Stand und schreiben alle dieselbe Zahl. Das Muster `version: { increment: 1 }` war im Code an fünf anderen Stellen längst in Gebrauch; hier stand die Rechnung in JavaScript.
+
+**Und ein atomares `increment` allein hätte es nicht behoben.** Es macht den Zähler richtig, aber alle gleichzeitigen Versuche sind dann bereits gegen die PIN gehalten worden, bevor die Sperre greift — der Angreifer bekäme je Sperrfenster so viele Rateversuche, wie er gleichzeitig abschicken kann. Der Versuch muss **angemeldet werden, bevor er geprüft wird**: er bekommt unter der Zeilensperre eine laufende Nummer, und alles jenseits der Grenze wird gar nicht erst geprüft.
+
+**Zwei Nebenbedingungen, die man dabei leicht verliert.** Die `scrypt`-Prüfung muss **außerhalb** der Transaktion bleiben — sie ist absichtlich teuer, und eine gehaltene Zeilensperre währenddessen ließe ein einzelnes Konto den Verbindungspool blockieren; die Abwehr würde zur Selbstbehinderung. Und der abgewiesene Versuch braucht weiterhin sein **Audit-Ereignis**: vorher schrieb jeder Versuch eines, weil jeder bis zur Prüfung kam, und die Korrektur hätte die Spur genau dort dünner gemacht, wo jemand offensichtlich rät.
+
+**Lehre:** Ein Zähler, der eine Bremse gegen Erraten trägt, ist erst geprüft, wenn er **gleichzeitig** geprüft wurde. Sequenzielle Tests bestätigen bei diesem Fehlerbild zuverlässig das Falsche. Dasselbe gilt für jede andere „N Versuche, dann sperren"-Konstruktion im System.
+
+### Ein Schutz, der aus Versehen wirkt, hält nur bis zur nächsten Fehlerbehebung
+
+Der SSRF-Adressfilter prüfte IPv6 über **Zeichenketten**: `'::1'`, Präfix `fe80`, IPv4-mapped nur in punktierter Form. Damit galten `0:0:0:0:0:0:0:1` (dasselbe Loopback, ausgeschrieben), `::ffff:7f00:1` (dasselbe Loopback in Hexschreibweise) und `::ffff:a9fe:a9fe` (der Cloud-Metadatendienst) als **öffentlich**.
+
+Über den Webhook-Pfad war trotzdem keine dieser Adressen erreichbar — aber nicht wegen des Filters: `url.hostname` liefert IPv6-Literale **mit Klammern** (`[::1]`), `isIP` erkennt das nicht, und die Adresse fiel in die Namensauflösung, die scheiterte.
+
+Das ist die eigentliche Beobachtung: **derselbe Fehler war zugleich der einzige Schutz.** Er machte jeden IPv6-Endpunkt unkonfigurierbar, auch den legitimen — und wer diesen Funktionsfehler behoben hätte, naheliegend durch Entfernen der Klammern, hätte damit die Lücken scharf gemacht, ohne es zu merken.
+
+Aufgefallen ist es an einer Kleinigkeit: der Ablehnungsgrund passte nicht zur Absicht. Ein Filter für interne Adressen, der `UNRESOLVABLE_HOST` zurückgibt statt `PRIVATE_ADDRESS`, hat die Arbeit nicht getan — er hatte nur Glück.
+
+**Lehre:** Bei einer Sicherheitsprüfung gehört der **Grund** der Ablehnung in die Zusicherung, nicht nur die Ablehnung selbst. Und: eine Adresse hat viele Schreibweisen; verglichen werden dürfen die Zahlen, nicht der Text.
+
+### Eine Annahme über eine fremde Komponente, die nirgends steht, ist keine Annahme, sondern eine Lücke
+
+Ein von der Administration vorbereitetes Konto wird beim ersten Login **allein über die E-Mail-Adresse** zugeordnet (`pending:<adresse>`). Wer sich beim Identitätsanbieter mit einer fremden Adresse anmelden kann, übernimmt damit die Einladung samt ihrer Rollen.
+
+Die Anwendung prüfte keinen `email_verified`-Claim, und in Dokumentation und Notizen kam E-Mail-Verifizierung **an keiner Stelle** vor. Der Demo-Realm hatte `registrationAllowed: false` — das entschärfte es dort, war aber nirgends als Voraussetzung benannt. docs/12 hält den Anbieter ausdrücklich generisch („Keycloak ist das Entwicklungsbeispiel"), docs/13 nennt einen anderen Anbieter als ungetesteten Fall. Die Sicherheit dieses Pfades hing also an einer Einstellung, die jemand anderes vornimmt und über die nie jemand etwas gesagt hat.
+
+Behoben an beiden Enden: die Anwendung verlangt die Bestätigung **auf dem Einladungspfad** (nicht auf dem anderen — dort ordnet `sub` zu, und den bestimmt der Anbieter, nicht der Anmeldende), und docs/12 fordert vom Anbieter beides, den Claim **und** ein Verfahren dahinter. Ein Claim ist nur so viel wert wie die Prüfung, die ihn erzeugt.
+
+**Lehre:** Wo die Sicherheit eines Pfades an der Konfiguration einer fremden Komponente hängt, gehört diese Anforderung in die Betriebsdokumentation — und, wo möglich, als Prüfung in den Code. Was nur im Kopf des Entwicklers stand, steht nirgends.
+
+### `pnpm.overrides` in `package.json` wird von pnpm 11 stillschweigend ignoriert
+
+Der Override, der `deepmerge-ts` auf eine unverwundbare Fassung heben sollte, blieb beim ersten Versuch **wirkungslos**: pnpm 11 liest das Feld nicht mehr aus `package.json` und meldet das als **Warnung**, nicht als Fehler. Die Installation lief durch, die Fassung änderte sich nicht, `pnpm audit` blieb rot. Ohne Nachsehen hätte das wie ein erledigter Punkt ausgesehen.
+
+Die Einstellung wohnt jetzt in `pnpm-workspace.yaml` — dort, wo seit pnpm 11 auch `allowBuilds` steht. **Das ist die zweite Einstellung desselben Werkzeugs, die beim Versionssprung stillschweigend umgezogen ist**; die erste war `onlyBuiltDependencies`, die seit Phase 1 wirkungslos in derselben Datei stand und erst bei einer frischen Installation auffiel. Der Kommentar dort erzählt es.
+
+**Lehre:** Nach einem Hauptversionssprung eines Paketmanagers ist jede Einstellung so lange unwirksam, bis man ihre Wirkung **gesehen** hat. Warnungen im Installationsprotokoll sind hier der eigentliche Befund und nicht Rauschen — und die Probe ist nicht „läuft durch", sondern die geänderte Fassung im Lockfile.
 
 ---
 
@@ -1015,6 +1063,33 @@ Dazu ein **Steckbrief der Maschine** in der Ausgabe und in `LOAD_RESULT_FILE` al
 **Vergleichswert auf dem Entwicklungsrechner** (Apple M5 Pro, 18 Kerne, 48 GB, `UV_THREADPOOL_SIZE` nicht gesetzt), 200 Geräte, 5 Läufe: p95 **3064–3554 ms, Median 3112**, Streuung 15,8 % — **alle fünf über dem Ziel**, also „gerissen" und nicht „nicht entschieden". Deadlocks 0, abgewiesene Kommandos 0.
 
 **Und eine Probe, die nichts ergab, aber trotzdem hierhergehört.** Nach dem Grundlauf lag nahe, dass `UV_THREADPOOL_SIZE=16` (+5 % laut Messung oben) die 3112 ms unter 3000 drücken könnte. Verschränkt gemessen, 5 Paare: 16 war in **3 von 5** Paaren schneller, Median der Paardifferenz 98 ms (2,4 %) — bei Einzeldifferenzen von **−859 bis +607 ms**. Der Effekt ist kleiner als das Rauschen; mit fünf Paaren ist er weder bestätigt noch widerlegt. Bemerkenswerter ist etwas anderes: dieselbe Konfiguration lag in dieser Probe bei p95 3625–4654 ms gegen 3064–3554 ms zwanzig Minuten zuvor. **Die Maschine war schlicht eine andere geworden.** Wer auf der Zielhardware misst, misst im Leerlauf und liest den Vorlast-Hinweis.
+
+### Interner Sicherheitstest (21.08.2026)
+
+Ein White-Box-Test gegen den Quellcode, mit dynamischen Proben gegen die echten Funktionen. **Kein Ersatz für den externen Penetrationstest** aus docs/11 §5 — der bleibt offen, und zwar aus dem Grund, den docs/11 nennt.
+
+**Vier Befunde, alle behoben:**
+
+| Schwere | Befund                                                                                                                                | PR  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| hoch    | PIN-Fehlversuchssperre durch gleichzeitige Versuche umgehbar — 20 parallele Fehlversuche ergaben den Zähler 1                         | #90 |
+| mittel  | IPv6-Adressfilter lückenhaft; zugleich war jeder IPv6-Endpunkt unkonfigurierbar, und die Behebung des einen hätte das andere geöffnet | #91 |
+| mittel  | Einladungen wurden ohne `email_verified` angenommen — Kontoübernahme, abhängig von der Konfiguration des Identitätsanbieters          | #92 |
+| niedrig | `nanoid` und `deepmerge-ts` mit gemeldeten Schwachstellen (beide im Bau- und Werkzeugpfad)                                            | #93 |
+
+Die Lehren daraus stehen einzeln bei den Stolpersteinen; sie sind allgemeiner als ihre Befunde.
+
+**Was geprüft wurde und hielt** — damit der nächste Durchgang nicht dieselben Wege noch einmal geht:
+
+- **SQL-Injection strukturell zu.** Sechs Stellen mit rohem SQL, alle getaggte Templates, keine `Unsafe`-Variante, keine Verkettung.
+- **Alle 86 Routen authentifiziert.** Ausnahmen nur NextAuth selbst und die beiden Health-Endpunkte.
+- **Ratenbremse global** in `requireAuthContext`, dazu eigene Kategorien für Uploads, Export und Sync.
+- **SSRF-Abwehr überdurchschnittlich:** Schema-Allowlist, HTTPS-Pflicht in Produktion, Auflösung **aller** DNS-Antworten, `redirect: 'manual'`, Fail-closed bei Unbekanntem, und eine Entwicklungs-Ausnahme, die sich in Produktion nicht einschalten lässt. Das DNS-Rebinding-Fenster ist in ADR-008 bewusst dokumentiert.
+- **`SECURITY DEFINER`-Funktion korrekt gebaut:** `SET search_path = public`, parametrisiert, gibt nur eine Organisations-ID zurück.
+- **PIN-Speicherung korrekt:** scrypt mit Salt je Nutzer, `timingSafeEqual`.
+- Keine hartkodierten Geheimnisse.
+
+**Was der Test ausdrücklich nicht abgedeckt hat**, und was der externe deshalb leisten muss: die laufende Anwendung im Browser (XSS, CSRF gegen Server Actions, Sitzungsführung), Uploads gegen einen echten Objektspeicher, und der Infrastrukturrand — TLS, vorgelagerter Proxy, Härtung des Identitätsanbieters.
 
 ### Restore-Probe (docs/09 Ebene 10)
 
